@@ -61,3 +61,7 @@ Simulation
 - Auth, teams, multiple projects.
 - Undo, copy and paste, node grouping.
 - Persisted run history beyond the current session.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
