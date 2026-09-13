@@ -1,0 +1,52 @@
+@import 'tailwindcss';
+@import '@xyflow/react/dist/style.css';
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'JetBrains Mono', SFMono-Regular, Menlo, monospace;
+  --color-ink-950: #07090f;
+  --color-ink-900: #0b0f19;
+  --color-ink-850: #0f1522;
+  --color-ink-800: #141b2b;
+  --color-ink-700: #1c2538;
+  --color-ink-600: #283349;
+  --color-ink-500: #3b475f;
+  --color-ink-400: #64748b;
+  --color-ink-300: #94a3b8;
+  --color-ink-200: #cbd5e1;
+  --color-ink-100: #e2e8f0;
+}
+
+html, body, #root { height: 100%; }
+body { @apply bg-ink-950 text-ink-100 font-sans text-[13px] antialiased overflow-hidden; }
+* { scrollbar-width: thin; scrollbar-color: #283349 transparent; }
+::selection { background: rgba(34, 211, 238, 0.25); }
+
+.react-flow { --xy-background-color: var(--color-ink-950); }
+.react-flow__attribution { background: transparent; color: var(--color-ink-500); font-size: 9px; }
+.react-flow__node { font-size: 12px; }
+.react-flow__handle { width: 9px; height: 9px; border: 2px solid var(--color-ink-950); background: var(--color-ink-300); }
+.react-flow__handle:hover { background: #22d3ee; }
+.react-flow__handle.drop-handle { position: absolute; inset: 0; width: 100%; height: 100%; transform: none; border-radius: 12px; border: 0; background: transparent; opacity: 0; z-index: 5; }
+.react-flow__handle.drop-handle.valid { opacity: 1; background: rgba(34, 211, 238, 0.12); box-shadow: inset 0 0 0 1.5px #22d3ee; }
+.react-flow__edge-path { stroke-width: 1.75px; }
+.react-flow__edge.selected .fe-path, .react-flow__edge:focus .fe-path { filter: drop-shadow(0 0 4px currentColor); stroke-width: 2.5px; }
+.react-flow__minimap { background: var(--color-ink-900) !important; border: 1px solid var(--color-ink-700); border-radius: 8px; overflow: hidden; }
+.react-flow__controls { box-shadow: none; border: 1px solid var(--color-ink-700); border-radius: 8px; overflow: hidden; }
+.react-flow__controls button { background: var(--color-ink-850); border-bottom: 1px solid var(--color-ink-700); color: var(--color-ink-200); fill: var(--color-ink-200); }
+.react-flow__controls button:hover { background: var(--color-ink-700); }
+.react-flow__controls button svg { fill: currentColor; }
+.react-flow__selection, .react-flow__nodesselection-rect { background: rgba(34, 211, 238, 0.08); border: 1px dashed rgba(34, 211, 238, 0.6); }
+.react-flow__edge-textbg { fill: var(--color-ink-900); }
+
+@keyframes fe-flow { to { stroke-dashoffset: -24; } }
+.fe-active { animation: fe-flow 0.9s linear infinite; }
+.fe-active-solid { stroke-dasharray: 10 6; animation: fe-flow 0.6s linear infinite; }
+
+@keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0.45); } 100% { box-shadow: 0 0 0 10px rgba(34, 211, 238, 0); } }
+.pulse-working { animation: pulse-ring 1.4s ease-out infinite; }
+
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.shimmer { background: linear-gradient(90deg, rgba(56,189,248,0.15) 0%, rgba(56,189,248,0.6) 50%, rgba(56,189,248,0.15) 100%); background-size: 200% 100%; animation: shimmer 1.5s linear infinite; }
+
+input[type='range'] { accent-color: #22d3ee; }
