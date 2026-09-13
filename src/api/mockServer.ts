@@ -192,7 +192,11 @@ export class MockServer {
   deleteNodes(ids: NodeId[]) {
     const w = this.world
     const gone = new Set<string>(ids)
-    for (const r of Object.values(w.runs)) if (r.status === 'running' && (gone.has(r.agentId) || gone.has(r.sandboxId))) this.finishRun(r, 'failed', 'node deleted')
+    for (const r of Object.values(w.runs)) {
+      if (r.status !== 'running') continue
+      if (gone.has(r.agentId)) this.finishRun(r, 'failed', 'agent deleted')
+      else if (gone.has(r.sandboxId)) this.finishRun(r, 'failed', 'sandbox deleted')
+    }
     for (const t of Object.values(w.tasks)) if (gone.has(t.agentId) && (t.status === 'queued' || t.status === 'waiting')) this.patchTask(t.id, { status: 'cancelled', blockedOn: null })
     w.agents = Object.fromEntries(Object.entries(w.agents).filter(([id]) => !gone.has(id))) as World['agents']
     w.triggers = Object.fromEntries(Object.entries(w.triggers).filter(([id]) => !gone.has(id))) as World['triggers']
@@ -449,7 +453,7 @@ export class MockServer {
         }
       }
     } else if (task && agent) {
-      const canRetry = reason !== 'node deleted' && task.attempts < agent.retry.maxAttempts
+      const canRetry = reason !== 'agent deleted' && task.attempts < agent.retry.maxAttempts
       if (canRetry) {
         const delay = agent.retry.backoff === 'exponential' ? agent.retry.backoffMs * 2 ** (task.attempts - 1) : agent.retry.backoffMs
         this.patchTask(task.id, { status: 'waiting', retryAt: w.now + delay, blockedOn: `retry ${task.attempts + 1}/${agent.retry.maxAttempts} in ${Math.round(delay / 1000)}s` })
@@ -550,7 +554,7 @@ function load(): World | null {
     if (!p.agents || !p.sandboxes || !p.triggers || !p.edges) return null
     const now = Date.now()
     const agents = Object.fromEntries(Object.entries(p.agents).map(([id, a]) => [id, { ...a, status: a.status === 'paused' ? 'paused' : 'idle' }])) as World['agents']
-    const sandboxes = Object.fromEntries(Object.entries(p.sandboxes).map(([id, s]) => [id, { ...s, lease: null, history: [], stateSince: now, state: s.state === 'destroying' ? 'stopped' : s.state }])) as World['sandboxes']
+    const sandboxes = Object.fromEntries(Object.entries(p.sandboxes).map(([id, s]) => [id, { ...s, lease: null, history: [], stateSince: now }])) as World['sandboxes']
     const triggers = Object.fromEntries(Object.entries(p.triggers).map(([id, t]) => [id, { ...t, lastFiredAt: null }])) as World['triggers']
     return { ...seedWorld(now), agents, sandboxes, triggers, edges: p.edges, sim: p.sim ?? { paused: false, speed: 1 } }
   } catch {

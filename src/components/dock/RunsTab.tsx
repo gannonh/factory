@@ -7,7 +7,7 @@ const COLOR = { running: '#22d3ee', succeeded: '#34d399', failed: '#f87171' } as
 export function RunsTab() {
   const world = useStore((s) => s.world)
   const select = useStore((s) => s.select)
-  const runs = Object.values(world.runs).sort((a, b) => (a.status === 'running' ? -1 : b.status === 'running' ? 1 : 0) || b.startedAt - a.startedAt)
+  const runs = Object.values(world.runs).sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || b.startedAt - a.startedAt)
   if (runs.length === 0) return <Empty>No runs yet.</Empty>
   return (
     <div className="h-full overflow-y-auto">

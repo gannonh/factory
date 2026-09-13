@@ -11,7 +11,7 @@ export function QueueTab() {
   const select = useStore((s) => s.select)
   const tasks = Object.values(world.tasks)
     .filter((t) => t.status === 'queued' || t.status === 'waiting' || t.status === 'running')
-    .sort((a, b) => (a.status === 'running' ? -1 : b.status === 'running' ? 1 : 0) || RANK[a.priority] - RANK[b.priority] || a.createdAt - b.createdAt)
+    .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || RANK[a.priority] - RANK[b.priority] || a.createdAt - b.createdAt)
   if (tasks.length === 0) return <Empty>Queue is empty. Compose a task in an agent's inspector or wait for a trigger.</Empty>
   return (
     <div className="h-full overflow-y-auto">

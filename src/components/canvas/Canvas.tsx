@@ -82,10 +82,17 @@ export function Canvas() {
     })
   }, [world, setNodes, setEdges])
 
+  const mirrored = useRef(false)
+
   useEffect(() => {
+    // selection changes mirrored from the canvas itself must not collapse a multi-selection
+    if (mirrored.current) {
+      mirrored.current = false
+      return
+    }
     const id = selection?.id ?? null
-    setNodes((prev) => (prev.some((n) => n.selected && n.id === id) || (id === null && !prev.some((n) => n.selected)) ? prev : prev.map((n) => ({ ...n, selected: n.id === id }))))
-    setEdges((prev) => (prev.some((e) => e.selected && e.id === id) || (id === null && !prev.some((e) => e.selected)) ? prev : prev.map((e) => ({ ...e, selected: e.id === id }))))
+    setNodes((prev) => (prev.every((n) => n.selected === (n.id === id)) ? prev : prev.map((n) => ({ ...n, selected: n.id === id }))))
+    setEdges((prev) => (prev.every((e) => e.selected === (e.id === id)) ? prev : prev.map((e) => ({ ...e, selected: e.id === id }))))
   }, [selection, setNodes, setEdges])
 
   useEffect(() => {
@@ -103,21 +110,25 @@ export function Canvas() {
   useEffect(() => {
     if (nodes.length === 0) return
     const { world: w, selection: cur, select: set } = useStore.getState()
+    const push = (sel: Parameters<typeof set>[0]) => {
+      mirrored.current = true
+      set(sel)
+    }
     const n = nodes.find((x) => x.selected)
     if (n) {
       if (cur?.id === n.id) return
       const kind = nodeKindOf(w, n.id)
-      if (kind === 'agent') set({ kind, id: n.id as AgentId })
-      else if (kind === 'sandbox') set({ kind, id: n.id as SandboxId })
-      else if (kind === 'trigger') set({ kind, id: n.id as TriggerId })
+      if (kind === 'agent') push({ kind, id: n.id as AgentId })
+      else if (kind === 'sandbox') push({ kind, id: n.id as SandboxId })
+      else if (kind === 'trigger') push({ kind, id: n.id as TriggerId })
       return
     }
     const e = edges.find((x) => x.selected)
     if (e) {
-      if (cur?.id !== e.id) set({ kind: 'edge', id: e.id as EdgeId })
+      if (cur?.id !== e.id) push({ kind: 'edge', id: e.id as EdgeId })
       return
     }
-    if (cur) set(null)
+    if (cur) push(null)
   }, [nodes, edges])
 
   const isValidConnection = useCallback<IsValidConnection>(
@@ -194,7 +205,7 @@ export function Canvas() {
         onPaneContextMenu={onPaneContextMenu}
         onPaneClick={() => setMenu(null)}
         selectionOnDrag
-        panOnDrag={[1, 2]}
+        panOnDrag={[1]}
         selectionMode={SelectionMode.Partial}
         deleteKeyCode={['Backspace', 'Delete']}
         multiSelectionKeyCode={['Meta', 'Shift']}

@@ -18,6 +18,7 @@ export function LogsTab() {
   const ref = useRef<HTMLDivElement>(null)
 
   const agentFilter = onlySelected && selection?.kind === 'agent' ? selection.id : null
+  const agentSelected = selection?.kind === 'agent'
   const lines = useMemo(() => {
     const q = query.toLowerCase()
     return world.logs.filter((l) => RANK[l.level] >= RANK[level] && (!agentFilter || l.agentId === agentFilter) && (!q || l.msg.toLowerCase().includes(q)))
@@ -44,8 +45,8 @@ export function LogsTab() {
           ))}
         </div>
         <Input placeholder="filter…" value={query} onChange={(e) => setQuery(e.target.value)} className="w-48 shrink-0 h-6 py-0" />
-        <label className={cx('flex items-center gap-1.5 text-[11px]', selection?.kind === 'agent' ? 'text-ink-300' : 'text-ink-600')}>
-          <input type="checkbox" className="accent-cyan-400" checked={onlySelected} disabled={selection?.kind !== 'agent'} onChange={(e) => setOnlySelected(e.target.checked)} />
+        <label className={cx('flex items-center gap-1.5 text-[11px]', agentSelected ? 'text-ink-300' : 'text-ink-600')}>
+          <input type="checkbox" className="accent-cyan-400" checked={onlySelected && agentSelected} disabled={!agentSelected} onChange={(e) => setOnlySelected(e.target.checked)} />
           selected agent only
         </label>
         <span className="flex-1" />
