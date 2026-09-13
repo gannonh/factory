@@ -2,6 +2,8 @@
 
 An orchestration-graph control plane for a software factory: agents, sandboxes, triggers and task pipelines, with a simulated backend that keeps running while you watch.
 
+![Factory canvas with the Planner agent selected: graph of triggers, agents and sandboxes, live inspector, and streaming logs](docs/screenshot.png)
+
 This is the UI-first prototype. Every API call goes to an in-browser mock server (`src/api/mockServer.ts`) that runs a simulation loop and persists the graph to `localStorage`. There is no database and no network.
 
 ## Run
