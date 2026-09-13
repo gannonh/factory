@@ -148,6 +148,8 @@ export type Task = {
   origin: { kind: 'trigger'; id: TriggerId } | { kind: 'handoff'; from: AgentId } | { kind: 'manual' }
   createdAt: number
   attempts: number
+  /** set after a failed attempt; the scheduler skips the task until this simulated time */
+  retryAt: number | null
   /** why it is waiting, for the queue view */
   blockedOn: string | null
 }

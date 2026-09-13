@@ -192,12 +192,12 @@ export class MockServer {
   deleteNodes(ids: NodeId[]) {
     const w = this.world
     const gone = new Set<string>(ids)
+    for (const r of Object.values(w.runs)) if (r.status === 'running' && (gone.has(r.agentId) || gone.has(r.sandboxId))) this.finishRun(r, 'failed', 'node deleted')
+    for (const t of Object.values(w.tasks)) if (gone.has(t.agentId) && (t.status === 'queued' || t.status === 'waiting')) this.patchTask(t.id, { status: 'cancelled', blockedOn: null })
     w.agents = Object.fromEntries(Object.entries(w.agents).filter(([id]) => !gone.has(id))) as World['agents']
     w.triggers = Object.fromEntries(Object.entries(w.triggers).filter(([id]) => !gone.has(id))) as World['triggers']
     for (const id of ids) if (w.sandboxes[id as SandboxId]) this.removeSandbox(id as SandboxId)
     w.edges = Object.fromEntries(Object.entries(w.edges).filter(([, e]) => !gone.has(e.source) && !gone.has(e.target))) as World['edges']
-    for (const t of Object.values(w.tasks)) if (gone.has(t.agentId) && (t.status === 'queued' || t.status === 'waiting')) this.patchTask(t.id, { status: 'cancelled' })
-    for (const r of Object.values(w.runs)) if (r.status === 'running' && (gone.has(r.agentId) || gone.has(r.sandboxId))) this.finishRun(r, 'failed', 'node deleted')
     this.event('graph', { kind: 'agent', id: ids[0] as AgentId }, `Deleted ${ids.length} node${ids.length === 1 ? '' : 's'}`)
     this.publish()
   }
@@ -226,6 +226,7 @@ export class MockServer {
     const from = nodeKindOf(this.world, e.source)
     const to = nodeKindOf(this.world, e.target)
     if (!from || !to || !edgeKindFor(from, to).includes(kind)) return
+    if (Object.values(this.world.edges).some((o) => o.id !== id && o.source === e.source && o.target === e.target && o.kind === kind)) return
     this.world.edges = { ...this.world.edges, [id]: { ...e, kind } }
     this.publish()
   }
@@ -251,7 +252,7 @@ export class MockServer {
 
   enqueueTask(agentId: AgentId, input: { title: string; prompt: string; priority: Priority }, origin: Task['origin'] = { kind: 'manual' }): TaskId {
     const id = uid('tk') as TaskId
-    const task: Task = { id, agentId, title: input.title, prompt: input.prompt, priority: input.priority, status: 'queued', origin, createdAt: this.world.now, attempts: 0, blockedOn: null }
+    const task: Task = { id, agentId, title: input.title, prompt: input.prompt, priority: input.priority, status: 'queued', origin, createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
     this.world.tasks = { ...this.world.tasks, [id]: task }
     this.event('task', { kind: 'agent', id: agentId }, `Queued “${task.title}” for ${this.nameOf(agentId)}`)
     this.publish()
@@ -401,7 +402,7 @@ export class MockServer {
   private enqueueTaskSilently(agentId: AgentId, input: { title: string; prompt: string; priority: Priority }, origin: Task['origin']) {
     if (!this.world.agents[agentId]) return
     const id = uid('tk') as TaskId
-    const task: Task = { id, agentId, ...input, status: 'queued', origin, createdAt: this.world.now, attempts: 0, blockedOn: null }
+    const task: Task = { id, agentId, ...input, status: 'queued', origin, createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
     this.world.tasks = { ...this.world.tasks, [id]: task }
     this.event('task', { kind: 'agent', id: agentId }, `Queued “${task.title}” for ${this.nameOf(agentId)}`)
   }
@@ -450,8 +451,9 @@ export class MockServer {
     } else if (task && agent) {
       const canRetry = reason !== 'node deleted' && task.attempts < agent.retry.maxAttempts
       if (canRetry) {
-        this.patchTask(task.id, { status: 'queued', blockedOn: `retry ${task.attempts}/${agent.retry.maxAttempts}` })
-        this.log('warn', `run failed (${reason}); retrying attempt ${task.attempts + 1}/${agent.retry.maxAttempts}`, { runId: run.id, agentId: run.agentId })
+        const delay = agent.retry.backoff === 'exponential' ? agent.retry.backoffMs * 2 ** (task.attempts - 1) : agent.retry.backoffMs
+        this.patchTask(task.id, { status: 'waiting', retryAt: w.now + delay, blockedOn: `retry ${task.attempts + 1}/${agent.retry.maxAttempts} in ${Math.round(delay / 1000)}s` })
+        this.log('warn', `run failed (${reason}); retrying attempt ${task.attempts + 1}/${agent.retry.maxAttempts} in ${Math.round(delay / 1000)}s`, { runId: run.id, agentId: run.agentId })
         this.event('run', { kind: 'run', id: run.id }, `${agent.name} failed “${run.title}” (${reason}), retrying`)
       } else {
         this.patchTask(task.id, { status: 'failed', blockedOn: null })
@@ -486,6 +488,7 @@ export class MockServer {
         .sort((x, y) => PRIORITY_RANK[x.priority] - PRIORITY_RANK[y.priority] || x.createdAt - y.createdAt)
       for (const task of pending) {
         if (free <= 0) break
+        if (task.retryAt !== null && task.retryAt > w.now) continue
         const upstream = edges.filter((e) => e.kind === 'depends-on' && e.target === agent.id).map((e) => w.agents[e.source as AgentId]).filter((u): u is Agent => !!u && u.status === 'working')
         if (upstream.length > 0) {
           this.patchTask(task.id, { status: 'waiting', blockedOn: `waiting on ${upstream.map((u) => u.name).join(', ')}` })
@@ -510,7 +513,7 @@ export class MockServer {
       status: 'running', progress: 0, durationMs: rand(7000, 18000), startedAt: this.world.now, endedAt: null, tokens: 0,
     }
     this.world.runs = { ...this.world.runs, [id]: run }
-    this.patchTask(task.id, { status: 'running', attempts: task.attempts + 1, blockedOn: null })
+    this.patchTask(task.id, { status: 'running', attempts: task.attempts + 1, retryAt: null, blockedOn: null })
     this.patchSandbox(sandbox.id, { lease: { agentId: agent.id, runId: id, since: this.world.now } })
     this.patchAgent(agent.id, { status: 'working' })
     this.log('info', `run started on ${sandbox.name} (attempt ${run.attempt}): ${task.title}`, { runId: id, agentId: agent.id })
