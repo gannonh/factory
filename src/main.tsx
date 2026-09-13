@@ -8,5 +8,3 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 )
-
-const kat3354Probe: number = 'not a number'
