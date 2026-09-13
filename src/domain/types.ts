@@ -1,0 +1,258 @@
+export type AgentId = string & { readonly __brand: 'AgentId' }
+export type SandboxId = string & { readonly __brand: 'SandboxId' }
+export type TriggerId = string & { readonly __brand: 'TriggerId' }
+export type EdgeId = string & { readonly __brand: 'EdgeId' }
+export type TaskId = string & { readonly __brand: 'TaskId' }
+export type RunId = string & { readonly __brand: 'RunId' }
+
+export type NodeId = AgentId | SandboxId | TriggerId
+export type Position = { x: number; y: number }
+
+export type ModelName =
+  | 'claude-fable-5-1'
+  | 'claude-opus-5'
+  | 'claude-sonnet-5'
+  | 'claude-haiku-4-5-20251001'
+
+export const MODELS: ModelName[] = [
+  'claude-fable-5-1',
+  'claude-opus-5',
+  'claude-sonnet-5',
+  'claude-haiku-4-5-20251001',
+]
+
+export type AgentStatus = 'idle' | 'working' | 'paused' | 'error'
+
+export type RetryPolicy = { maxAttempts: number; backoffMs: number; backoff: 'fixed' | 'exponential' }
+
+export type Agent = {
+  id: AgentId
+  name: string
+  role: string
+  model: ModelName
+  temperature: number
+  concurrency: number
+  timeoutMs: number
+  retry: RetryPolicy
+  tools: string[]
+  systemPrompt: string
+  status: AgentStatus
+  position: Position
+  completed: number
+  failed: number
+}
+
+export type SandboxKind = 'local' | 'docker' | 'vps' | 'remote'
+
+/** Lifecycle state machine; SANDBOX_TRANSITIONS is the only place the edges live. */
+export type SandboxState =
+  | 'provisioning'
+  | 'running'
+  | 'stopping'
+  | 'stopped'
+  | 'rebuilding'
+  | 'destroying'
+  | 'error'
+
+export type SandboxAction = 'start' | 'stop' | 'restart' | 'rebuild' | 'destroy'
+
+export const SANDBOX_TRANSITIONS: Record<SandboxState, Partial<Record<SandboxAction, SandboxState>>> = {
+  provisioning: { destroy: 'destroying' },
+  running: { stop: 'stopping', restart: 'stopping', rebuild: 'rebuilding', destroy: 'destroying' },
+  stopping: {},
+  stopped: { start: 'provisioning', rebuild: 'rebuilding', destroy: 'destroying' },
+  rebuilding: { destroy: 'destroying' },
+  destroying: {},
+  error: { start: 'provisioning', rebuild: 'rebuilding', destroy: 'destroying' },
+}
+
+/** Timed states advance automatically after this many ms of simulated time. */
+export const SANDBOX_TIMED: Partial<Record<SandboxState, { durationMs: number; next: SandboxState }>> = {
+  provisioning: { durationMs: 6000, next: 'running' },
+  stopping: { durationMs: 2000, next: 'stopped' },
+  rebuilding: { durationMs: 9000, next: 'running' },
+  destroying: { durationMs: 1500, next: 'stopped' },
+}
+
+export type Metrics = { cpu: number; mem: number; disk: number }
+
+export type Lease = { agentId: AgentId; runId: RunId; since: number }
+
+export type Sandbox = {
+  id: SandboxId
+  name: string
+  kind: SandboxKind
+  host: string
+  image: string
+  state: SandboxState
+  stateSince: number
+  /** Only meaningful in timed states, 0..1 */
+  progress: number
+  metrics: Metrics
+  history: Metrics[]
+  lease: Lease | null
+  /** set when a restart was requested; stopping -> stopped -> provisioning */
+  restartPending: boolean
+  position: Position
+}
+
+export type TriggerKind = 'cron' | 'webhook' | 'manual' | 'event'
+
+export type Trigger = {
+  id: TriggerId
+  name: string
+  kind: TriggerKind
+  /** cron & event triggers fire every intervalMs of simulated time */
+  intervalMs: number
+  enabled: boolean
+  lastFiredAt: number | null
+  fired: number
+  template: string
+  position: Position
+}
+
+export type NodeKind = 'agent' | 'sandbox' | 'trigger'
+
+export type EdgeKind = 'triggers' | 'handoff' | 'depends-on' | 'runs-in'
+
+export type EdgeRule = { from: NodeKind; to: NodeKind; label: string; color: string; dash: string }
+
+/** Which node kinds each edge kind may join. Connection validation and rendering both read this. */
+export const EDGE_RULES: Record<EdgeKind, EdgeRule> = {
+  triggers: { from: 'trigger', to: 'agent', label: 'triggers', color: '#34d399', dash: '' },
+  handoff: { from: 'agent', to: 'agent', label: 'handoff', color: '#a78bfa', dash: '' },
+  'depends-on': { from: 'agent', to: 'agent', label: 'depends on', color: '#fbbf24', dash: '8 6' },
+  'runs-in': { from: 'agent', to: 'sandbox', label: 'runs in', color: '#22d3ee', dash: '2 5' },
+}
+
+export const EDGE_KINDS = Object.keys(EDGE_RULES) as EdgeKind[]
+
+export type Edge = {
+  id: EdgeId
+  kind: EdgeKind
+  source: NodeId
+  target: NodeId
+}
+
+export type Priority = 'low' | 'normal' | 'high'
+
+export type TaskStatus = 'queued' | 'waiting' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+export type Task = {
+  id: TaskId
+  agentId: AgentId
+  title: string
+  prompt: string
+  priority: Priority
+  status: TaskStatus
+  origin: { kind: 'trigger'; id: TriggerId } | { kind: 'handoff'; from: AgentId } | { kind: 'manual' }
+  createdAt: number
+  attempts: number
+  /** why it is waiting, for the queue view */
+  blockedOn: string | null
+}
+
+export type RunStatus = 'running' | 'succeeded' | 'failed'
+
+export type Run = {
+  id: RunId
+  taskId: TaskId
+  agentId: AgentId
+  sandboxId: SandboxId
+  title: string
+  attempt: number
+  status: RunStatus
+  progress: number
+  durationMs: number
+  startedAt: number
+  endedAt: number | null
+  tokens: number
+}
+
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+export const LOG_LEVELS: LogLevel[] = ['debug', 'info', 'warn', 'error']
+
+export type LogLine = {
+  id: number
+  ts: number
+  level: LogLevel
+  runId: RunId | null
+  agentId: AgentId | null
+  msg: string
+}
+
+export type Subject =
+  | { kind: 'agent'; id: AgentId }
+  | { kind: 'sandbox'; id: SandboxId }
+  | { kind: 'trigger'; id: TriggerId }
+  | { kind: 'run'; id: RunId }
+  | { kind: 'edge'; id: EdgeId }
+
+export type EventKind = 'agent' | 'sandbox' | 'trigger' | 'run' | 'graph' | 'task'
+
+export type FactoryEvent = {
+  id: number
+  ts: number
+  kind: EventKind
+  subject: Subject
+  msg: string
+}
+
+export type World = {
+  now: number
+  agents: Record<AgentId, Agent>
+  sandboxes: Record<SandboxId, Sandbox>
+  triggers: Record<TriggerId, Trigger>
+  edges: Record<EdgeId, Edge>
+  tasks: Record<TaskId, Task>
+  runs: Record<RunId, Run>
+  logs: LogLine[]
+  events: FactoryEvent[]
+  sim: { paused: boolean; speed: 1 | 2 | 4 }
+}
+
+export type NodeRef = { kind: 'agent'; node: Agent } | { kind: 'sandbox'; node: Sandbox } | { kind: 'trigger'; node: Trigger }
+
+export function nodeKindOf(world: World, id: string): NodeKind | null {
+  if (id in world.agents) return 'agent'
+  if (id in world.sandboxes) return 'sandbox'
+  if (id in world.triggers) return 'trigger'
+  return null
+}
+
+export function edgeKindFor(from: NodeKind, to: NodeKind): EdgeKind[] {
+  return EDGE_KINDS.filter((k) => EDGE_RULES[k].from === from && EDGE_RULES[k].to === to)
+}
+
+export const AGENT_STATUS_COLOR: Record<AgentStatus, string> = {
+  idle: '#64748b',
+  working: '#22d3ee',
+  paused: '#fbbf24',
+  error: '#f87171',
+}
+
+export const SANDBOX_STATE_COLOR: Record<SandboxState, string> = {
+  provisioning: '#38bdf8',
+  running: '#34d399',
+  stopping: '#fbbf24',
+  stopped: '#64748b',
+  rebuilding: '#a78bfa',
+  destroying: '#f87171',
+  error: '#f87171',
+}
+
+export const TASK_STATUS_COLOR: Record<TaskStatus, string> = {
+  queued: '#94a3b8',
+  waiting: '#fbbf24',
+  running: '#22d3ee',
+  succeeded: '#34d399',
+  failed: '#f87171',
+  cancelled: '#64748b',
+}
+
+export const LOG_LEVEL_COLOR: Record<LogLevel, string> = {
+  debug: '#64748b',
+  info: '#cbd5e1',
+  warn: '#fbbf24',
+  error: '#f87171',
+}

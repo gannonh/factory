@@ -1,0 +1,240 @@
+import {
+  Background, BackgroundVariant, Controls, MiniMap, ReactFlow, SelectionMode, useEdgesState, useNodesState, useReactFlow,
+  type Connection, type IsValidConnection,
+} from '@xyflow/react'
+import { LayoutGrid, Maximize2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { api } from '../../api/client'
+import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, edgeKindFor, nodeKindOf, type AgentId, type EdgeId, type NodeId, type NodeKind, type SandboxId, type TriggerId, type World } from '../../domain/types'
+import { useStore } from '../../store'
+import { Button, cx } from '../ui'
+import { ContextMenu, type MenuState } from './ContextMenu'
+import { EdgeLegend, edgeTypes, type FactoryEdgeType } from './FactoryEdge'
+import { autoLayout } from './layout'
+import { nodeTypes, type FactoryNode } from './nodes'
+
+function buildNodes(world: World): FactoryNode[] {
+  const runs = Object.values(world.runs)
+  const tasks = Object.values(world.tasks)
+  const out: FactoryNode[] = []
+  for (const t of Object.values(world.triggers)) {
+    const nextIn = t.enabled && t.kind !== 'manual' && t.lastFiredAt !== null ? t.lastFiredAt + t.intervalMs - world.now : null
+    out.push({ id: t.id, type: 'trigger', position: t.position, data: { trigger: t, nextIn } })
+  }
+  for (const a of Object.values(world.agents)) {
+    out.push({
+      id: a.id, type: 'agent', position: a.position,
+      data: {
+        agent: a,
+        running: runs.filter((r) => r.agentId === a.id && r.status === 'running').length,
+        queued: tasks.filter((t) => t.agentId === a.id && (t.status === 'queued' || t.status === 'waiting')).length,
+      },
+    })
+  }
+  for (const s of Object.values(world.sandboxes)) {
+    out.push({ id: s.id, type: 'sandbox', position: s.position, data: { sandbox: s, leaseName: s.lease ? world.agents[s.lease.agentId]?.name ?? null : null } })
+  }
+  return out
+}
+
+function buildEdges(world: World): FactoryEdgeType[] {
+  return Object.values(world.edges).map((e) => {
+    let active = false
+    if (e.kind === 'triggers') {
+      const t = world.triggers[e.source as keyof typeof world.triggers]
+      active = !!t && t.lastFiredAt !== null && world.now - t.lastFiredAt < 2500
+    } else if (e.kind === 'runs-in') {
+      const s = world.sandboxes[e.target as keyof typeof world.sandboxes]
+      active = !!s && s.lease?.agentId === e.source
+    } else {
+      active = world.agents[e.source as keyof typeof world.agents]?.status === 'working'
+    }
+    return { id: e.id, type: 'factory', source: e.source, target: e.target, sourceHandle: 'out', targetHandle: 'in', data: { kind: e.kind, active } }
+  })
+}
+
+export function Canvas() {
+  const world = useStore((s) => s.world)
+  const selection = useStore((s) => s.selection)
+  const select = useStore((s) => s.select)
+  const agentEdgeTool = useStore((s) => s.agentEdgeTool)
+  const setAgentEdgeTool = useStore((s) => s.setAgentEdgeTool)
+  const [nodes, setNodes, onNodesChange] = useNodesState<FactoryNode>([])
+  const [edges, setEdges, onEdgesChange] = useEdgesState<FactoryEdgeType>([])
+  const [menu, setMenu] = useState<MenuState>(null)
+  const [toast, setToast] = useState<string | null>(null)
+  const { screenToFlowPosition, fitView } = useReactFlow()
+  const fitted = useRef(false)
+
+  useEffect(() => {
+    const selectedId = useStore.getState().selection?.id ?? null
+    setNodes((prev) => {
+      const prevById = new Map(prev.map((n) => [n.id, n]))
+      return buildNodes(world).map((n) => {
+        const p = prevById.get(n.id)
+        const dragging = p?.dragging ?? false
+        return { ...n, position: dragging && p ? p.position : n.position, dragging, selected: p ? p.selected ?? false : selectedId === n.id, measured: p?.measured }
+      }) as FactoryNode[]
+    })
+    setEdges((prev) => {
+      const prevById = new Map(prev.map((e) => [e.id, e]))
+      return buildEdges(world).map((e) => ({ ...e, selected: prevById.get(e.id)?.selected ?? selectedId === e.id }))
+    })
+  }, [world, setNodes, setEdges])
+
+  useEffect(() => {
+    const id = selection?.id ?? null
+    setNodes((prev) => (prev.some((n) => n.selected && n.id === id) || (id === null && !prev.some((n) => n.selected)) ? prev : prev.map((n) => ({ ...n, selected: n.id === id }))))
+    setEdges((prev) => (prev.some((e) => e.selected && e.id === id) || (id === null && !prev.some((e) => e.selected)) ? prev : prev.map((e) => ({ ...e, selected: e.id === id }))))
+  }, [selection, setNodes, setEdges])
+
+  useEffect(() => {
+    if (fitted.current || nodes.length === 0) return
+    fitted.current = true
+    requestAnimationFrame(() => fitView({ padding: 0.15, duration: 300 }))
+  }, [nodes.length, fitView])
+
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 2600)
+    return () => clearTimeout(t)
+  }, [toast])
+
+  useEffect(() => {
+    if (nodes.length === 0) return
+    const { world: w, selection: cur, select: set } = useStore.getState()
+    const n = nodes.find((x) => x.selected)
+    if (n) {
+      if (cur?.id === n.id) return
+      const kind = nodeKindOf(w, n.id)
+      if (kind === 'agent') set({ kind, id: n.id as AgentId })
+      else if (kind === 'sandbox') set({ kind, id: n.id as SandboxId })
+      else if (kind === 'trigger') set({ kind, id: n.id as TriggerId })
+      return
+    }
+    const e = edges.find((x) => x.selected)
+    if (e) {
+      if (cur?.id !== e.id) set({ kind: 'edge', id: e.id as EdgeId })
+      return
+    }
+    if (cur) set(null)
+  }, [nodes, edges])
+
+  const isValidConnection = useCallback<IsValidConnection>(
+    (c) => {
+      if (!c.source || !c.target || c.source === c.target) return false
+      const from = nodeKindOf(world, c.source)
+      const to = nodeKindOf(world, c.target)
+      return !!from && !!to && edgeKindFor(from, to).length > 0
+    },
+    [world],
+  )
+
+  const onConnect = useCallback(
+    (c: Connection) => {
+      if (!c.source || !c.target) return
+      const r = api.graph.connect(c.source as NodeId, c.target as NodeId, agentEdgeTool)
+      if (!r.ok) setToast(r.reason)
+    },
+    [agentEdgeTool],
+  )
+
+  const onNodeDragStop = useCallback(
+    (_: unknown, __: FactoryNode, dragged: FactoryNode[]) => {
+      api.graph.updatePositions(dragged.map((n) => ({ id: n.id as NodeId, position: n.position })))
+    },
+    [],
+  )
+
+  const onPaneContextMenu = useCallback(
+    (e: MouseEvent | React.MouseEvent) => {
+      e.preventDefault()
+      setMenu({ x: e.clientX, y: e.clientY, flow: screenToFlowPosition({ x: e.clientX, y: e.clientY }) })
+    },
+    [screenToFlowPosition],
+  )
+
+  const spawn = useCallback(
+    (kind: NodeKind) => {
+      if (!menu) return
+      const id = api.graph.createNode(kind, menu.flow)
+      if (kind === 'agent') select({ kind, id: id as AgentId })
+      else if (kind === 'sandbox') select({ kind, id: id as SandboxId })
+      else select({ kind, id: id as TriggerId })
+      setMenu(null)
+    },
+    [menu, select],
+  )
+
+  const runLayout = useCallback(() => {
+    api.graph.updatePositions(autoLayout(world))
+    requestAnimationFrame(() => fitView({ padding: 0.15, duration: 400 }))
+  }, [world, fitView])
+
+  const minimapColor = useMemo(
+    () => (n: FactoryNode) =>
+      n.type === 'agent' ? AGENT_STATUS_COLOR[n.data.agent.status] : n.type === 'sandbox' ? SANDBOX_STATE_COLOR[n.data.sandbox.state] : '#34d399',
+    [],
+  )
+
+  return (
+    <div className="absolute inset-0">
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        isValidConnection={isValidConnection}
+        onNodeDragStop={onNodeDragStop}
+        onNodesDelete={(ns) => api.graph.deleteNodes(ns.map((n) => n.id as NodeId))}
+        onEdgesDelete={(es) => api.graph.removeEdges(es.map((e) => e.id as EdgeId))}
+        onPaneContextMenu={onPaneContextMenu}
+        onPaneClick={() => setMenu(null)}
+        selectionOnDrag
+        panOnDrag={[1, 2]}
+        selectionMode={SelectionMode.Partial}
+        deleteKeyCode={['Backspace', 'Delete']}
+        multiSelectionKeyCode={['Meta', 'Shift']}
+        minZoom={0.2}
+        maxZoom={2}
+        colorMode="dark"
+      >
+        <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#1c2538" />
+        <Controls position="bottom-left" showInteractive={false} />
+        <MiniMap position="bottom-right" pannable zoomable nodeColor={minimapColor} maskColor="rgba(7,9,15,0.7)" nodeStrokeWidth={0} style={{ width: 160, height: 100 }} />
+      </ReactFlow>
+
+      <div className="absolute top-3 left-3 flex items-center gap-2">
+        <div className="flex items-center gap-1 rounded-lg border border-ink-700 bg-ink-900/90 backdrop-blur p-1">
+          <Button variant="ghost" size="xs" onClick={runLayout} title="Auto-layout (dagre)"><LayoutGrid size={13} /> Layout</Button>
+          <Button variant="ghost" size="xs" onClick={() => fitView({ padding: 0.15, duration: 300 })} title="Fit view"><Maximize2 size={13} /> Fit</Button>
+        </div>
+        <div className="flex items-center gap-1 rounded-lg border border-ink-700 bg-ink-900/90 backdrop-blur p-1 text-[10px]">
+          <span className="text-ink-400 px-1">agent → agent draws</span>
+          {(['handoff', 'depends-on'] as const).map((k) => (
+            <button
+              key={k}
+              onClick={() => setAgentEdgeTool(k)}
+              className={cx('h-6 rounded-md px-2 font-medium', agentEdgeTool === k ? (k === 'handoff' ? 'bg-violet-500/20 text-violet-200' : 'bg-amber-400/20 text-amber-200') : 'text-ink-300 hover:bg-ink-800')}
+            >
+              {k}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="absolute top-3 right-3"><EdgeLegend /></div>
+      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[10px] text-ink-500 pointer-events-none">
+        drag to marquee-select · space/middle-drag to pan · right-click to spawn · ⌫ deletes
+      </div>
+      {toast && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 rounded-md border border-red-400/40 bg-red-500/15 text-red-200 px-3 py-1.5 text-xs shadow-lg">
+          {toast}
+        </div>
+      )}
+      <ContextMenu menu={menu} onPick={spawn} onClose={() => setMenu(null)} />
+    </div>
+  )
+}
