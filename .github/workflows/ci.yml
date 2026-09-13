@@ -29,10 +29,10 @@ jobs:
         run: npm ci
 
       - name: Typecheck
-        run: npx tsc -b
+        run: npx --no-install tsc -b
 
       - name: Lint
         run: npm run lint
 
       - name: Build
-        run: npx vite build
+        run: npx --no-install vite build
