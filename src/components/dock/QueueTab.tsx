@@ -1,6 +1,6 @@
 import { X } from 'lucide-react'
 import { api } from '../../api/client'
-import { TASK_STATUS_COLOR, type Task } from '../../domain/types'
+import { TASK_STATUS_COLOR, taskOriginLabel, type Task } from '../../domain/types'
 import { useStore } from '../../store'
 import { Badge, Dot, fmtAgo } from '../ui'
 
@@ -22,17 +22,16 @@ export function QueueTab() {
         <tbody>
           {tasks.map((t) => {
             const agent = world.agents[t.agentId]
-            const origin = t.origin.kind === 'trigger' ? world.triggers[t.origin.id]?.name ?? 'trigger' : t.origin.kind === 'handoff' ? `↳ ${world.agents[t.origin.from]?.name ?? 'agent'}` : 'manual'
             return (
-              <tr key={t.id} className="border-t border-ink-800 hover:bg-ink-850">
+              <tr key={t.id} onClick={() => select({ kind: 'task', id: t.id })} className="border-t border-ink-800 hover:bg-ink-850 cursor-pointer">
                 <td className="px-3 py-1.5"><Badge color={TASK_STATUS_COLOR[t.status]}><Dot color={TASK_STATUS_COLOR[t.status]} pulse={t.status === 'running'} />{t.status}</Badge></td>
                 <td className="px-3 py-1.5 max-w-[360px] truncate" title={t.prompt}>{t.title}{t.attempts > 1 && <span className="text-ink-500"> · attempt {t.attempts}</span>}</td>
-                <td className="px-3 py-1.5"><button className="text-cyan-300 hover:underline" onClick={() => agent && select({ kind: 'agent', id: agent.id })}>{agent?.name ?? '?'}</button></td>
+                <td className="px-3 py-1.5"><button className="text-cyan-300 hover:underline" onClick={(event) => { event.stopPropagation(); if (agent) select({ kind: 'agent', id: agent.id }) }}>{agent?.name ?? '?'}</button></td>
                 <td className="px-3 py-1.5" style={{ color: t.priority === 'high' ? '#f87171' : t.priority === 'low' ? '#64748b' : undefined }}>{t.priority}</td>
-                <td className="px-3 py-1.5 text-ink-400">{origin}</td>
+                <td className="px-3 py-1.5 text-ink-400">{taskOriginLabel(world, t.origin)}</td>
                 <td className="px-3 py-1.5 text-amber-300/90">{t.blockedOn ?? ''}</td>
                 <td className="px-3 py-1.5 text-ink-400 font-mono tabular-nums">{fmtAgo(world.now, t.createdAt)}</td>
-                <td className="px-3 py-1.5 text-right">{t.status !== 'running' && <button onClick={() => api.tasks.cancel(t.id)} className="text-ink-500 hover:text-red-300" title="Cancel"><X size={12} /></button>}</td>
+                <td className="px-3 py-1.5 text-right">{t.status !== 'running' && <button onClick={(event) => { event.stopPropagation(); api.tasks.cancel(t.id) }} className="text-ink-500 hover:text-red-300" title="Cancel"><X size={12} /></button>}</td>
               </tr>
             )
           })}

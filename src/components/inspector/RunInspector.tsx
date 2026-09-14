@@ -1,7 +1,7 @@
-import { ExternalLink } from 'lucide-react'
 import { LOG_LEVEL_COLOR, type Run } from '../../domain/types'
 import { useStore } from '../../store'
 import { Badge, Dot, Section, fmtDuration, fmtTime } from '../ui'
+import { ArtifactList } from './TaskInputSection'
 
 const STATUS_COLOR = { running: '#22d3ee', succeeded: '#34d399', failed: '#f87171' } as const
 
@@ -48,20 +48,7 @@ export function RunInspector({ run }: { run: Run }) {
       {run.status === 'succeeded' && run.output && (
         <Section title="Output">
           <p className="text-xs leading-relaxed text-ink-200">{run.output.summary}</p>
-          <div className="flex flex-col gap-1.5">
-            {run.output.artifacts.map((artifact, index) => {
-              const content = (
-                <>
-                  <span className="text-[10px] uppercase tracking-wider text-ink-400">{artifact.kind}</span>
-                  <span className="min-w-0 flex-1 truncate">{artifact.label}</span>
-                  {artifact.url && <ExternalLink size={11} className="shrink-0 text-cyan-300" />}
-                </>
-              )
-              return artifact.url
-                ? <a key={`${artifact.kind}-${index}`} href={artifact.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 rounded-md border border-ink-700 bg-ink-850 px-2.5 py-2 text-xs hover:border-cyan-400/40">{content}</a>
-                : <div key={`${artifact.kind}-${index}`} className="flex items-center gap-2 rounded-md border border-ink-700 bg-ink-850 px-2.5 py-2 text-xs">{content}</div>
-            })}
-          </div>
+          <ArtifactList artifacts={run.output.artifacts} />
         </Section>
       )}
 

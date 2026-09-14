@@ -206,6 +206,7 @@ export type Subject =
   | { kind: 'sandbox'; id: SandboxId }
   | { kind: 'trigger'; id: TriggerId }
   | { kind: 'run'; id: RunId }
+  | { kind: 'task'; id: TaskId }
   | { kind: 'edge'; id: EdgeId }
 
 export type EventKind = 'agent' | 'sandbox' | 'trigger' | 'run' | 'graph' | 'task'
@@ -238,6 +239,14 @@ export function nodeKindOf(world: World, id: string): NodeKind | null {
   if (id in world.sandboxes) return 'sandbox'
   if (id in world.triggers) return 'trigger'
   return null
+}
+
+export function taskOriginLabel(world: World, origin: Task['origin']): string {
+  switch (origin.kind) {
+    case 'trigger': return world.triggers[origin.id]?.name ?? 'trigger'
+    case 'handoff': return `handoff from ${world.agents[origin.from]?.name ?? 'agent'}`
+    case 'manual': return 'manual'
+  }
 }
 
 export function edgeKindFor(from: NodeKind, to: NodeKind): EdgeKind[] {
