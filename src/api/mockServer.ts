@@ -68,12 +68,13 @@ function createRunOutput(run: Pick<Run, 'id' | 'title'>, agent: Pick<Agent, 'rol
   }
 
   const branch = `run/${run.id.slice(-6)}`
+  const pullRequest = Number.parseInt(run.id.slice(-6), 36) % 10_000 + 1
   const repository = 'https://github.com/factory-demo/factory'
   return {
     summary,
     artifacts: [
       { kind: 'branch', label: branch, url: `${repository}/tree/${encodeURIComponent(branch)}` },
-      { kind: 'pr', label: `Pull request for ${run.title}`, url: `${repository}/pull/${encodeURIComponent(run.id.slice(-6))}` },
+      { kind: 'pr', label: `Pull request #${pullRequest}`, url: `${repository}/pull/${pullRequest}` },
     ],
   }
 }
