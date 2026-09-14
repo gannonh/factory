@@ -85,7 +85,7 @@ export function AgentInspector({ agent }: { agent: Agent }) {
 
       <Section title="Retry policy">
         <div className="grid grid-cols-3 gap-2">
-          <Field label="Attempts"><Input type="number" min={1} max={10} value={agent.retry.maxAttempts} onChange={(e) => update({ retry: { ...agent.retry, maxAttempts: Math.max(1, Number(e.target.value) || 1) } })} /></Field>
+          <Field label="Attempts"><Input type="number" min={1} max={10} value={agent.retry.maxAttempts} onChange={(e) => update({ retry: { ...agent.retry, maxAttempts: Math.max(1, Math.min(10, Number(e.target.value) || 1)) } })} /></Field>
           <Field label="Backoff ms"><Input type="number" min={0} step={500} value={agent.retry.backoffMs} onChange={(e) => update({ retry: { ...agent.retry, backoffMs: Math.max(0, Number(e.target.value) || 0) } })} /></Field>
           <Field label="Curve">
             <Select value={agent.retry.backoff} onChange={(e) => update({ retry: { ...agent.retry, backoff: e.target.value as Agent['retry']['backoff'] } })}>
@@ -130,7 +130,7 @@ function ToolsEditor({ tools, onChange }: { tools: string[]; onChange: (t: strin
         {tools.map((t) => (
           <span key={t} className="inline-flex items-center gap-1 rounded-md border border-ink-600 bg-ink-800 px-1.5 py-0.5 text-[11px] font-mono">
             {t}
-            <button onClick={() => onChange(tools.filter((x) => x !== t))} className="text-ink-400 hover:text-red-300"><X size={10} /></button>
+            <button onClick={() => onChange(tools.filter((x) => x !== t))} aria-label={`Remove ${t}`} className="text-ink-400 hover:text-red-300"><X size={10} /></button>
           </span>
         ))}
         {tools.length === 0 && <span className="text-[11px] text-ink-500">no tools</span>}

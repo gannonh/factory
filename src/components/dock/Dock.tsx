@@ -69,7 +69,7 @@ export function Dock() {
           </button>
         ))}
         <span className="flex-1" />
-        <button onClick={toggle} className="text-ink-400 hover:text-ink-100 px-1">{open ? <ChevronDown size={14} /> : <ChevronUp size={14} />}</button>
+        <button onClick={toggle} aria-label={open ? 'Collapse dock' : 'Expand dock'} className="text-ink-400 hover:text-ink-100 px-1">{open ? <ChevronDown size={14} /> : <ChevronUp size={14} />}</button>
       </div>
       {open && (
         <div className="flex-1 min-h-0">

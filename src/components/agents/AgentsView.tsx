@@ -59,7 +59,18 @@ export function AgentsView() {
 function Row({ agent: a, running, queued, tokens, sandboxes, selected, onClick }: { agent: Agent; running: number; queued: number; tokens: number; sandboxes: number; selected: boolean; onClick: () => void }) {
   const color = AGENT_STATUS_COLOR[a.status]
   return (
-    <tr onClick={onClick} className={cx('border-t border-ink-800 cursor-pointer', selected ? 'bg-cyan-500/10' : 'hover:bg-ink-850')}>
+    <tr
+      tabIndex={0}
+      aria-selected={selected}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onClick()
+        }
+      }}
+      className={cx('border-t border-ink-800 cursor-pointer outline-none focus-visible:bg-ink-800', selected ? 'bg-cyan-500/10' : 'hover:bg-ink-850')}
+    >
       <td className="px-3 py-2 pl-4">
         <div className="font-medium">{a.name}</div>
         <div className="text-[10px] text-ink-400">{a.role}</div>
