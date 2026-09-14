@@ -1,7 +1,7 @@
 import { LOG_LEVEL_COLOR, type Run } from '../../domain/types'
 import { useStore } from '../../store'
 import { Badge, Dot, Section, fmtDuration, fmtTime } from '../ui'
-import { ArtifactList } from './TaskInputSection'
+import { ArtifactList, TaskInputSection } from './TaskInputSection'
 
 const STATUS_COLOR = { running: '#22d3ee', succeeded: '#34d399', failed: '#f87171' } as const
 
@@ -9,6 +9,7 @@ export function RunInspector({ run }: { run: Run }) {
   const world = useStore((state) => state.world)
   const agent = world.agents[run.agentId]
   const sandbox = world.sandboxes[run.sandboxId]
+  const input = world.tasks[run.taskId]?.input ?? null
   const logs = world.logs.filter((line) => line.runId === run.id)
   const elapsedMs = (run.endedAt ?? world.now) - run.startedAt
 
@@ -44,6 +45,8 @@ export function RunInspector({ run }: { run: Run }) {
           <div className="rounded-md border border-red-400/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-200 break-words">{run.error}</div>
         </Section>
       )}
+
+      {input && <TaskInputSection input={input} />}
 
       {run.status === 'succeeded' && run.output && (
         <Section title="Output">
