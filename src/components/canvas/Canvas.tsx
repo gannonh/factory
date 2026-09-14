@@ -1,11 +1,11 @@
 import {
   Background, BackgroundVariant, Controls, MiniMap, ReactFlow, SelectionMode, useEdgesState, useNodesState, useReactFlow,
-  type Connection, type IsValidConnection,
+  type Connection, type IsValidConnection, type OnEdgesChange, type OnNodesChange,
 } from '@xyflow/react'
 import { LayoutGrid, Maximize2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api/client'
-import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, edgeKindFor, nodeKindOf, type AgentId, type EdgeId, type NodeId, type NodeKind, type SandboxId, type TriggerId, type World } from '../../domain/types'
+import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, edgeKindFor, nodeKindOf, type AgentId, type EdgeId, type NodeId, type NodeKind, type SandboxId, type Subject, type TriggerId, type World } from '../../domain/types'
 import { useStore, type Selection } from '../../store'
 import { Button, cx } from '../ui'
 import { ContextMenu, type MenuState } from './ContextMenu'
@@ -59,6 +59,17 @@ function nodeSelection(kind: NodeKind, id: NodeId): Selection {
   return { kind, id: id as TriggerId }
 }
 
+type CanvasSelection = Extract<Subject, { kind: 'agent' | 'sandbox' | 'trigger' | 'edge' }>
+
+function isCanvasSelection(selection: Selection): selection is CanvasSelection {
+  return selection !== null && (
+    selection.kind === 'agent' ||
+    selection.kind === 'sandbox' ||
+    selection.kind === 'trigger' ||
+    selection.kind === 'edge'
+  )
+}
+
 export function Canvas() {
   const world = useStore((s) => s.world)
   const selection = useStore((s) => s.selection)
@@ -71,9 +82,11 @@ export function Canvas() {
   const [toast, setToast] = useState<string | null>(null)
   const { screenToFlowPosition, fitView } = useReactFlow()
   const fitted = useRef(false)
+  const graphSelectionPending = useRef(false)
 
   useEffect(() => {
-    const selectedId = useStore.getState().selection?.id ?? null
+    const currentSelection = useStore.getState().selection
+    const selectedId = isCanvasSelection(currentSelection) ? currentSelection.id : null
     setNodes((prev) => {
       const prevById = new Map(prev.map((n) => [n.id, n]))
       return buildNodes(world).map((n) => {
@@ -95,10 +108,21 @@ export function Canvas() {
     const origin = pushed.current?.selection
     pushed.current = null
     if (origin === selection) return
-    const id = selection?.id ?? null
+    graphSelectionPending.current = false
+    const id = isCanvasSelection(selection) ? selection.id : null
     setNodes((prev) => (prev.every((n) => n.selected === (n.id === id)) ? prev : prev.map((n) => ({ ...n, selected: n.id === id }))))
     setEdges((prev) => (prev.every((e) => e.selected === (e.id === id)) ? prev : prev.map((e) => ({ ...e, selected: e.id === id }))))
   }, [selection, setNodes, setEdges])
+
+  const onGraphNodesChange = useCallback<OnNodesChange<FactoryNode>>((changes) => {
+    if (changes.some((change) => change.type === 'select')) graphSelectionPending.current = true
+    onNodesChange(changes)
+  }, [onNodesChange])
+
+  const onGraphEdgesChange = useCallback<OnEdgesChange<FactoryEdgeType>>((changes) => {
+    if (changes.some((change) => change.type === 'select')) graphSelectionPending.current = true
+    onEdgesChange(changes)
+  }, [onEdgesChange])
 
   useEffect(() => {
     if (fitted.current || nodes.length === 0) return
@@ -113,8 +137,10 @@ export function Canvas() {
   }, [toast])
 
   useEffect(() => {
-    if (nodes.length === 0) return
+    if (!graphSelectionPending.current) return
+    graphSelectionPending.current = false
     const { world: w, selection: cur, select: set } = useStore.getState()
+    if (cur !== selection) return
     const push = (next: Selection) => {
       pushed.current = { selection: next }
       set(next)
@@ -131,8 +157,8 @@ export function Canvas() {
       if (cur?.id !== e.id) push({ kind: 'edge', id: e.id as EdgeId })
       return
     }
-    if (cur) push(null)
-  }, [nodes, edges])
+    if (isCanvasSelection(cur)) push(null)
+  }, [nodes, edges, selection])
 
   const isValidConnection = useCallback<IsValidConnection>(
     (c) => {
@@ -195,8 +221,8 @@ export function Canvas() {
         edges={edges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
+        onNodesChange={onGraphNodesChange}
+        onEdgesChange={onGraphEdgesChange}
         onConnect={onConnect}
         isValidConnection={isValidConnection}
         onNodeDragStop={onNodeDragStop}
