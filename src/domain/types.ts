@@ -145,7 +145,8 @@ export type Task = {
   prompt: string
   priority: Priority
   status: TaskStatus
-  origin: { kind: 'trigger'; id: TriggerId } | { kind: 'handoff'; from: AgentId } | { kind: 'manual' }
+  origin: { kind: 'trigger'; id: TriggerId } | { kind: 'handoff'; from: AgentId; runId: RunId } | { kind: 'manual' }
+  input: TaskInput | null
   createdAt: number
   attempts: number
   /** set after a failed attempt; the scheduler skips the task until this simulated time */
@@ -168,6 +169,8 @@ export type RunOutput = {
   summary: string
   artifacts: Artifact[]
 }
+
+export type TaskInput = RunOutput & { runId: RunId }
 
 export type Run = {
   id: RunId
