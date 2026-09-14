@@ -17,6 +17,7 @@ import {
   type Priority,
   type Run,
   type RunId,
+  type RunOutput,
   type Sandbox,
   type SandboxAction,
   type SandboxId,
@@ -55,6 +56,28 @@ const RUN_LOG_LINES: Array<[LogLevel, string]> = [
   ['info', 'handoff payload prepared'],
   ['error', 'tool call failed: permission denied on /etc/hosts'],
 ]
+
+type RunCompletion =
+  | { status: 'succeeded'; agent: Pick<Agent, 'role' | 'tools'> }
+  | { status: 'failed'; reason: string; retryable?: boolean }
+
+function createRunOutput(run: Pick<Run, 'id' | 'title'>, agent: Pick<Agent, 'role' | 'tools'>): RunOutput {
+  const summary = `The ${agent.role} completed "${run.title}".`
+  if (!agent.tools.includes('gh') && !agent.tools.includes('git_diff')) {
+    return { summary, artifacts: [{ kind: 'note', label: `Completion note for ${run.title}`, url: null }] }
+  }
+
+  const branch = `run/${run.id.slice(-6)}`
+  const pullRequest = Number.parseInt(run.id.slice(-6), 36) % 10_000 + 1
+  const repository = 'https://github.com/factory-demo/factory'
+  return {
+    summary,
+    artifacts: [
+      { kind: 'branch', label: branch, url: `${repository}/tree/${encodeURIComponent(branch)}` },
+      { kind: 'pr', label: `Pull request #${pullRequest}`, url: `${repository}/pull/${pullRequest}` },
+    ],
+  }
+}
 
 type Listener = (world: World) => void
 
@@ -194,8 +217,8 @@ export class MockServer {
     const gone = new Set<string>(ids)
     for (const r of Object.values(w.runs)) {
       if (r.status !== 'running') continue
-      if (gone.has(r.agentId)) this.finishRun(r, 'failed', 'agent deleted', { retryable: false })
-      else if (gone.has(r.sandboxId)) this.finishRun(r, 'failed', 'sandbox deleted')
+      if (gone.has(r.agentId)) this.finishRun(r, { status: 'failed', reason: 'agent deleted', retryable: false })
+      else if (gone.has(r.sandboxId)) this.finishRun(r, { status: 'failed', reason: 'sandbox deleted' })
     }
     for (const t of Object.values(w.tasks)) if (gone.has(t.agentId) && (t.status === 'queued' || t.status === 'waiting')) this.patchTask(t.id, { status: 'cancelled', blockedOn: null })
     w.agents = Object.fromEntries(Object.entries(w.agents).filter(([id]) => !gone.has(id))) as World['agents']
@@ -278,7 +301,7 @@ export class MockServer {
     if (!next) return
     if (sb.lease) {
       const run = this.world.runs[sb.lease.runId]
-      if (run && run.status === 'running') this.finishRun(run, 'failed', `sandbox ${action}`)
+      if (run && run.status === 'running') this.finishRun(run, { status: 'failed', reason: `sandbox ${action}` })
     }
     this.patchSandbox(id, { state: next, stateSince: this.world.now, progress: 0, lease: null, restartPending: action === 'restart' })
     this.event('sandbox', { kind: 'sandbox', id }, `${sb.name}: ${action} → ${next}`)
@@ -424,25 +447,31 @@ export class MockServer {
       }
       if (this.world.now - run.startedAt > agent.timeoutMs) {
         this.log('error', `run exceeded timeout of ${Math.round(agent.timeoutMs / 1000)}s`, { runId: run.id, agentId: run.agentId })
-        this.finishRun(run, 'failed', 'timeout')
+        this.finishRun(run, { status: 'failed', reason: 'timeout' })
         continue
       }
       if (progress >= 1) {
         const ok = Math.random() < 0.85
         if (!ok) this.log('error', pick(RUN_LOG_LINES.filter(([l]) => l === 'error'))[1], { runId: run.id, agentId: run.agentId })
-        this.finishRun(run, ok ? 'succeeded' : 'failed', ok ? 'completed' : 'task error')
+        this.finishRun(run, ok ? { status: 'succeeded', agent } : { status: 'failed', reason: 'task error' })
       }
     }
   }
 
-  private finishRun(run: Run, status: 'succeeded' | 'failed', reason: string, opts: { retryable?: boolean } = {}) {
+  private finishRun(run: Run, completion: RunCompletion) {
     const w = this.world
     const agent = w.agents[run.agentId]
     const task = w.tasks[run.taskId]
-    this.patchRun(run.id, { status, endedAt: w.now, progress: status === 'succeeded' ? 1 : run.progress })
+    this.patchRun(run.id, {
+      status: completion.status,
+      endedAt: w.now,
+      progress: completion.status === 'succeeded' ? 1 : run.progress,
+      output: completion.status === 'succeeded' ? createRunOutput(run, completion.agent) : null,
+      error: completion.status === 'failed' ? completion.reason : null,
+    })
     const sb = w.sandboxes[run.sandboxId]
     if (sb && sb.lease?.runId === run.id) this.patchSandbox(sb.id, { lease: null })
-    if (status === 'succeeded') {
+    if (completion.status === 'succeeded') {
       if (agent) this.patchAgent(agent.id, { completed: agent.completed + 1 })
       if (task) this.patchTask(task.id, { status: 'succeeded' })
       this.log('info', `run finished: ${run.title}`, { runId: run.id, agentId: run.agentId })
@@ -453,17 +482,17 @@ export class MockServer {
         }
       }
     } else if (task && agent) {
-      const canRetry = (opts.retryable ?? true) && task.attempts < agent.retry.maxAttempts
+      const canRetry = (completion.retryable ?? true) && task.attempts < agent.retry.maxAttempts
       if (canRetry) {
         const delay = agent.retry.backoff === 'exponential' ? agent.retry.backoffMs * 2 ** (task.attempts - 1) : agent.retry.backoffMs
         this.patchTask(task.id, { status: 'waiting', retryAt: w.now + delay, blockedOn: `retry ${task.attempts + 1}/${agent.retry.maxAttempts} in ${Math.round(delay / 1000)}s` })
-        this.log('warn', `run failed (${reason}); retrying attempt ${task.attempts + 1}/${agent.retry.maxAttempts} in ${Math.round(delay / 1000)}s`, { runId: run.id, agentId: run.agentId })
-        this.event('run', { kind: 'run', id: run.id }, `${agent.name} failed “${run.title}” (${reason}), retrying`)
+        this.log('warn', `run failed (${completion.reason}); retrying attempt ${task.attempts + 1}/${agent.retry.maxAttempts} in ${Math.round(delay / 1000)}s`, { runId: run.id, agentId: run.agentId })
+        this.event('run', { kind: 'run', id: run.id }, `${agent.name} failed “${run.title}” (${completion.reason}), retrying`)
       } else {
         this.patchTask(task.id, { status: 'failed', blockedOn: null })
         this.patchAgent(agent.id, { failed: agent.failed + 1, status: agent.status === 'paused' ? 'paused' : 'error' })
-        this.log('error', `run failed permanently (${reason}): ${run.title}`, { runId: run.id, agentId: run.agentId })
-        this.event('run', { kind: 'run', id: run.id }, `${agent.name} gave up on “${run.title}” (${reason})`)
+        this.log('error', `run failed permanently (${completion.reason}): ${run.title}`, { runId: run.id, agentId: run.agentId })
+        this.event('run', { kind: 'run', id: run.id }, `${agent.name} gave up on “${run.title}” (${completion.reason})`)
       }
     }
     this.refreshAgentStatus(run.agentId)
@@ -515,6 +544,7 @@ export class MockServer {
     const run: Run = {
       id, taskId: task.id, agentId: agent.id, sandboxId: sandbox.id, title: task.title, attempt: task.attempts + 1,
       status: 'running', progress: 0, durationMs: rand(7000, 18000), startedAt: this.world.now, endedAt: null, tokens: 0,
+      output: null, error: null,
     }
     this.world.runs = { ...this.world.runs, [id]: run }
     this.patchTask(task.id, { status: 'running', attempts: task.attempts + 1, retryAt: null, blockedOn: null })

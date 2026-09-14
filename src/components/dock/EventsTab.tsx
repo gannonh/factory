@@ -18,8 +18,7 @@ export function EventsTab() {
   const open = (ev: FactoryEvent) => {
     const s = ev.subject
     if (s.kind === 'run') {
-      const run = world.runs[s.id]
-      if (run && world.agents[run.agentId]) select({ kind: 'agent', id: run.agentId })
+      if (world.runs[s.id]) select(s)
       setDockTab('runs')
       return
     }

@@ -156,6 +156,19 @@ export type Task = {
 
 export type RunStatus = 'running' | 'succeeded' | 'failed'
 
+export type ArtifactKind = 'branch' | 'pr' | 'file' | 'note'
+
+export type Artifact = {
+  kind: ArtifactKind
+  label: string
+  url: string | null
+}
+
+export type RunOutput = {
+  summary: string
+  artifacts: Artifact[]
+}
+
 export type Run = {
   id: RunId
   taskId: TaskId
@@ -169,6 +182,8 @@ export type Run = {
   startedAt: number
   endedAt: number | null
   tokens: number
+  output: RunOutput | null
+  error: string | null
 }
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
