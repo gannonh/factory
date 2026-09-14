@@ -44,7 +44,7 @@ export function LogsTab() {
             <button key={l} onClick={() => setLevel(l)} className={cx('h-6 px-2 text-[10px] font-mono uppercase shrink-0', level === l ? 'bg-ink-700' : 'hover:bg-ink-800')} style={{ color: RANK[l] >= RANK[level] ? LOG_LEVEL_COLOR[l] : '#3b475f' }}>{l}</button>
           ))}
         </div>
-        <Input placeholder="filter…" value={query} onChange={(e) => setQuery(e.target.value)} className="w-48 shrink-0 h-6 py-0" />
+        <div className="w-48 shrink-0"><Input placeholder="filter…" value={query} onChange={(e) => setQuery(e.target.value)} className="h-6 py-0" /></div>
         <label className={cx('flex items-center gap-1.5 text-[11px]', agentSelected ? 'text-ink-300' : 'text-ink-600')}>
           <input type="checkbox" className="accent-cyan-400" checked={onlySelected && agentSelected} disabled={!agentSelected} onChange={(e) => setOnlySelected(e.target.checked)} />
           selected agent only

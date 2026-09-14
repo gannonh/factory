@@ -194,7 +194,7 @@ export class MockServer {
     const gone = new Set<string>(ids)
     for (const r of Object.values(w.runs)) {
       if (r.status !== 'running') continue
-      if (gone.has(r.agentId)) this.finishRun(r, 'failed', 'agent deleted')
+      if (gone.has(r.agentId)) this.finishRun(r, 'failed', 'agent deleted', { retryable: false })
       else if (gone.has(r.sandboxId)) this.finishRun(r, 'failed', 'sandbox deleted')
     }
     for (const t of Object.values(w.tasks)) if (gone.has(t.agentId) && (t.status === 'queued' || t.status === 'waiting')) this.patchTask(t.id, { status: 'cancelled', blockedOn: null })
@@ -435,7 +435,7 @@ export class MockServer {
     }
   }
 
-  private finishRun(run: Run, status: 'succeeded' | 'failed', reason: string) {
+  private finishRun(run: Run, status: 'succeeded' | 'failed', reason: string, opts: { retryable?: boolean } = {}) {
     const w = this.world
     const agent = w.agents[run.agentId]
     const task = w.tasks[run.taskId]
@@ -453,7 +453,7 @@ export class MockServer {
         }
       }
     } else if (task && agent) {
-      const canRetry = reason !== 'agent deleted' && task.attempts < agent.retry.maxAttempts
+      const canRetry = (opts.retryable ?? true) && task.attempts < agent.retry.maxAttempts
       if (canRetry) {
         const delay = agent.retry.backoff === 'exponential' ? agent.retry.backoffMs * 2 ** (task.attempts - 1) : agent.retry.backoffMs
         this.patchTask(task.id, { status: 'waiting', retryAt: w.now + delay, blockedOn: `retry ${task.attempts + 1}/${agent.retry.maxAttempts} in ${Math.round(delay / 1000)}s` })

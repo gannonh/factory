@@ -6,7 +6,7 @@ import { LayoutGrid, Maximize2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api/client'
 import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, edgeKindFor, nodeKindOf, type AgentId, type EdgeId, type NodeId, type NodeKind, type SandboxId, type TriggerId, type World } from '../../domain/types'
-import { useStore } from '../../store'
+import { useStore, type Selection } from '../../store'
 import { Button, cx } from '../ui'
 import { ContextMenu, type MenuState } from './ContextMenu'
 import { EdgeLegend, edgeTypes, type FactoryEdgeType } from './FactoryEdge'
@@ -53,6 +53,12 @@ function buildEdges(world: World): FactoryEdgeType[] {
   })
 }
 
+function nodeSelection(kind: NodeKind, id: NodeId): Selection {
+  if (kind === 'agent') return { kind, id: id as AgentId }
+  if (kind === 'sandbox') return { kind, id: id as SandboxId }
+  return { kind, id: id as TriggerId }
+}
+
 export function Canvas() {
   const world = useStore((s) => s.world)
   const selection = useStore((s) => s.selection)
@@ -82,14 +88,13 @@ export function Canvas() {
     })
   }, [world, setNodes, setEdges])
 
-  const mirrored = useRef(false)
+  /** set by the mirror effect when a canvas selection is pushed into the store; the effect below consumes it */
+  const pushed = useRef<{ selection: Selection } | null>(null)
 
   useEffect(() => {
-    // selection changes mirrored from the canvas itself must not collapse a multi-selection
-    if (mirrored.current) {
-      mirrored.current = false
-      return
-    }
+    const origin = pushed.current?.selection
+    pushed.current = null
+    if (origin === selection) return
     const id = selection?.id ?? null
     setNodes((prev) => (prev.every((n) => n.selected === (n.id === id)) ? prev : prev.map((n) => ({ ...n, selected: n.id === id }))))
     setEdges((prev) => (prev.every((e) => e.selected === (e.id === id)) ? prev : prev.map((e) => ({ ...e, selected: e.id === id }))))
@@ -110,17 +115,15 @@ export function Canvas() {
   useEffect(() => {
     if (nodes.length === 0) return
     const { world: w, selection: cur, select: set } = useStore.getState()
-    const push = (sel: Parameters<typeof set>[0]) => {
-      mirrored.current = true
-      set(sel)
+    const push = (next: Selection) => {
+      pushed.current = { selection: next }
+      set(next)
     }
     const n = nodes.find((x) => x.selected)
     if (n) {
       if (cur?.id === n.id) return
       const kind = nodeKindOf(w, n.id)
-      if (kind === 'agent') push({ kind, id: n.id as AgentId })
-      else if (kind === 'sandbox') push({ kind, id: n.id as SandboxId })
-      else if (kind === 'trigger') push({ kind, id: n.id as TriggerId })
+      if (kind) push(nodeSelection(kind, n.id as NodeId))
       return
     }
     const e = edges.find((x) => x.selected)
@@ -168,10 +171,7 @@ export function Canvas() {
   const spawn = useCallback(
     (kind: NodeKind) => {
       if (!menu) return
-      const id = api.graph.createNode(kind, menu.flow)
-      if (kind === 'agent') select({ kind, id: id as AgentId })
-      else if (kind === 'sandbox') select({ kind, id: id as SandboxId })
-      else select({ kind, id: id as TriggerId })
+      select(nodeSelection(kind, api.graph.createNode(kind, menu.flow)))
       setMenu(null)
     },
     [menu, select],

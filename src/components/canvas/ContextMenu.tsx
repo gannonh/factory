@@ -7,7 +7,7 @@ export type MenuState = { x: number; y: number; flow: { x: number; y: number } }
 export function ContextMenu({ menu, onPick, onClose }: { menu: MenuState; onPick: (kind: NodeKind) => void; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
 
-  // clamp into the viewport before the browser paints; menu.x/y stays the anchor for the flow position
+  // measure and clamp into the viewport before the browser paints; this is the only writer of left/top
   useLayoutEffect(() => {
     const el = ref.current
     if (!menu || !el) return
@@ -25,7 +25,7 @@ export function ContextMenu({ menu, onPick, onClose }: { menu: MenuState; onPick
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} />
-      <div ref={ref} className="fixed z-50 min-w-[160px] rounded-lg border border-ink-600 bg-ink-850 shadow-xl p-1" style={{ left: menu.x, top: menu.y }}>
+      <div ref={ref} className="fixed z-50 min-w-[160px] rounded-lg border border-ink-600 bg-ink-850 shadow-xl p-1">
         {items.map(({ kind, label, icon: Icon, color }) => (
           <button key={kind} onClick={() => onPick(kind)} className="w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-ink-100 hover:bg-ink-700">
             <Icon size={14} className={color} />
