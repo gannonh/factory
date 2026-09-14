@@ -2,6 +2,7 @@ import { X } from 'lucide-react'
 import { useStore } from '../../store'
 import { AgentInspector } from './AgentInspector'
 import { EdgeInspector } from './EdgeInspector'
+import { RunInspector } from './RunInspector'
 import { SandboxInspector } from './SandboxInspector'
 import { TriggerInspector } from './TriggerInspector'
 
@@ -27,11 +28,19 @@ export function Inspector() {
     if (!t) return null
     title = 'Trigger'
     body = <TriggerInspector trigger={t} />
-  } else {
+  } else if (selection.kind === 'run') {
+    const r = world.runs[selection.id]
+    if (!r) return null
+    title = 'Run'
+    body = <RunInspector run={r} />
+  } else if (selection.kind === 'edge') {
     const e = world.edges[selection.id]
     if (!e) return null
     title = 'Edge'
     body = <EdgeInspector edge={e} />
+  } else {
+    const exhaustive: never = selection
+    return exhaustive
   }
   return (
     <aside className="w-[340px] shrink-0 border-l border-ink-800 bg-ink-900 flex flex-col min-h-0">

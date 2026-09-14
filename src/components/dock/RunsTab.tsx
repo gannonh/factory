@@ -17,11 +17,22 @@ export function RunsTab() {
         </thead>
         <tbody>
           {runs.map((r) => (
-            <tr key={r.id} className="border-t border-ink-800 hover:bg-ink-850">
+            <tr key={r.id} onClick={() => select({ kind: 'run', id: r.id })} className="border-t border-ink-800 hover:bg-ink-850 cursor-pointer">
               <td className="px-3 py-1.5"><Badge color={COLOR[r.status]}><Dot color={COLOR[r.status]} pulse={r.status === 'running'} />{r.status}</Badge></td>
-              <td className="px-3 py-1.5 max-w-[320px] truncate">{r.title}<span className="text-ink-500 font-mono ml-2">{r.id.slice(-6)}</span></td>
-              <td className="px-3 py-1.5"><button className="text-cyan-300 hover:underline" onClick={() => world.agents[r.agentId] && select({ kind: 'agent', id: r.agentId })}>{world.agents[r.agentId]?.name ?? 'deleted'}</button></td>
-              <td className="px-3 py-1.5"><button className="font-mono text-ink-300 hover:underline" onClick={() => world.sandboxes[r.sandboxId] && select({ kind: 'sandbox', id: r.sandboxId })}>{world.sandboxes[r.sandboxId]?.name ?? 'gone'}</button></td>
+              <td className="px-3 py-1.5 max-w-[320px] truncate">
+                <button className="hover:underline" onClick={(event) => { event.stopPropagation(); select({ kind: 'run', id: r.id }) }}>{r.title}</button>
+                <span className="text-ink-500 font-mono ml-2">{r.id.slice(-6)}</span>
+              </td>
+              <td className="px-3 py-1.5">
+                {world.agents[r.agentId]
+                  ? <button className="text-cyan-300 hover:underline" onClick={(event) => { event.stopPropagation(); select({ kind: 'agent', id: r.agentId }) }}>{world.agents[r.agentId].name}</button>
+                  : <span className="text-ink-500">deleted</span>}
+              </td>
+              <td className="px-3 py-1.5">
+                {world.sandboxes[r.sandboxId]
+                  ? <button className="font-mono text-ink-300 hover:underline" onClick={(event) => { event.stopPropagation(); select({ kind: 'sandbox', id: r.sandboxId }) }}>{world.sandboxes[r.sandboxId].name}</button>
+                  : <span className="text-ink-500">gone</span>}
+              </td>
               <td className="px-3 py-1.5 w-32">
                 <div className="flex items-center gap-2">
                   <div className="flex-1 h-1.5 rounded-full bg-ink-700 overflow-hidden"><div className="h-full transition-[width] duration-300" style={{ width: `${r.progress * 100}%`, background: COLOR[r.status] }} /></div>
