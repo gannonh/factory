@@ -99,6 +99,7 @@ export class MockServer {
 
   /** Advance simulated time by `ms` and run one full tick. For manual mode. */
   advance(ms: number) {
+    if (!Number.isFinite(ms) || ms < 0) throw new RangeError('ms must be a finite, non-negative number')
     if (this.world.sim.paused) return
     this.tick(ms)
   }
@@ -555,6 +556,17 @@ export class MockServer {
       dependsSources.set(e.target as AgentId, set)
     }
     const depBlocked = new Set<TaskId>()
+    // one index per pass: dependency matching scans flow/agent buckets instead of
+    // rescanning all tasks per pending task. Statuses are read fresh from w.tasks
+    // below, so cancellations made earlier in this pass stay visible.
+    const tasksByFlowAgent = new Map<FlowId, Map<AgentId, Task[]>>()
+    for (const t of Object.values(w.tasks)) {
+      const byAgent = tasksByFlowAgent.get(t.flowId) ?? new Map<AgentId, Task[]>()
+      const bucket = byAgent.get(t.agentId) ?? []
+      bucket.push(t)
+      byAgent.set(t.agentId, bucket)
+      tasksByFlowAgent.set(t.flowId, byAgent)
+    }
     const pending = Object.values(w.tasks).filter((t) => t.status === 'queued' || t.status === 'waiting')
     for (const task of pending) {
       const sources = dependsSources.get(task.agentId)
@@ -563,10 +575,11 @@ export class MockServer {
         if (task.blockedOn?.startsWith('waiting on')) this.patchTask(task.id, { blockedOn: null })
         continue
       }
-      const matches = Object.values(w.tasks)
-        .filter((t) => t.id !== task.id && sources.has(t.agentId) && t.flowId === task.flowId)
+      const byAgent = tasksByFlowAgent.get(task.flowId)
+      const matches = (byAgent ? [...sources].flatMap((a) => byAgent.get(a) ?? []) : [])
+        .filter((t) => t.id !== task.id)
         .sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))
-      const terminal = matches.find((m) => m.status === 'failed' || m.status === 'cancelled')
+      const terminal = matches.map((m) => w.tasks[m.id]).find((m) => m.status === 'failed' || m.status === 'cancelled')
       if (terminal) {
         // re-read the record: an earlier cancellation or start this pass must not be overwritten
         const cur = w.tasks[task.id]
@@ -576,7 +589,7 @@ export class MockServer {
           `Cancelled “${task.title}” (task ${task.id}, flow ${task.flowId}): prerequisite “${terminal.title}” (task ${terminal.id}) ${terminal.status}`)
         continue
       }
-      const active = matches.filter((m) => m.status === 'queued' || m.status === 'waiting' || m.status === 'running')
+      const active = matches.map((m) => w.tasks[m.id]).filter((m) => m.status === 'queued' || m.status === 'waiting' || m.status === 'running')
       if (active.length > 0) {
         const names = active.map((m) => `“${m.title}” (task ${m.id})`).join(', ')
         this.patchTask(task.id, { status: 'waiting', blockedOn: `waiting on ${names}` })

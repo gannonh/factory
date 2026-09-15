@@ -633,3 +633,12 @@ test('AC7: removing the depends-on edge clears a stale waiting-on reason while o
   waitUntil(fixture, () => fixture.task(manual).status === 'succeeded', 'manual task finishes')
   waitUntil(fixture, () => fixture.world().tasks[coderTask.id].status === 'running', 'task starts once capacity frees')
 })
+
+test('advance rejects invalid simulated-time increments', () => {
+  const fixture = makeFixture()
+  const before = fixture.world().now
+  expect(() => fixture.api.sim.advance(Number.NaN)).toThrow(RangeError)
+  expect(() => fixture.api.sim.advance(-1)).toThrow(RangeError)
+  expect(() => fixture.api.sim.advance(Number.POSITIVE_INFINITY)).toThrow(RangeError)
+  expect(fixture.world().now).toBe(before)
+})
