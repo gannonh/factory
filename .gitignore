@@ -26,3 +26,4 @@ dist-ssr
 
 # local user-acceptance evidence artifacts
 uat-evidence/
+*.tsbuildinfo
