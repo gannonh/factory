@@ -4,6 +4,7 @@ import { AgentInspector } from './AgentInspector'
 import { EdgeInspector } from './EdgeInspector'
 import { RunInspector } from './RunInspector'
 import { SandboxInspector } from './SandboxInspector'
+import { TaskInspector } from './TaskInspector'
 import { TriggerInspector } from './TriggerInspector'
 
 export function Inspector() {
@@ -33,6 +34,11 @@ export function Inspector() {
     if (!r) return null
     title = 'Run'
     body = <RunInspector run={r} />
+  } else if (selection.kind === 'task') {
+    const t = world.tasks[selection.id]
+    if (!t) return null
+    title = 'Task'
+    body = <TaskInspector task={t} />
   } else if (selection.kind === 'edge') {
     const e = world.edges[selection.id]
     if (!e) return null

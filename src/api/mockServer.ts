@@ -279,7 +279,7 @@ export class MockServer {
 
   enqueueTask(agentId: AgentId, input: { title: string; prompt: string; priority: Priority }, origin: Task['origin'] = { kind: 'manual' }): TaskId {
     const id = uid('tk') as TaskId
-    const task: Task = { id, agentId, title: input.title, prompt: input.prompt, priority: input.priority, status: 'queued', origin, createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
+    const task: Task = { id, agentId, title: input.title, prompt: input.prompt, priority: input.priority, status: 'queued', origin, input: null, createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
     this.world.tasks = { ...this.world.tasks, [id]: task }
     this.event('task', { kind: 'agent', id: agentId }, `Queued “${task.title}” for ${this.nameOf(agentId)}`)
     this.publish()
@@ -422,14 +422,14 @@ export class MockServer {
     const targets = Object.values(this.world.edges).filter((e) => e.kind === 'triggers' && e.source === id)
     this.event('trigger', { kind: 'trigger', id }, `${tr.name} fired (${tr.kind})`)
     for (const e of targets) {
-      this.enqueueTaskSilently(e.target as AgentId, { title: tr.template, prompt: `${tr.template}\n\nTriggered by ${tr.name}.`, priority: tr.kind === 'webhook' ? 'high' : 'normal' }, { kind: 'trigger', id })
+      this.enqueueTaskSilently(e.target as AgentId, { title: tr.template, prompt: `${tr.template}\n\nTriggered by ${tr.name}.`, priority: tr.kind === 'webhook' ? 'high' : 'normal', origin: { kind: 'trigger', id }, input: null })
     }
   }
 
-  private enqueueTaskSilently(agentId: AgentId, input: { title: string; prompt: string; priority: Priority }, origin: Task['origin']) {
+  private enqueueTaskSilently(agentId: AgentId, fields: Pick<Task, 'title' | 'prompt' | 'priority' | 'origin' | 'input'>) {
     if (!this.world.agents[agentId]) return
     const id = uid('tk') as TaskId
-    const task: Task = { id, agentId, ...input, status: 'queued', origin, createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
+    const task: Task = { id, agentId, ...fields, status: 'queued', createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
     this.world.tasks = { ...this.world.tasks, [id]: task }
     this.event('task', { kind: 'agent', id: agentId }, `Queued “${task.title}” for ${this.nameOf(agentId)}`)
   }
@@ -462,26 +462,31 @@ export class MockServer {
     const w = this.world
     const agent = w.agents[run.agentId]
     const task = w.tasks[run.taskId]
+    const output = completion.status === 'succeeded' ? createRunOutput(run, completion.agent) : null
     this.patchRun(run.id, {
       status: completion.status,
       endedAt: w.now,
       progress: completion.status === 'succeeded' ? 1 : run.progress,
-      output: completion.status === 'succeeded' ? createRunOutput(run, completion.agent) : null,
+      output,
       error: completion.status === 'failed' ? completion.reason : null,
     })
     const sb = w.sandboxes[run.sandboxId]
     if (sb && sb.lease?.runId === run.id) this.patchSandbox(sb.id, { lease: null })
-    if (completion.status === 'succeeded') {
+    if (output) {
       if (agent) this.patchAgent(agent.id, { completed: agent.completed + 1 })
       if (task) this.patchTask(task.id, { status: 'succeeded' })
       this.log('info', `run finished: ${run.title}`, { runId: run.id, agentId: run.agentId })
       this.event('run', { kind: 'run', id: run.id }, `${this.nameOf(run.agentId)} finished “${run.title}”`)
+      const prompt = [output.summary, ...output.artifacts.map((a) => `${a.kind}: ${a.label}${a.url ? ` (${a.url})` : ''}`)].join('\n')
       for (const e of Object.values(w.edges)) {
         if (e.kind === 'handoff' && e.source === run.agentId) {
-          this.enqueueTaskSilently(e.target as AgentId, { title: `${run.title} → ${this.nameOf(e.target)}`, prompt: `Continue from ${this.nameOf(run.agentId)}: ${run.title}`, priority: task?.priority ?? 'normal' }, { kind: 'handoff', from: run.agentId })
+          this.enqueueTaskSilently(e.target as AgentId, {
+            title: `${run.title} → ${this.nameOf(e.target)}`, prompt, priority: task?.priority ?? 'normal',
+            origin: { kind: 'handoff', from: run.agentId, runId: run.id }, input: { ...output, runId: run.id },
+          })
         }
       }
-    } else if (task && agent) {
+    } else if (completion.status === 'failed' && task && agent) {
       const canRetry = (completion.retryable ?? true) && task.attempts < agent.retry.maxAttempts
       if (canRetry) {
         const delay = agent.retry.backoff === 'exponential' ? agent.retry.backoffMs * 2 ** (task.attempts - 1) : agent.retry.backoffMs
@@ -551,6 +556,11 @@ export class MockServer {
     this.patchSandbox(sandbox.id, { lease: { agentId: agent.id, runId: id, since: this.world.now } })
     this.patchAgent(agent.id, { status: 'working' })
     this.log('info', `run started on ${sandbox.name} (attempt ${run.attempt}): ${task.title}`, { runId: id, agentId: agent.id })
+    if (task.input) {
+      const n = task.input.artifacts.length
+      const upstream = task.origin.kind === 'handoff' ? this.nameOf(task.origin.from) : 'upstream'
+      this.log('info', `input: ${n} artifact${n === 1 ? '' : 's'} from ${upstream} run ${task.input.runId.slice(-6)}`, { runId: id, agentId: agent.id })
+    }
     this.event('run', { kind: 'run', id }, `${agent.name} started “${task.title}” on ${sandbox.name}`)
   }
 

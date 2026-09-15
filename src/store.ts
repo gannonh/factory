@@ -13,6 +13,7 @@ function selectionExists(world: World, selection: Subject): boolean {
     case 'sandbox': return !!world.sandboxes[selection.id]
     case 'trigger': return !!world.triggers[selection.id]
     case 'run': return !!world.runs[selection.id]
+    case 'task': return !!world.tasks[selection.id]
     case 'edge': return !!world.edges[selection.id]
     default: {
       const exhaustive: never = selection
