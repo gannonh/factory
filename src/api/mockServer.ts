@@ -40,6 +40,7 @@ const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 }
 let seq = 0
 const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}${(seq++).toString(36)}`
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
+const isCapacity = (v: number) => Number.isInteger(v) && v >= 1
 
 const RUN_LOG_LINES: Array<[LogLevel, string]> = [
   ['debug', 'tool call read_file src/index.ts'],
@@ -334,8 +335,9 @@ export class MockServer {
 
   createSandbox(input: { name: string; kind: SandboxKind; host: string; image: string; capacity?: number }, position?: Position): SandboxId {
     const id = uid('sb') as SandboxId
+    const capacity = input.capacity !== undefined && isCapacity(input.capacity) ? input.capacity : 1
     const sb: Sandbox = {
-      id, ...input, capacity: input.capacity ?? 1, state: 'provisioning', stateSince: this.world.now, progress: 0,
+      id, ...input, capacity, state: 'provisioning', stateSince: this.world.now, progress: 0,
       metrics: { cpu: 0, mem: 0, disk: 4 }, history: [], leases: [], restartPending: false, position: position ?? this.nextFreePosition(),
     }
     this.world.sandboxes = { ...this.world.sandboxes, [id]: sb }
@@ -346,7 +348,7 @@ export class MockServer {
   }
 
   updateSandbox(id: SandboxId, patch: { capacity: number }) {
-    if (!Number.isInteger(patch.capacity) || patch.capacity < 1) return
+    if (!isCapacity(patch.capacity)) return
     if (!this.world.sandboxes[id]) return
     this.patchSandbox(id, { capacity: patch.capacity })
     this.publish()

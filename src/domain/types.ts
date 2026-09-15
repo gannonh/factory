@@ -91,9 +91,9 @@ export type Sandbox = {
   progress: number
   metrics: Metrics
   history: Metrics[]
-  /** runs currently hosted; never longer than `capacity` */
+  /** runs currently hosted; may exceed `capacity` after a capacity decrease */
   leases: Lease[]
-  /** concurrent runs this sandbox can host */
+  /** admission limit for new leases; changing it never evicts running runs */
   capacity: number
   /** set when a restart was requested; stopping -> stopped -> provisioning */
   restartPending: boolean

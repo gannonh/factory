@@ -83,6 +83,14 @@ test('a sandbox stores capacity from create and update, rejecting invalid values
   expect(fixture.world().sandboxes[sb('sb-missing')]).toBeUndefined()
 })
 
+test('a create capacity below 1 or fractional falls back to 1', () => {
+  const fixture = makeFixture()
+  const zero = fixture.api.sandboxes.create({ name: 'zero-box', kind: 'docker', host: 'docker.internal', image: 'img', capacity: 0 })
+  expect(fixture.world().sandboxes[zero].capacity).toBe(1)
+  const fractional = fixture.api.sandboxes.create({ name: 'half-box', kind: 'docker', host: 'docker.internal', image: 'img', capacity: 1.5 })
+  expect(fixture.world().sandboxes[fractional].capacity).toBe(1)
+})
+
 test('seeded sandboxes carry their capacities and a canvas sandbox starts at 1', () => {
   const fixture = makeFixture()
   const w = fixture.world()
