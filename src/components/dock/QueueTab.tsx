@@ -23,9 +23,18 @@ export function QueueTab() {
           {tasks.map((t) => {
             const agent = world.agents[t.agentId]
             return (
-              <tr key={t.id} onClick={() => select({ kind: 'task', id: t.id })} className="border-t border-ink-800 hover:bg-ink-850 cursor-pointer">
+              <tr key={t.id} className="border-t border-ink-800 hover:bg-ink-850">
                 <td className="px-3 py-1.5"><Badge color={TASK_STATUS_COLOR[t.status]}><Dot color={TASK_STATUS_COLOR[t.status]} pulse={t.status === 'running'} />{t.status}</Badge></td>
-                <td className="px-3 py-1.5 max-w-[360px] truncate" title={t.prompt}>{t.title}{t.attempts > 1 && <span className="text-ink-500"> · attempt {t.attempts}</span>}</td>
+                <td className="px-3 py-1.5 max-w-[360px] truncate">
+                  <button
+                    type="button"
+                    onClick={() => select({ kind: 'task', id: t.id })}
+                    className="block w-full truncate text-left cursor-pointer rounded-sm outline-none focus-visible:bg-ink-800"
+                    title={t.prompt}
+                  >
+                    {t.title}{t.attempts > 1 && <span className="text-ink-500"> · attempt {t.attempts}</span>}
+                  </button>
+                </td>
                 <td className="px-3 py-1.5"><button className="text-cyan-300 hover:underline" onClick={(event) => { event.stopPropagation(); if (agent) select({ kind: 'agent', id: agent.id }) }}>{agent?.name ?? '?'}</button></td>
                 <td className="px-3 py-1.5" style={{ color: t.priority === 'high' ? '#f87171' : t.priority === 'low' ? '#64748b' : undefined }}>{t.priority}</td>
                 <td className="px-3 py-1.5 text-ink-400">{taskOriginLabel(world, t.origin)}</td>
