@@ -1,6 +1,6 @@
 # Demonstrating flow dependencies in the browser (KAT-3366)
 
-A task waits for every existing prerequisite task within its own flow; unrelated flows progress independently. Each manual enqueue and each trigger firing mints a flow id, shown as a badge in Queue and Runs (hover or keyboard-focus for the full id) and as selectable text in the task inspector. The checked-in API suite `npm run test:flows` covers the scheduling rules deterministically; this page records the browser walkthrough.
+A task waits for every existing prerequisite task within its own flow; unrelated flows progress independently. Each manual enqueue and each trigger firing mints a flow id, shown as a badge in Queue and Runs (hover or keyboard-focus for the full id) and as selectable text in the task inspector. The checked-in API suite `npm test` covers the scheduling rules deterministically; this page records the browser walkthrough.
 
 ## Base fixture
 
@@ -32,4 +32,4 @@ A task waits for every existing prerequisite task within its own flow; unrelated
 ## Evidence
 
 - Browser screenshots and recording from the Build acceptance run (2026-09-15, kept locally under the runner's `uat-evidence/` directory and summarized in that run's `evidence.md`; not committed). Checkpoints captured: both flows paused in Queue (`01`), Runs overlap of Coder/F1 and Planner/F2 (`02`), waiting-on reason naming prerequisite tasks (`03`), full flow id in the task inspector (`04`), the cancellation event in Events (`05`), and the cancelled task's terminal inspector (`06`). The recording is `recordings/demo-flow-dependencies.mp4`. The row-by-row content of each checkpoint is quoted in this document above, so the demonstration is reproducible from the fixture instructions alone.
-- Deterministic API scenarios for retry, multiple matches, propagation, and admission constraints: `tests/flows.test.ts` via `npm run test:flows`.
+- Deterministic API scenarios for retry, multiple matches, propagation, and admission constraints: `tests/flows.test.ts` via `npm test`.
