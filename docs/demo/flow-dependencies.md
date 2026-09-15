@@ -31,5 +31,5 @@ A task waits for every existing prerequisite task within its own flow; unrelated
 
 ## Evidence
 
-- Browser screenshots and recording: `uat-evidence/` (added during the Build acceptance run).
+- Browser screenshots and recording from the Build acceptance run (2026-09-15): `uat-evidence/web-20260915-183929/` — see its `evidence.md`. Checkpoints captured: both flows paused in Queue (`01`), Runs overlap of Coder/F1 and Planner/F2 (`02`), waiting-on reason naming prerequisite tasks (`03`), full flow id in the task inspector (`04`), the cancellation event in Events (`05`), and the cancelled task's terminal inspector (`06`). The recording is `recordings/demo-flow-dependencies.mp4`.
 - Deterministic API scenarios for retry, multiple matches, propagation, and admission constraints: `tests/flows.test.ts` via `npm run test:flows`.

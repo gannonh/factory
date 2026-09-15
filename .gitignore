@@ -23,3 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 *.code-workspace
+
+# local user-acceptance evidence artifacts
+uat-evidence/
