@@ -221,7 +221,7 @@ After all tasks pass their per-task gates, prove the work on the branch before t
 5. If none found, drive the app with the bundled user-acceptance playbooks only. Do not generate a verification skill during Build.
 6. Exercise the issue's `## Demonstration` through the public interface.
 7. Dispatch or perform a final whole-branch review against the issue body.
-8. For this repository, run `.cursor/skills/verify-plan-build-verify/` (launch, doctor, four drives, cleanup) against isolated installed candidates **before** opening the implementing PR. Keep evidence under `uat-evidence/`.
+8. For this repository, run `.opencode/skills/verify-plan-build-verify/` (launch, doctor, four drives, cleanup) against isolated installed candidates **before** opening the implementing PR. Keep evidence under `uat-evidence/`.
 
 ## Open a draft pull request
 

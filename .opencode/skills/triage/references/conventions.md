@@ -29,7 +29,7 @@ Ship is reserved for project-defined releases after Verify. This plugin has no r
 **Cursor** (local plugin import):
 
 ```bash
-cp -R plugins/cursor ~/.cursor/plugins/local/plan-build-verify
+cp -R plugins/cursor ~/.opencode/plugins/local/plan-build-verify
 ```
 
 Enable Allow Local Plugin Imports, then enable `plan-build-verify`.
@@ -52,13 +52,13 @@ If a Codex sparse checkout is used, it must be `--sparse .agents/plugins --spars
 
 ### AGENTS.md snippet
 
-````markdown
+```markdown
 ## Skills
 
 Product OS is the `plan-build-verify` plugin. Specs are Linear issues. GitHub Issues are inbound reports only.
 
 Install the plugin for the host you use (Cursor local import, Claude Code marketplace, or Codex marketplace).
-````
+```
 
 ## Preflight
 
@@ -174,17 +174,17 @@ Automatic closure of a parent does not prove its acceptance criteria passed. Pre
 
 Linear state is the sole approval and phase signal.
 
-| State | Meaning | Who moves it |
-| ----- | ------- | ------------ |
-| Backlog | Research and Plan. Specs are written here. | Plan creates here. Humans may return work here. |
-| Todo | Approved and queued. | Humans only: Backlog to Todo. |
-| In Progress | Build has an explicit start. | Agents start from Todo. Draft PR open may also land here via integration. |
-| Agent Review | PR is ready for review landing. | Integration on PR open, or Build after readiness if still In Progress. |
-| Human Review | Merge-ready. Coding, CI-fix, and review agents pause. | Review agents after merge-ready gates. |
-| Merging | Human granted merge permission. | Humans only. |
-| Done | Relevant PR merged. | Integration on merge. |
-| Canceled | Terminal. New work needs a new issue. | Humans or stale automation. |
-| Duplicate | Terminal. New work needs a new issue. | Humans. |
+| State        | Meaning                                               | Who moves it                                                              |
+| ------------ | ----------------------------------------------------- | ------------------------------------------------------------------------- |
+| Backlog      | Research and Plan. Specs are written here.            | Plan creates here. Humans may return work here.                           |
+| Todo         | Approved and queued.                                  | Humans only: Backlog to Todo.                                             |
+| In Progress  | Build has an explicit start.                          | Agents start from Todo. Draft PR open may also land here via integration. |
+| Agent Review | PR is ready for review landing.                       | Integration on PR open, or Build after readiness if still In Progress.    |
+| Human Review | Merge-ready. Coding, CI-fix, and review agents pause. | Review agents after merge-ready gates.                                    |
+| Merging      | Human granted merge permission.                       | Humans only.                                                              |
+| Done         | Relevant PR merged.                                   | Integration on merge.                                                     |
+| Canceled     | Terminal. New work needs a new issue.                 | Humans or stale automation.                                               |
+| Duplicate    | Terminal. New work needs a new issue.                 | Humans.                                                                   |
 
 Build requires Todo plus an explicit start, then moves Todo to In Progress.
 

@@ -33,7 +33,7 @@ Pre-merge acceptance:
 1. Look for a project-local `verify-*` skill first and follow it when present.
 2. Read `references/user-acceptance/workflow.md` completely and follow it for the evidence contract.
 3. Use scripts under `scripts/user-acceptance/`.
-4. For this repository, run `.cursor/skills/verify-plan-build-verify/` against isolated installed candidates before opening the implementing PR.
+4. For this repository, run `.opencode/skills/verify-plan-build-verify/` against isolated installed candidates before opening the implementing PR.
 
 Hard gates:
 

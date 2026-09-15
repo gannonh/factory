@@ -72,7 +72,7 @@ If the requested target is outside this list, ask whether to proceed with a best
 
 ## Tool selection
 
-**Prefer a project-local `verify-*` skill when one exists.** Search `.cursor/skills/verify-*/SKILL.md` and any installed skills path matching `verify-*` (slash form `/verify-<app>`). If found, read it completely; its Launch and Drive instructions win over the generic playbook defaults below for starting and exercising the app. Still apply this workflow's hard gates, evidence workspace, matrix/report contract, and scripts. If none exists, use the preferred-tools table and playbooks as the fallback. Do not generate a verification skill during this workflow.
+**Prefer a project-local `verify-*` skill when one exists.** Search `.opencode/skills/verify-*/SKILL.md` and any installed skills path matching `verify-*` (slash form `/verify-<app>`). If found, read it completely; its Launch and Drive instructions win over the generic playbook defaults below for starting and exercising the app. Still apply this workflow's hard gates, evidence workspace, matrix/report contract, and scripts. If none exists, use the preferred-tools table and playbooks as the fallback. Do not generate a verification skill during this workflow.
 
 Load and use the best available skill or CLI for the target. Install missing tooling when it is needed for required E2E or screenshot evidence and installation is safe in the environment. Do not install or spend unbounded time debugging tooling solely for optional video; use the skip-and-flag contract instead.
 
