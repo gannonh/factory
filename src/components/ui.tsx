@@ -19,6 +19,21 @@ export function Badge({ color, children, className }: { color: string; children:
   )
 }
 
+/** Short flow badge: the last four characters of the flow id, with the full id on hover and revealed on keyboard focus. */
+export function FlowBadge({ flowId }: { flowId: string }) {
+  return (
+    <span
+      tabIndex={0}
+      title={flowId}
+      aria-label={`flow ${flowId}`}
+      className="group inline-block cursor-default rounded-md border border-violet-400/40 bg-violet-500/10 px-1.5 py-0.5 font-mono text-[10px] leading-4 text-violet-200 outline-none focus-visible:border-violet-300"
+    >
+      <span className="group-focus-visible:hidden">{flowId.slice(-4)}</span>
+      <span className="hidden group-focus-visible:inline">{flowId}</span>
+    </span>
+  )
+}
+
 type Variant = 'default' | 'primary' | 'danger' | 'ghost'
 const VARIANT: Record<Variant, string> = {
   default: 'bg-ink-800 hover:bg-ink-700 border-ink-600 text-ink-100',

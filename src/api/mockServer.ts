@@ -10,6 +10,7 @@ import {
   type EdgeId,
   type EdgeKind,
   type FactoryEvent,
+  type FlowId,
   type LogLevel,
   type NodeId,
   type NodeKind,
@@ -38,9 +39,7 @@ const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 }
 
 let seq = 0
 const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}${(seq++).toString(36)}`
-const rand = (lo: number, hi: number) => lo + Math.random() * (hi - lo)
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
-const pick = <T>(xs: T[]) => xs[Math.floor(Math.random() * xs.length)]
 
 const RUN_LOG_LINES: Array<[LogLevel, string]> = [
   ['debug', 'tool call read_file src/index.ts'],
@@ -86,10 +85,31 @@ export class MockServer {
   private listeners = new Set<Listener>()
   private timer: ReturnType<typeof setInterval> | null = null
   private saveTimer: ReturnType<typeof setTimeout> | null = null
+  private rng: () => number
 
-  constructor() {
+  /**
+   * `manual` stops the automatic interval; tests then advance simulated time with
+   * `advance(ms)`. `rng` makes run outcomes, durations, and metric noise repeatable.
+   */
+  constructor(options: { manual?: boolean; rng?: () => number } = {}) {
     this.world = load() ?? seedWorld(Date.now())
-    this.start()
+    this.rng = options.rng ?? Math.random
+    if (!options.manual) this.start()
+  }
+
+  /** Advance simulated time by `ms` and run one full tick. For manual mode. */
+  advance(ms: number) {
+    if (!Number.isFinite(ms) || ms < 0) throw new RangeError('ms must be a finite, non-negative number')
+    if (this.world.sim.paused) return
+    this.tick(ms)
+  }
+
+  private rand(lo: number, hi: number) {
+    return lo + this.rng() * (hi - lo)
+  }
+
+  private pick<T>(xs: T[]) {
+    return xs[Math.floor(this.rng() * xs.length)]
   }
 
   subscribe(fn: Listener): () => void {
@@ -104,7 +124,9 @@ export class MockServer {
 
   private start() {
     if (this.timer) return
-    this.timer = setInterval(() => this.tick(), TICK_MS)
+    this.timer = setInterval(() => this.tick(TICK_MS * this.world.sim.speed), TICK_MS)
+    // unref where available so a test process is not kept alive by the singleton
+    ;(this.timer as unknown as { unref?: () => void }).unref?.()
   }
 
   private publish() {
@@ -278,8 +300,9 @@ export class MockServer {
   }
 
   enqueueTask(agentId: AgentId, input: { title: string; prompt: string; priority: Priority }, origin: Task['origin'] = { kind: 'manual' }): TaskId {
+    const flowId = uid('fl') as FlowId
     const id = uid('tk') as TaskId
-    const task: Task = { id, agentId, title: input.title, prompt: input.prompt, priority: input.priority, status: 'queued', origin, input: null, createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
+    const task: Task = { id, flowId, agentId, title: input.title, prompt: input.prompt, priority: input.priority, status: 'queued', origin, input: null, createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
     this.world.tasks = { ...this.world.tasks, [id]: task }
     this.event('task', { kind: 'agent', id: agentId }, `Queued “${task.title}” for ${this.nameOf(agentId)}`)
     this.publish()
@@ -338,17 +361,16 @@ export class MockServer {
   }
 
   reset() {
-    localStorage.removeItem(STORAGE_KEY)
+    if (typeof window !== 'undefined') localStorage.removeItem(STORAGE_KEY)
     this.world = seedWorld(Date.now())
     this.publish()
   }
 
   // ---- simulation ---------------------------------------------------------
 
-  private tick() {
+  private tick(dt: number) {
     const w = this.world
     if (w.sim.paused) return
-    const dt = TICK_MS * w.sim.speed
     w.now += dt
     this.tickSandboxes()
     this.tickTriggers()
@@ -383,9 +405,9 @@ export class MockServer {
       const busy = sb.lease !== null
       const off = sb.state === 'stopped' || sb.state === 'destroying'
       const target = off ? { cpu: 0, mem: 0, disk: sb.metrics.disk } : busy
-        ? { cpu: rand(55, 95), mem: rand(45, 80), disk: sb.metrics.disk + rand(0, 0.15) }
-        : sb.state === 'running' ? { cpu: rand(2, 12), mem: rand(18, 30), disk: sb.metrics.disk }
-        : { cpu: rand(20, 60), mem: rand(20, 50), disk: sb.metrics.disk + rand(0, 0.4) }
+        ? { cpu: this.rand(55, 95), mem: this.rand(45, 80), disk: sb.metrics.disk + this.rand(0, 0.15) }
+        : sb.state === 'running' ? { cpu: this.rand(2, 12), mem: this.rand(18, 30), disk: sb.metrics.disk }
+        : { cpu: this.rand(20, 60), mem: this.rand(20, 50), disk: sb.metrics.disk + this.rand(0, 0.4) }
       const k = 0.35
       const metrics = {
         cpu: clamp(sb.metrics.cpu + (target.cpu - sb.metrics.cpu) * k, 0, 100),
@@ -421,15 +443,16 @@ export class MockServer {
     this.patchTrigger(id, { lastFiredAt: this.world.now, fired: tr.fired + 1 })
     const targets = Object.values(this.world.edges).filter((e) => e.kind === 'triggers' && e.source === id)
     this.event('trigger', { kind: 'trigger', id }, `${tr.name} fired (${tr.kind})`)
+    const flowId = uid('fl') as FlowId
     for (const e of targets) {
-      this.enqueueTaskSilently(e.target as AgentId, { title: tr.template, prompt: `${tr.template}\n\nTriggered by ${tr.name}.`, priority: tr.kind === 'webhook' ? 'high' : 'normal', origin: { kind: 'trigger', id }, input: null })
+      this.enqueueTaskSilently(e.target as AgentId, { title: tr.template, prompt: `${tr.template}\n\nTriggered by ${tr.name}.`, priority: tr.kind === 'webhook' ? 'high' : 'normal', origin: { kind: 'trigger', id }, input: null }, flowId)
     }
   }
 
-  private enqueueTaskSilently(agentId: AgentId, fields: Pick<Task, 'title' | 'prompt' | 'priority' | 'origin' | 'input'>) {
+  private enqueueTaskSilently(agentId: AgentId, fields: Pick<Task, 'title' | 'prompt' | 'priority' | 'origin' | 'input'>, flowId: FlowId) {
     if (!this.world.agents[agentId]) return
     const id = uid('tk') as TaskId
-    const task: Task = { id, agentId, ...fields, status: 'queued', createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
+    const task: Task = { id, flowId, agentId, ...fields, status: 'queued', createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
     this.world.tasks = { ...this.world.tasks, [id]: task }
     this.event('task', { kind: 'agent', id: agentId }, `Queued “${task.title}” for ${this.nameOf(agentId)}`)
   }
@@ -440,9 +463,9 @@ export class MockServer {
       const agent = this.world.agents[run.agentId]
       if (!agent) continue
       const progress = clamp(run.progress + dt / run.durationMs, 0, 1)
-      this.patchRun(run.id, { progress, tokens: run.tokens + Math.round(rand(80, 600) * (dt / 1000)) })
-      if (Math.random() < 0.28) {
-        const [level, msg] = pick(RUN_LOG_LINES)
+      this.patchRun(run.id, { progress, tokens: run.tokens + Math.round(this.rand(80, 600) * (dt / 1000)) })
+      if (this.rng() < 0.28) {
+        const [level, msg] = this.pick(RUN_LOG_LINES)
         if (level !== 'error') this.log(level, msg, { runId: run.id, agentId: run.agentId })
       }
       if (this.world.now - run.startedAt > agent.timeoutMs) {
@@ -451,8 +474,8 @@ export class MockServer {
         continue
       }
       if (progress >= 1) {
-        const ok = Math.random() < 0.85
-        if (!ok) this.log('error', pick(RUN_LOG_LINES.filter(([l]) => l === 'error'))[1], { runId: run.id, agentId: run.agentId })
+        const ok = this.rng() < 0.85
+        if (!ok) this.log('error', this.pick(RUN_LOG_LINES.filter(([l]) => l === 'error'))[1], { runId: run.id, agentId: run.agentId })
         this.finishRun(run, ok ? { status: 'succeeded', agent } : { status: 'failed', reason: 'task error' })
       }
     }
@@ -483,7 +506,7 @@ export class MockServer {
           this.enqueueTaskSilently(e.target as AgentId, {
             title: `${run.title} → ${this.nameOf(e.target)}`, prompt, priority: task?.priority ?? 'normal',
             origin: { kind: 'handoff', from: run.agentId, runId: run.id }, input: { ...output, runId: run.id },
-          })
+          }, task?.flowId ?? (uid('fl') as FlowId))
         }
       }
     } else if (completion.status === 'failed' && task && agent) {
@@ -515,9 +538,68 @@ export class MockServer {
     if (running === 0 && ag.status === 'working') this.patchAgent(agentId, { status: 'idle' })
   }
 
+  /**
+   * Phase 1 resolves dependency outcomes for every pending task from task
+   * records (never agent or run status), so terminal prerequisite failures
+   * cannot hide behind paused, full, or retrying agents. Phase 2 runs the
+   * existing admission checks (priority, concurrency, pause, retry deadline,
+   * sandbox lease) for tasks whose dependencies allow them to proceed.
+   */
   private schedule() {
     const w = this.world
     const edges = Object.values(w.edges)
+    const dependsSources = new Map<AgentId, Set<AgentId>>()
+    for (const e of edges) {
+      if (e.kind !== 'depends-on') continue
+      const set = dependsSources.get(e.target as AgentId) ?? new Set<AgentId>()
+      set.add(e.source as AgentId)
+      dependsSources.set(e.target as AgentId, set)
+    }
+    const depBlocked = new Set<TaskId>()
+    // one index per pass: dependency matching scans flow/agent buckets instead of
+    // rescanning all tasks per pending task. Statuses are read fresh from w.tasks
+    // below, so cancellations made earlier in this pass stay visible.
+    const tasksByFlowAgent = new Map<FlowId, Map<AgentId, Task[]>>()
+    for (const t of Object.values(w.tasks)) {
+      const byAgent = tasksByFlowAgent.get(t.flowId) ?? new Map<AgentId, Task[]>()
+      const bucket = byAgent.get(t.agentId) ?? []
+      bucket.push(t)
+      byAgent.set(t.agentId, bucket)
+      tasksByFlowAgent.set(t.flowId, byAgent)
+    }
+    const pending = Object.values(w.tasks).filter((t) => t.status === 'queued' || t.status === 'waiting')
+    for (const task of pending) {
+      const sources = dependsSources.get(task.agentId)
+      if (!sources) {
+        // the agent lost its depends-on edges: a stale waiting-on reason must not survive the pass
+        if (task.blockedOn?.startsWith('waiting on')) this.patchTask(task.id, { blockedOn: null })
+        continue
+      }
+      const byAgent = tasksByFlowAgent.get(task.flowId)
+      const matches = (byAgent ? [...sources].flatMap((a) => byAgent.get(a) ?? []) : [])
+        .filter((t) => t.id !== task.id)
+        .sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))
+      const terminal = matches.map((m) => w.tasks[m.id]).find((m) => m.status === 'failed' || m.status === 'cancelled')
+      if (terminal) {
+        // re-read the record: an earlier cancellation or start this pass must not be overwritten
+        const cur = w.tasks[task.id]
+        if (!cur || (cur.status !== 'queued' && cur.status !== 'waiting')) continue
+        this.patchTask(task.id, { status: 'cancelled', retryAt: null, blockedOn: null })
+        this.event('task', { kind: 'agent', id: task.agentId },
+          `Cancelled “${task.title}” (task ${task.id}, flow ${task.flowId}): prerequisite “${terminal.title}” (task ${terminal.id}) ${terminal.status}`)
+        continue
+      }
+      const active = matches.map((m) => w.tasks[m.id]).filter((m) => m.status === 'queued' || m.status === 'waiting' || m.status === 'running')
+      if (active.length > 0) {
+        const names = active.map((m) => `“${m.title}” (task ${m.id})`).join(', ')
+        this.patchTask(task.id, { status: 'waiting', blockedOn: `waiting on ${names}` })
+        depBlocked.add(task.id)
+      } else if (task.blockedOn?.startsWith('waiting on')) {
+        // dependencies cleared: drop the stale reason so admission reasons show through
+        this.patchTask(task.id, { blockedOn: null })
+      }
+      // all matches succeeded, or no matches exist: eligible for admission
+    }
     for (const agent of Object.values(w.agents)) {
       if (agent.status === 'paused') continue
       let free = agent.concurrency - this.runningCount(agent.id)
@@ -526,13 +608,9 @@ export class MockServer {
         .sort((x, y) => PRIORITY_RANK[x.priority] - PRIORITY_RANK[y.priority] || x.createdAt - y.createdAt)
       for (const task of pending) {
         if (free <= 0) break
+        if (depBlocked.has(task.id)) continue
         if (task.retryAt !== null && task.retryAt > w.now) continue
-        const upstream = edges.filter((e) => e.kind === 'depends-on' && e.target === agent.id).map((e) => w.agents[e.source as AgentId]).filter((u): u is Agent => !!u && u.status === 'working')
-        if (upstream.length > 0) {
-          this.patchTask(task.id, { status: 'waiting', blockedOn: `waiting on ${upstream.map((u) => u.name).join(', ')}` })
-          continue
-        }
-        const sandbox = edges.filter((e) => e.kind === 'runs-in' && e.source === agent.id).map((e) => w.sandboxes[e.target as SandboxId]).find((sb) => sb && sb.state === 'running' && sb.lease === null)
+        const sandbox = edges.filter((e) => e.kind === 'runs-in' && e.source === agent.id).map((e) => w.sandboxes[e.target as SandboxId]).find((x) => x && x.state === 'running' && x.lease === null)
         if (!sandbox) {
           const any = edges.some((e) => e.kind === 'runs-in' && e.source === agent.id)
           this.patchTask(task.id, { status: 'waiting', blockedOn: any ? 'no free sandbox' : 'no sandbox attached' })
@@ -548,7 +626,7 @@ export class MockServer {
     const id = uid('run') as RunId
     const run: Run = {
       id, taskId: task.id, agentId: agent.id, sandboxId: sandbox.id, title: task.title, attempt: task.attempts + 1,
-      status: 'running', progress: 0, durationMs: rand(7000, 18000), startedAt: this.world.now, endedAt: null, tokens: 0,
+      status: 'running', progress: 0, durationMs: this.rand(7000, 18000), startedAt: this.world.now, endedAt: null, tokens: 0,
       output: null, error: null,
     }
     this.world.runs = { ...this.world.runs, [id]: run }
@@ -578,6 +656,7 @@ export class MockServer {
 type Persisted = Pick<World, 'agents' | 'sandboxes' | 'triggers' | 'edges' | 'sim'>
 
 function save(w: World) {
+  if (typeof window === 'undefined') return
   const data: Persisted = { agents: w.agents, sandboxes: w.sandboxes, triggers: w.triggers, edges: w.edges, sim: w.sim }
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
@@ -587,6 +666,7 @@ function save(w: World) {
 }
 
 function load(): World | null {
+  if (typeof window === 'undefined') return null
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return null

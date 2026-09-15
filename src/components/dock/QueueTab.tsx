@@ -2,7 +2,7 @@ import { X } from 'lucide-react'
 import { api } from '../../api/client'
 import { TASK_STATUS_COLOR, taskOriginLabel, type Task } from '../../domain/types'
 import { useStore } from '../../store'
-import { Badge, Dot, fmtAgo } from '../ui'
+import { Badge, Dot, FlowBadge, fmtAgo } from '../ui'
 
 const RANK: Record<Task['priority'], number> = { high: 0, normal: 1, low: 2 }
 
@@ -17,7 +17,7 @@ export function QueueTab() {
     <div className="h-full overflow-y-auto">
       <table className="w-full text-xs">
         <thead className="sticky top-0 bg-ink-900 text-[10px] uppercase tracking-wider text-ink-400">
-          <tr>{['Status', 'Task', 'Agent', 'Priority', 'Origin', 'Waiting on', 'Age', ''].map((h) => <th key={h} className="text-left font-medium px-3 py-1.5">{h}</th>)}</tr>
+          <tr>{['Status', 'Task', 'Agent', 'Flow', 'Priority', 'Origin', 'Waiting on', 'Age', ''].map((h) => <th key={h} className="text-left font-medium px-3 py-1.5">{h}</th>)}</tr>
         </thead>
         <tbody>
           {tasks.map((t) => {
@@ -36,6 +36,7 @@ export function QueueTab() {
                   </button>
                 </td>
                 <td className="px-3 py-1.5"><button className="text-cyan-300 hover:underline" onClick={(event) => { event.stopPropagation(); if (agent) select({ kind: 'agent', id: agent.id }) }}>{agent?.name ?? '?'}</button></td>
+                <td className="px-3 py-1.5"><FlowBadge flowId={t.flowId} /></td>
                 <td className="px-3 py-1.5" style={{ color: t.priority === 'high' ? '#f87171' : t.priority === 'low' ? '#64748b' : undefined }}>{t.priority}</td>
                 <td className="px-3 py-1.5 text-ink-400">{taskOriginLabel(world, t.origin)}</td>
                 <td className="px-3 py-1.5 text-amber-300/90">{t.blockedOn ?? ''}</td>

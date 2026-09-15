@@ -41,6 +41,6 @@ export function EdgeInspector({ edge }: { edge: Edge }) {
 const DESCRIPTION: Record<Edge['kind'], string> = {
   triggers: 'enqueues a task',
   handoff: 'result feeds next agent',
-  'depends-on': 'waits while upstream works',
+  'depends-on': 'target waits for source tasks in the same flow',
   'runs-in': 'lease a sandbox',
 }

@@ -29,7 +29,7 @@ Vite 8, React 19, TypeScript 6, @xyflow/react 12, zustand, Tailwind 4, @dagrejs/
 - Agent→agent connections take their kind from a toolbar toggle (handoff or depends-on); the edge inspector can change it later. Changing kind is rejected if it would duplicate an existing edge.
 - While a connection drag is in progress every node renders a full-size invisible drop handle, so dropping anywhere on a node connects. Edges pin sourceHandle "out" and targetHandle "in".
 - Selection: React Flow's local selected flags are the source; one guarded effect in Canvas.tsx mirrors them into the store, and a second effect pushes external selections (event clicks) back in. A two-way sync through onSelectionChange caused an infinite render loop; do not reintroduce it.
-- Scheduler: per-agent concurrency, depends-on blocks while the upstream agent is working, one lease per sandbox, tasks wait with a blockedOn reason. Failed runs retry after fixed or exponential backoff via task.retryAt. Deleting a node finishes its runs before removal.
+- Scheduler: per-agent concurrency, one lease per sandbox, tasks wait with a blockedOn reason. A `depends-on` edge makes the target agent's task wait on every existing task of the source agents within the same flow: any failed or cancelled upstream task cancels it (emitting a task event naming both tasks, their ids, and the flow), any queued, waiting or running upstream task keeps it waiting with a `waiting on` reason naming those tasks, and all succeeded or no match lets it proceed to the normal admission checks. Each manual enqueue and each trigger firing mints a flow id; handoff tasks inherit the producing task's flow. Failed runs retry after fixed or exponential backoff via task.retryAt. Deleting a node finishes its runs before removal. `npm run test:flows` exercises this through the public API.
 - Persistence: agents, sandboxes, triggers, edges and sim settings in localStorage; runs, tasks, logs and events are session-only.
 
 ## Gotchas for workers
@@ -37,12 +37,12 @@ Vite 8, React 19, TypeScript 6, @xyflow/react 12, zustand, Tailwind 4, @dagrejs/
 - React Flow handles listen to mouse events, not pointer events. The in-app browser's drag does not create connections; verify connections with dispatched MouseEvents from the JS tool, or by driving the mock server directly.
 - A node spawned near the right edge can sit under the inspector panel.
 - HMR of mockServer.ts re-seeds the world; reload the page after editing it.
-- The mock server can be verified without a browser: stub localStorage, import src/api/mockServer.ts with tsx, clear the interval, call tick() directly.
+- The simulation is verified without a browser by `npm run test:flows` (vitest, tests/flows.test.ts): manual-mode servers with an injected rng, driven through the public api object. For ad hoc inspection write a temporary vitest case and import src/api/mockServer.ts directly, then delete it.
 
 ## Open product decisions
 
-- Should a handoff pass the upstream run's output as the downstream prompt, or a structured artifact?
-- Should depends-on block on the upstream agent being idle (current) or on a specific upstream task finishing?
+- Should a handoff pass the upstream run's output as the downstream prompt, or a structured artifact? (Resolved: structured RunOutput with artifacts, KAT-3365.)
+- Should depends-on block on the upstream agent being idle (current) or on a specific upstream task finishing? (Resolved: it waits on every existing upstream task within the same flow, KAT-3366.)
 - One lease per sandbox (current) or N concurrent leases?
 
 ## Candidate next PRs
