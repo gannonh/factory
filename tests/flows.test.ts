@@ -182,7 +182,7 @@ test('AC2: coder waits on its own flow planner, then runs while another flow pla
   expect(plannerF2.status).toBe('running')
   expect(coderF1Now.blockedOn).toBeNull()
   // the waiting F1 coder never consumed a sandbox lease before it could run
-  const leases = Object.values(w.sandboxes).filter((x) => x.lease).map((x) => w.runs[x.lease!.runId])
+  const leases = Object.values(w.sandboxes).flatMap((x) => x.leases).map((l) => w.runs[l.runId])
   expect(leases.map((r) => r.status)).toEqual(['running', 'running'])
 })
 
@@ -580,6 +580,7 @@ test('AC9: an unavailable sandbox holds the dependent with a reason, then releas
   const coder = fixture.agent('Coder')
   const reviewer = fixture.agent('Reviewer')
   isolateSandboxes(fixture)
+  fixture.api.sandboxes.update(sb('sb-docker-1'), { capacity: 1 }) // Reviewer's single lease fills builder-a
   fixture.api.graph.connect(planner, sb('sb-local-1'), 'runs-in')
   fixture.api.graph.connect(coder, sb('sb-docker-1'), 'runs-in')
   fixture.api.graph.connect(planner, coder, 'depends-on')
