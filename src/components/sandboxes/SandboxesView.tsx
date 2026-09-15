@@ -51,7 +51,7 @@ function CreateForm({ onDone }: { onDone: () => void }) {
   const [capacity, setCapacity] = useState('1')
   const submit = () => {
     if (!name.trim()) return
-    api.sandboxes.create({ name: name.trim(), kind, host: host.trim() || HOST_HINT[kind], image: image.trim(), capacity: Number(capacity) })
+    api.sandboxes.create({ name: name.trim(), kind, host: host.trim() || HOST_HINT[kind], image: image.trim(), capacity: Number(capacity) || 1 })
     onDone()
   }
   return (

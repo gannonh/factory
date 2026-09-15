@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { api } from '../../api/client'
 import type { Sandbox } from '../../domain/types'
-import { useStore } from '../../store'
 import { Field, Input, Section } from '../ui'
 import { SandboxCard } from '../sandboxes/SandboxCard'
 
@@ -11,7 +10,7 @@ export function SandboxInspector({ sandbox }: { sandbox: Sandbox }) {
   const setDraft = (value: string) => setEditing({ id: sandbox.id, draft: value })
   const commit = () => {
     api.sandboxes.update(sandbox.id, { capacity: Number(draft) })
-    setDraft(String(useStore.getState().world.sandboxes[sandbox.id]?.capacity ?? sandbox.capacity))
+    setEditing(null)
   }
   return (
     <>

@@ -74,7 +74,7 @@ export function SandboxNode({ data, selected }: NodeProps<SandboxNodeType>) {
         )}
         <div className="text-[10px] text-ink-400 truncate">
           <span className="font-mono tabular-nums">leases {sandbox.leases.length}/{sandbox.capacity}</span>
-          {sandbox.leases.length > 0 && <span className="text-cyan-300"> · {holders.join(', ')}</span>}
+          {holders.length > 0 && <span className="text-cyan-300"> · {holders.join(', ')}</span>}
         </div>
       </div>
     </div>
