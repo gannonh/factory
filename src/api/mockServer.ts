@@ -555,35 +555,37 @@ export class MockServer {
       dependsSources.set(e.target as AgentId, set)
     }
     const depBlocked = new Set<TaskId>()
-    if (dependsSources.size > 0) {
-      const pending = Object.values(w.tasks).filter((t) => t.status === 'queued' || t.status === 'waiting')
-      for (const task of pending) {
-        const sources = dependsSources.get(task.agentId)
-        if (!sources) continue
-        const matches = Object.values(w.tasks)
-          .filter((t) => t.id !== task.id && sources.has(t.agentId) && t.flowId === task.flowId)
-          .sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))
-        const terminal = matches.find((m) => m.status === 'failed' || m.status === 'cancelled')
-        if (terminal) {
-          // re-read the record: an earlier cancellation or start this pass must not be overwritten
-          const cur = w.tasks[task.id]
-          if (!cur || (cur.status !== 'queued' && cur.status !== 'waiting')) continue
-          this.patchTask(task.id, { status: 'cancelled', retryAt: null, blockedOn: null })
-          this.event('task', { kind: 'agent', id: task.agentId },
-            `Cancelled “${task.title}” (task ${task.id}, flow ${task.flowId}): prerequisite “${terminal.title}” (task ${terminal.id}) ${terminal.status}`)
-          continue
-        }
-        const active = matches.filter((m) => m.status === 'queued' || m.status === 'waiting' || m.status === 'running')
-        if (active.length > 0) {
-          const names = active.map((m) => `“${m.title}” (task ${m.id})`).join(', ')
-          this.patchTask(task.id, { status: 'waiting', blockedOn: `waiting on ${names}` })
-          depBlocked.add(task.id)
-        } else if (task.blockedOn?.startsWith('waiting on')) {
-          // dependencies cleared: drop the stale reason so admission reasons show through
-          this.patchTask(task.id, { blockedOn: null })
-        }
-        // all matches succeeded, or no matches exist: eligible for admission
+    const pending = Object.values(w.tasks).filter((t) => t.status === 'queued' || t.status === 'waiting')
+    for (const task of pending) {
+      const sources = dependsSources.get(task.agentId)
+      if (!sources) {
+        // the agent lost its depends-on edges: a stale waiting-on reason must not survive the pass
+        if (task.blockedOn?.startsWith('waiting on')) this.patchTask(task.id, { blockedOn: null })
+        continue
       }
+      const matches = Object.values(w.tasks)
+        .filter((t) => t.id !== task.id && sources.has(t.agentId) && t.flowId === task.flowId)
+        .sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))
+      const terminal = matches.find((m) => m.status === 'failed' || m.status === 'cancelled')
+      if (terminal) {
+        // re-read the record: an earlier cancellation or start this pass must not be overwritten
+        const cur = w.tasks[task.id]
+        if (!cur || (cur.status !== 'queued' && cur.status !== 'waiting')) continue
+        this.patchTask(task.id, { status: 'cancelled', retryAt: null, blockedOn: null })
+        this.event('task', { kind: 'agent', id: task.agentId },
+          `Cancelled “${task.title}” (task ${task.id}, flow ${task.flowId}): prerequisite “${terminal.title}” (task ${terminal.id}) ${terminal.status}`)
+        continue
+      }
+      const active = matches.filter((m) => m.status === 'queued' || m.status === 'waiting' || m.status === 'running')
+      if (active.length > 0) {
+        const names = active.map((m) => `“${m.title}” (task ${m.id})`).join(', ')
+        this.patchTask(task.id, { status: 'waiting', blockedOn: `waiting on ${names}` })
+        depBlocked.add(task.id)
+      } else if (task.blockedOn?.startsWith('waiting on')) {
+        // dependencies cleared: drop the stale reason so admission reasons show through
+        this.patchTask(task.id, { blockedOn: null })
+      }
+      // all matches succeeded, or no matches exist: eligible for admission
     }
     for (const agent of Object.values(w.agents)) {
       if (agent.status === 'paused') continue

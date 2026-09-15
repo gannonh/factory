@@ -604,3 +604,34 @@ test('AC9: an unavailable sandbox holds the dependent with a reason, then releas
 
   waitUntil(fixture, () => fixture.world().tasks[coderTask.id].status === 'running', 'coder starts once the sandbox frees')
 })
+
+test('AC7: removing the depends-on edge clears a stale waiting-on reason while other constraints hold', () => {
+  const fixture = makeFixture()
+  const planner = fixture.agent('Planner')
+  const coder = fixture.agent('Coder')
+  isolateSandboxes(fixture)
+  fixture.api.graph.connect(planner, sb('sb-local-1'), 'runs-in')
+  fixture.api.graph.connect(coder, sb('sb-docker-1'), 'runs-in')
+  fixture.api.graph.connect(planner, coder, 'depends-on')
+  fixture.api.agents.update(coder, { concurrency: 1 })
+
+  // occupy the coder's only slot with a manual task so capacity stays full
+  const manual = fixture.api.agents.enqueue(coder, { title: 'Solo patch', prompt: 'sp', priority: 'normal' })
+  fixture.api.sim.advance(1)
+  const trigger = manualTrigger(fixture, ['Planner', 'Coder'])
+  fixture.api.triggers.fire(trigger)
+  fixture.api.sim.advance(1)
+  let w = fixture.world()
+  const coderTask = Object.values(w.tasks).find((t) => t.agentId === coder && t.origin.kind === 'trigger')!
+  expect(coderTask.status).toBe('waiting')
+  expect(coderTask.blockedOn).toContain('waiting on')
+
+  fixture.api.graph.removeEdges(Object.values(w.edges).filter((e) => e.kind === 'depends-on').map((e) => e.id))
+  fixture.api.sim.advance(1)
+  w = fixture.world()
+  expect(w.tasks[coderTask.id].status).toBe('waiting') // capacity still full
+  expect(w.tasks[coderTask.id].blockedOn).toBeNull() // stale reason cleared
+
+  waitUntil(fixture, () => fixture.task(manual).status === 'succeeded', 'manual task finishes')
+  waitUntil(fixture, () => fixture.world().tasks[coderTask.id].status === 'running', 'task starts once capacity frees')
+})
