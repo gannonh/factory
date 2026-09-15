@@ -25,6 +25,8 @@ export function TaskInspector({ task }: { task: Task }) {
         <dl className="grid grid-cols-[88px_1fr] gap-x-3 gap-y-2 text-xs">
           <dt className="text-ink-400">Agent</dt>
           <dd>{agent?.name ?? `Deleted agent (${task.agentId})`}</dd>
+          <dt className="text-ink-400">Flow</dt>
+          <dd><span className="font-mono text-[11px] text-violet-200 select-text break-all" title="Flow id">{task.flowId}</span></dd>
           <dt className="text-ink-400">Priority</dt>
           <dd>{task.priority}</dd>
           <dt className="text-ink-400">Origin</dt>

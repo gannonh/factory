@@ -4,6 +4,7 @@ export type TriggerId = string & { readonly __brand: 'TriggerId' }
 export type EdgeId = string & { readonly __brand: 'EdgeId' }
 export type TaskId = string & { readonly __brand: 'TaskId' }
 export type RunId = string & { readonly __brand: 'RunId' }
+export type FlowId = string & { readonly __brand: 'FlowId' }
 
 export type NodeId = AgentId | SandboxId | TriggerId
 export type Position = { x: number; y: number }
@@ -140,6 +141,8 @@ export type TaskStatus = 'queued' | 'waiting' | 'running' | 'succeeded' | 'faile
 
 export type Task = {
   id: TaskId
+  /** flow this task belongs to; minted at manual enqueue or trigger firing, inherited on handoff */
+  flowId: FlowId
   agentId: AgentId
   title: string
   prompt: string

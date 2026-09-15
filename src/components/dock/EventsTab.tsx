@@ -38,7 +38,7 @@ export function EventsTab() {
   return (
     <div ref={ref} className="h-full overflow-y-auto px-2 py-1 text-xs">
       {world.events.map((ev) => (
-        <button key={ev.id} onClick={() => open(ev)} className={cx('w-full flex items-center gap-3 rounded px-1 py-[3px] text-left hover:bg-ink-850')}>
+        <button key={ev.id} onClick={() => open(ev)} title={ev.msg} aria-label={ev.msg} className={cx('w-full flex items-center gap-3 rounded px-1 py-[3px] text-left hover:bg-ink-850 outline-none focus-visible:bg-ink-850')}>
           <span className="font-mono text-[11px] text-ink-500 tabular-nums">{fmtTime(ev.ts)}</span>
           <span className="w-16 shrink-0 text-[10px] uppercase tracking-wider font-medium" style={{ color: KIND_COLOR[ev.kind] }}>{ev.kind}</span>
           <span className="text-ink-200 truncate">{ev.msg}</span>

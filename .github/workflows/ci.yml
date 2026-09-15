@@ -30,6 +30,9 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Flow tests
+        run: npm run test:flows
+
       - name: Typecheck
         run: npx --no-install tsc -b
 
