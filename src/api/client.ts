@@ -44,6 +44,6 @@ const buildApi = (server: MockServer) => ({
 export type Api = ReturnType<typeof buildApi>
 
 /** Create an API bound to a server instance; tests use this with a manual-mode server. */
-export const createApi = (server: MockServer = new MockServer()) => buildApi(server)
+export const createApi = (server: MockServer) => buildApi(server)
 
 export const api = buildApi(mockServer)

@@ -8,7 +8,7 @@
 import { expect, test } from 'vitest'
 import { createApi } from '../src/api/client'
 import { MockServer } from '../src/api/mockServer'
-import type { AgentId, FactoryEvent, SandboxId, Task, World } from '../src/domain/types'
+import type { AgentId, FactoryEvent, SandboxId, Task, TaskId, TriggerId, World } from '../src/domain/types'
 
 const RNG = () => 0.5
 const sb = (id: string) => id as SandboxId
@@ -17,7 +17,8 @@ type Fixture = {
   api: ReturnType<typeof createApi>
   agent: (name: string) => AgentId
   world: () => World
-  task: (id: string) => Task
+  task: (id: TaskId) => Task
+  firstTask: (agentId: AgentId) => Task
   events: () => FactoryEvent[]
   runs: () => World['runs']
 }
@@ -37,20 +38,25 @@ function makeFixture(): Fixture {
     if (!found) throw new Error(`no agent named ${name}`)
     return found.id
   }
-  const task = (id: string): Task => {
+  const task = (id: TaskId): Task => {
     const t = world().tasks[id]
     if (!t) throw new Error(`no task ${id}`)
+    return t
+  }
+  const firstTask = (agentId: AgentId): Task => {
+    const t = Object.values(world().tasks).find((x) => x.agentId === agentId)
+    if (!t) throw new Error(`no task for agent ${agentId}`)
     return t
   }
   // isolate from seeded periodic triggers and base handoff edges so tests build their own graphs
   for (const tr of Object.values(world().triggers)) api.triggers.update(tr.id, { enabled: false })
   api.graph.removeEdges(Object.values(world().edges).filter((e) => e.kind === 'handoff').map((e) => e.id))
-  return { api, agent, world, task, events: () => world().events, runs: () => world().runs }
+  return { api, agent, world, task, firstTask, events: () => world().events, runs: () => world().runs }
 }
 
 /** Manual trigger wired to the given agents, for counted firings. */
-function manualTrigger(fixture: Fixture, targets: string[]) {
-  const id = fixture.api.graph.createNode('trigger', { x: 40, y: 400 })
+function manualTrigger(fixture: Fixture, targets: string[]): TriggerId {
+  const id = fixture.api.graph.createNode('trigger', { x: 40, y: 400 }) as TriggerId
   for (const name of targets) fixture.api.graph.connect(id, fixture.agent(name), 'triggers')
   return id
 }
@@ -455,11 +461,11 @@ test('AC6: exhausted retries cancel the dependent', () => {
   expect(w.tasks[coderTask.id].status).toBe('cancelled')
 })
 
-test('AC6: cancellation propagates down a chain in one pass, with agents created in reverse order', () => {
+test('AC6: chain cancellation reaches every pending link within the following scheduling pass, agents created in reverse order', () => {
   const fixture = makeFixture()
-  const agentC = fixture.api.graph.createNode('agent', { x: 960, y: 660 }) // created first, iterated late matters not
-  const agentB = fixture.api.graph.createNode('agent', { x: 640, y: 660 })
-  const agentA = fixture.api.graph.createNode('agent', { x: 320, y: 660 })
+  const agentC = fixture.api.graph.createNode('agent', { x: 960, y: 660 }) as AgentId // created first, so the admission loop would iterate it last
+  const agentB = fixture.api.graph.createNode('agent', { x: 640, y: 660 }) as AgentId
+  const agentA = fixture.api.graph.createNode('agent', { x: 320, y: 660 }) as AgentId
   fixture.api.graph.connect(agentA, sb('sb-local-1'), 'runs-in')
   fixture.api.graph.connect(agentA, agentB, 'depends-on')
   fixture.api.graph.connect(agentB, agentC, 'depends-on')
@@ -475,7 +481,8 @@ test('AC6: cancellation propagates down a chain in one pass, with agents created
   expect(taskA.status).toBe('running')
   expect(taskB.status).toBe('waiting')
 
-  fixture.api.sim.advance(5401) // A fails terminally
+  fixture.api.sim.advance(5401) // A fails terminally; B cancels this pass, C by the following one at the latest
+  fixture.api.sim.advance(400)
   w = fixture.world()
   expect(w.tasks[taskA.id].status).toBe('failed')
   expect(w.tasks[taskB.id].status).toBe('cancelled')
@@ -501,7 +508,7 @@ test('AC9: a paused agent keeps eligible work waiting, then starts when resumed'
   expect(coderTask.status).toBe('waiting')
   fixture.api.agents.setPaused(coder, true)
 
-  waitUntil(fixture, () => fixture.world().tasks[plannerTask0(fixture, planner).id].status === 'succeeded', 'planner succeeds')
+  waitUntil(fixture, () => fixture.firstTask(planner).status === 'succeeded', 'planner succeeds')
   w = fixture.world()
   expect(w.tasks[coderTask.id].status).toBe('waiting')
   expect(Object.values(w.runs).some((r) => r.taskId === coderTask.id)).toBe(false)
@@ -509,10 +516,6 @@ test('AC9: a paused agent keeps eligible work waiting, then starts when resumed'
   fixture.api.agents.setPaused(coder, false)
   waitUntil(fixture, () => fixture.world().tasks[coderTask.id].status === 'running', 'coder starts after resume')
 })
-
-function plannerTask0(_fixture: Fixture, _planner: AgentId): Task {
-  return Object.values(_fixture.world().tasks).find((t) => t.agentId === _planner)!
-}
 
 test('AC9: exhausted concurrency still prevents a start after dependencies pass', () => {
   const fixture = makeFixture()
@@ -532,9 +535,9 @@ test('AC9: exhausted concurrency still prevents a start after dependencies pass'
   fixture.api.sim.advance(1) // manual coder run takes the only coder slot
   let w = fixture.world()
   const coderTask = Object.values(w.tasks).find((t) => t.agentId === coder && t.origin.kind === 'trigger')!
-  expect(w.runs && Object.values(w.runs).filter((r) => r.status === 'running').length).toBe(2)
+  expect(Object.values(w.runs).filter((r) => r.status === 'running').length).toBe(2)
 
-  waitUntil(fixture, () => fixture.world().tasks[plannerOnly(fixture).id].status === 'succeeded', 'planner succeeds')
+  waitUntil(fixture, () => fixture.firstTask(planner).status === 'succeeded', 'planner succeeds')
   w = fixture.world()
   expect(w.tasks[coderTask.id].status).toBe('waiting')
   expect(Object.values(w.runs).some((r) => r.taskId === coderTask.id)).toBe(false)
@@ -542,11 +545,6 @@ test('AC9: exhausted concurrency still prevents a start after dependencies pass'
   waitUntil(fixture, () => fixture.world().tasks[coderTask.id].status === 'running', 'coder starts when capacity frees')
   expect(fixture.task(manualCoder).status).toBe('succeeded')
 })
-
-function plannerOnly(fixture: Fixture): Task {
-  const planner = fixture.agent('Planner')
-  return Object.values(fixture.world().tasks).find((t) => t.agentId === planner)!
-}
 
 test('AC9: retry backoff still gates a start after dependencies pass', () => {
   const fixture = makeFixture()
@@ -594,7 +592,7 @@ test('AC9: an unavailable sandbox holds the dependent with a reason, then releas
   fixture.api.graph.connect(reviewer, sb('sb-docker-1'), 'runs-in')
   fixture.api.sim.advance(1) // reviewer run leases builder-a
 
-  waitUntil(fixture, () => fixture.world().tasks[plannerOnly(fixture).id].status === 'succeeded', 'planner succeeds')
+  waitUntil(fixture, () => fixture.firstTask(planner).status === 'succeeded', 'planner succeeds')
   let w = fixture.world()
   const coderTask = Object.values(w.tasks).find((t) => t.agentId === coder)!
   expect(w.tasks[coderTask.id].status).toBe('waiting')
