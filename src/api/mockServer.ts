@@ -690,7 +690,13 @@ function load(): World | null {
     if (!p.agents || !p.sandboxes || !p.triggers || !p.edges) return null
     const now = Date.now()
     const agents = Object.fromEntries(Object.entries(p.agents).map(([id, a]) => [id, { ...a, status: a.status === 'paused' ? 'paused' : 'idle' }])) as World['agents']
-    const sandboxes = Object.fromEntries(Object.entries(p.sandboxes).map(([id, s]) => [id, { ...s, leases: [], history: [], stateSince: now }])) as World['sandboxes']
+    const sandboxes = Object.fromEntries(Object.entries(p.sandboxes).map(([id, s]) => [id, {
+      ...s,
+      capacity: isCapacity(s.capacity) ? s.capacity : 1,
+      leases: [],
+      history: [],
+      stateSince: now,
+    }])) as World['sandboxes']
     const triggers = Object.fromEntries(Object.entries(p.triggers).map(([id, t]) => [id, { ...t, lastFiredAt: null }])) as World['triggers']
     return { ...seedWorld(now), agents, sandboxes, triggers, edges: p.edges, sim: p.sim ?? { paused: false, speed: 1 } }
   } catch {

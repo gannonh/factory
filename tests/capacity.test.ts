@@ -314,6 +314,41 @@ test('a pre-slice save is discarded and a v2 save restores capacity without leas
   }
 })
 
+test('a persisted sandbox with an invalid capacity loads with capacity 1', () => {
+  const store = new Map<string, string>()
+  vi.stubGlobal('window', {}) // load() and save() are browser-only
+  vi.stubGlobal('localStorage', {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => { store.set(k, v) },
+    removeItem: (k: string) => { store.delete(k) },
+  })
+  const box = (id: string, capacity: number | undefined) => ({
+    id, name: id, kind: 'docker', host: 'h', image: 'i', state: 'running', stateSince: 1,
+    progress: 1, metrics: { cpu: 0, mem: 0, disk: 0 }, history: [], leases: [],
+    capacity, restartPending: false, position: { x: 0, y: 0 },
+  })
+  try {
+    store.set('factory.world.v2', JSON.stringify({
+      agents: {}, triggers: {}, edges: {}, sim: { paused: false, speed: 1 },
+      sandboxes: {
+        'sb-zero': box('sb-zero', 0),
+        'sb-frac': box('sb-frac', 2.5),
+        'sb-missing': box('sb-missing', undefined),
+        'sb-good': box('sb-good', 3),
+      },
+    }))
+    const loaded = new MockServer({ manual: true, rng: RNG })
+    const w = loaded.snapshot()
+    expect(w.sandboxes[sb('sb-zero')].capacity).toBe(1)
+    expect(w.sandboxes[sb('sb-frac')].capacity).toBe(1)
+    expect(w.sandboxes[sb('sb-missing')].capacity).toBe(1)
+    expect(w.sandboxes[sb('sb-good')].capacity).toBe(3)
+    expect(w.sandboxes[sb('sb-good')].leases).toEqual([])
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
 test('the scheduler takes the least-loaded attached sandbox and clears only the finished run lease', () => {
   const fixture = makeFixture()
   const coder = fixture.agent('Coder')
