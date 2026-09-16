@@ -31,16 +31,28 @@ import {
   type World,
 } from '../domain/types'
 
-const STORAGE_KEY = 'factory.world.v2'
+export const STORAGE_KEY = 'factory.world.v3'
+export type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 const TICK_MS = 400
 const MAX_LOGS = 2000
 const MAX_EVENTS = 400
+const MAX_COMPLETED_RUNS = 200
 const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 }
 
 let seq = 0
 const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}${(seq++).toString(36)}`
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const isCapacity = (v: number) => Number.isInteger(v) && v >= 1
+
+/** `window.localStorage` access throws when site data is blocked; run in memory then. */
+function browserStorage(): StorageLike | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
 
 const RUN_LOG_LINES: Array<[LogLevel, string]> = [
   ['debug', 'tool call read_file src/index.ts'],
@@ -87,14 +99,30 @@ export class MockServer {
   private timer: ReturnType<typeof setInterval> | null = null
   private saveTimer: ReturnType<typeof setTimeout> | null = null
   private rng: () => number
+  private storage: StorageLike | null
 
   /**
    * `manual` stops the automatic interval; tests then advance simulated time with
    * `advance(ms)`. `rng` makes run outcomes, durations, and metric noise repeatable.
+   * `storage` defaults to `window.localStorage` in the browser and to none elsewhere.
    */
-  constructor(options: { manual?: boolean; rng?: () => number } = {}) {
-    this.world = load() ?? seedWorld(Date.now())
+  constructor(options: { manual?: boolean; rng?: () => number; storage?: StorageLike } = {}) {
     this.rng = options.rng ?? Math.random
+    this.storage = options.storage ?? browserStorage()
+    const restored = load(this.storage)
+    if (restored) {
+      this.world = restored
+      seq = restored.events.reduce((m, e) => Math.max(m, e.id), seq)
+      let interrupted = false
+      for (const run of Object.values(restored.runs)) {
+        if (run.status !== 'running') continue
+        this.finishRun(run, { status: 'failed', reason: 'interrupted by reload' })
+        interrupted = true
+      }
+      if (interrupted) this.publish()
+    } else {
+      this.world = seedWorld(Date.now())
+    }
     if (!options.manual) this.start()
   }
 
@@ -136,7 +164,7 @@ export class MockServer {
     if (this.saveTimer) return
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null
-      save(this.world)
+      save(this.world, this.storage)
     }, 1000)
   }
 
@@ -370,7 +398,7 @@ export class MockServer {
   }
 
   reset() {
-    if (typeof window !== 'undefined') localStorage.removeItem(STORAGE_KEY)
+    this.storage?.removeItem(STORAGE_KEY)
     this.world = seedWorld(Date.now())
     this.publish()
   }
@@ -669,26 +697,66 @@ export class MockServer {
   }
 }
 
-type Persisted = Pick<World, 'agents' | 'sandboxes' | 'triggers' | 'edges' | 'sim'>
+type Persisted = Pick<World, 'now' | 'agents' | 'sandboxes' | 'triggers' | 'edges' | 'sim' | 'tasks' | 'runs' | 'events'>
 
-function save(w: World) {
-  if (typeof window === 'undefined') return
-  const data: Persisted = { agents: w.agents, sandboxes: w.sandboxes, triggers: w.triggers, edges: w.edges, sim: w.sim }
+/**
+ * The save payload for a world: what survives a reload. Logs never do. Every
+ * running run is kept plus the newest MAX_COMPLETED_RUNS finished runs; tasks
+ * are kept when they are pending, referenced by a kept run, or share a flow
+ * with a kept queued/waiting task, so post-reload dependency evaluation sees
+ * the same prerequisites. Returned slices alias the live world and must be
+ * serialized or copied before the world mutates.
+ */
+export function retainWorld(w: World): Persisted {
+  const runs: World['runs'] = {}
+  for (const run of Object.values(w.runs)) if (run.status === 'running') runs[run.id] = run
+  const completed = Object.values(w.runs)
+    .filter((run) => run.status !== 'running')
+    .sort((a, b) => b.startedAt - a.startedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .slice(0, MAX_COMPLETED_RUNS)
+  for (const run of completed) runs[run.id] = run
+
+  const runTaskIds = new Set(Object.values(runs).map((run) => run.taskId))
+  const pendingFlowIds = new Set(
+    Object.values(w.tasks).filter((t) => t.status === 'queued' || t.status === 'waiting').map((t) => t.flowId),
+  )
+  const tasks: World['tasks'] = {}
+  for (const task of Object.values(w.tasks)) {
+    const pending = task.status === 'queued' || task.status === 'waiting'
+    if (task.status === 'running' || pending || runTaskIds.has(task.id) || pendingFlowIds.has(task.flowId)) tasks[task.id] = task
+  }
+
+  return {
+    now: w.now,
+    agents: w.agents,
+    sandboxes: w.sandboxes,
+    triggers: w.triggers,
+    edges: w.edges,
+    sim: w.sim,
+    tasks,
+    runs,
+    events: w.events.slice(-MAX_EVENTS),
+  }
+}
+
+function save(w: World, storage: StorageLike | null) {
+  if (!storage) return
+  const data = retainWorld(w)
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+    storage.setItem(STORAGE_KEY, JSON.stringify(data))
   } catch {
     /* storage unavailable: run in memory only */
   }
 }
 
-function load(): World | null {
-  if (typeof window === 'undefined') return null
+function load(storage: StorageLike | null): World | null {
+  if (!storage) return null
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = storage.getItem(STORAGE_KEY)
     if (!raw) return null
     const p = JSON.parse(raw) as Persisted
-    if (!p.agents || !p.sandboxes || !p.triggers || !p.edges) return null
-    const now = Date.now()
+    if (!p.agents || !p.sandboxes || !p.triggers || !p.edges || !p.tasks || !p.runs || !p.events || typeof p.now !== 'number') return null
+    const now = p.now
     const agents = Object.fromEntries(Object.entries(p.agents).map(([id, a]) => [id, { ...a, status: a.status === 'paused' ? 'paused' : 'idle' }])) as World['agents']
     const sandboxes = Object.fromEntries(Object.entries(p.sandboxes).map(([id, s]) => [id, {
       ...s,
@@ -698,7 +766,18 @@ function load(): World | null {
       stateSince: now,
     }])) as World['sandboxes']
     const triggers = Object.fromEntries(Object.entries(p.triggers).map(([id, t]) => [id, { ...t, lastFiredAt: null }])) as World['triggers']
-    return { ...seedWorld(now), agents, sandboxes, triggers, edges: p.edges, sim: p.sim ?? { paused: false, speed: 1 } }
+    return {
+      ...seedWorld(now),
+      now,
+      agents,
+      sandboxes,
+      triggers,
+      edges: p.edges,
+      sim: p.sim ?? { paused: false, speed: 1 },
+      tasks: p.tasks,
+      runs: p.runs,
+      events: p.events,
+    }
   } catch {
     return null
   }

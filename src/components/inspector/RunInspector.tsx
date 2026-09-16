@@ -57,7 +57,7 @@ export function RunInspector({ run }: { run: Run }) {
 
       <Section title="Logs" right={<span className="font-mono text-[10px] text-ink-500">{logs.length} lines</span>}>
         {logs.length === 0
-          ? <div className="rounded-md border border-ink-700 bg-ink-850 px-2.5 py-4 text-center text-[11px] text-ink-500">No logs retained for this run.</div>
+          ? <div className="rounded-md border border-ink-700 bg-ink-850 px-2.5 py-4 text-center text-[11px] text-ink-500">logs are kept for the current session</div>
           : <div className="flex flex-col gap-0.5 font-mono text-[10px] leading-4">
               {logs.map((line) => (
                 <div key={line.id} className="grid grid-cols-[58px_38px_1fr] gap-1.5 rounded px-1 py-0.5 hover:bg-ink-850">

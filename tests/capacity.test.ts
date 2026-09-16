@@ -4,13 +4,22 @@
  * (0.5) makes every run last 12.5s of simulated time and succeed, so lease
  * lifetimes and waits are deterministic.
  */
-import { expect, test, vi } from 'vitest'
+import { expect, test } from 'vitest'
 import { createApi } from '../src/api/client'
 import { MockServer } from '../src/api/mockServer'
 import type { AgentId, SandboxId, Task, TaskId, World } from '../src/domain/types'
 
 const RNG = () => 0.5
 const sb = (id: string) => id as SandboxId
+
+function makeStorage() {
+  const store = new Map<string, string>()
+  return {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => { store.set(key, value) },
+    removeItem: (key: string) => { store.delete(key) },
+  }
+}
 
 type Fixture = {
   api: ReturnType<typeof createApi>
@@ -270,83 +279,79 @@ test('deleting a sandbox node fails every leased run with sandbox deleted', () =
   }
 })
 
-test('a pre-slice save is discarded and a v2 save restores capacity without leases', () => {
-  const store = new Map<string, string>()
-  vi.stubGlobal('window', {}) // load() and save() are browser-only
-  vi.stubGlobal('localStorage', {
-    getItem: (k: string) => store.get(k) ?? null,
-    setItem: (k: string, v: string) => { store.set(k, v) },
-    removeItem: (k: string) => { store.delete(k) },
-  })
-  try {
-    store.set('factory.world.v1', JSON.stringify({
-      agents: {}, triggers: {}, edges: {}, sim: { paused: false, speed: 1 },
-      sandboxes: {
-        'sb-old': {
-          id: 'sb-old', name: 'old', kind: 'docker', host: 'h', image: 'i', state: 'running', stateSince: 1,
-          progress: 1, metrics: { cpu: 0, mem: 0, disk: 0 }, history: [], lease: { agentId: 'ag-coder', runId: 'run-old', since: 1 },
-          restartPending: false, position: { x: 0, y: 0 },
-        },
+test('pre-slice saves are discarded and a v3 save restores capacity without leases', () => {
+  const storage = makeStorage()
+  storage.setItem('factory.world.v1', JSON.stringify({
+    agents: {}, triggers: {}, edges: {}, sim: { paused: false, speed: 1 },
+    sandboxes: {
+      'sb-old': {
+        id: 'sb-old', name: 'old', kind: 'docker', host: 'h', image: 'i', state: 'running', stateSince: 1,
+        progress: 1, metrics: { cpu: 0, mem: 0, disk: 0 }, history: [], lease: { agentId: 'ag-coder', runId: 'run-old', since: 1 },
+        restartPending: false, position: { x: 0, y: 0 },
       },
-    }))
-    const seeded = new MockServer({ manual: true, rng: RNG })
-    expect(Object.keys(seeded.snapshot().sandboxes)).toHaveLength(3) // seed, not the v1 save
-    expect(seeded.snapshot().sandboxes[sb('sb-docker-1')].capacity).toBe(2)
+    },
+  }))
+  const seeded = new MockServer({ manual: true, rng: RNG, storage })
+  expect(Object.keys(seeded.snapshot().sandboxes)).toHaveLength(3) // seed, not the v1 save
+  expect(seeded.snapshot().sandboxes[sb('sb-docker-1')].capacity).toBe(2)
 
-    store.set('factory.world.v2', JSON.stringify({
-      agents: {}, triggers: {}, edges: {}, sim: { paused: false, speed: 1 },
-      sandboxes: {
-        'sb-keep': {
-          id: 'sb-keep', name: 'keep', kind: 'docker', host: 'h', image: 'i', state: 'running', stateSince: 1,
-          progress: 1, metrics: { cpu: 0, mem: 0, disk: 0 }, history: [{ cpu: 1, mem: 1, disk: 1 }],
-          leases: [{ agentId: 'ag-coder', runId: 'run-x', since: 1 }], capacity: 4, restartPending: false,
-          position: { x: 0, y: 0 },
-        },
+  storage.setItem('factory.world.v2', JSON.stringify({
+    agents: {}, triggers: {}, edges: {}, sim: { paused: false, speed: 1 },
+    sandboxes: {
+      'sb-keep': {
+        id: 'sb-keep', name: 'keep', kind: 'docker', host: 'h', image: 'i', state: 'running', stateSince: 1,
+        progress: 1, metrics: { cpu: 0, mem: 0, disk: 0 }, history: [{ cpu: 1, mem: 1, disk: 1 }],
+        leases: [{ agentId: 'ag-coder', runId: 'run-x', since: 1 }], capacity: 4, restartPending: false,
+        position: { x: 0, y: 0 },
       },
-    }))
-    const loaded = new MockServer({ manual: true, rng: RNG })
-    const box = loaded.snapshot().sandboxes[sb('sb-keep')]
-    expect(box.capacity).toBe(4)
-    expect(box.leases).toEqual([])
-    expect(box.history).toEqual([])
-  } finally {
-    vi.unstubAllGlobals()
-  }
+    },
+  }))
+  const discarded = new MockServer({ manual: true, rng: RNG, storage })
+  expect(Object.keys(discarded.snapshot().sandboxes)).toHaveLength(3) // key bumped: the v2 save is ignored
+
+  storage.setItem('factory.world.v3', JSON.stringify({
+    now: 1, agents: {}, triggers: {}, edges: {}, sim: { paused: false, speed: 1 },
+    tasks: {}, runs: {}, events: [],
+    sandboxes: {
+      'sb-keep': {
+        id: 'sb-keep', name: 'keep', kind: 'docker', host: 'h', image: 'i', state: 'running', stateSince: 1,
+        progress: 1, metrics: { cpu: 0, mem: 0, disk: 0 }, history: [{ cpu: 1, mem: 1, disk: 1 }],
+        leases: [{ agentId: 'ag-coder', runId: 'run-x', since: 1 }], capacity: 4, restartPending: false,
+        position: { x: 0, y: 0 },
+      },
+    },
+  }))
+  const loaded = new MockServer({ manual: true, rng: RNG, storage })
+  const box = loaded.snapshot().sandboxes[sb('sb-keep')]
+  expect(box.capacity).toBe(4)
+  expect(box.leases).toEqual([])
+  expect(box.history).toEqual([])
 })
 
 test('a persisted sandbox with an invalid capacity loads with capacity 1', () => {
-  const store = new Map<string, string>()
-  vi.stubGlobal('window', {}) // load() and save() are browser-only
-  vi.stubGlobal('localStorage', {
-    getItem: (k: string) => store.get(k) ?? null,
-    setItem: (k: string, v: string) => { store.set(k, v) },
-    removeItem: (k: string) => { store.delete(k) },
-  })
+  const storage = makeStorage()
   const box = (id: string, capacity: number | undefined) => ({
     id, name: id, kind: 'docker', host: 'h', image: 'i', state: 'running', stateSince: 1,
     progress: 1, metrics: { cpu: 0, mem: 0, disk: 0 }, history: [], leases: [],
     capacity, restartPending: false, position: { x: 0, y: 0 },
   })
-  try {
-    store.set('factory.world.v2', JSON.stringify({
-      agents: {}, triggers: {}, edges: {}, sim: { paused: false, speed: 1 },
-      sandboxes: {
-        'sb-zero': box('sb-zero', 0),
-        'sb-frac': box('sb-frac', 2.5),
-        'sb-missing': box('sb-missing', undefined),
-        'sb-good': box('sb-good', 3),
-      },
-    }))
-    const loaded = new MockServer({ manual: true, rng: RNG })
-    const w = loaded.snapshot()
-    expect(w.sandboxes[sb('sb-zero')].capacity).toBe(1)
-    expect(w.sandboxes[sb('sb-frac')].capacity).toBe(1)
-    expect(w.sandboxes[sb('sb-missing')].capacity).toBe(1)
-    expect(w.sandboxes[sb('sb-good')].capacity).toBe(3)
-    expect(w.sandboxes[sb('sb-good')].leases).toEqual([])
-  } finally {
-    vi.unstubAllGlobals()
-  }
+  storage.setItem('factory.world.v3', JSON.stringify({
+    now: 1, agents: {}, triggers: {}, edges: {}, sim: { paused: false, speed: 1 },
+    tasks: {}, runs: {}, events: [],
+    sandboxes: {
+      'sb-zero': box('sb-zero', 0),
+      'sb-frac': box('sb-frac', 2.5),
+      'sb-missing': box('sb-missing', undefined),
+      'sb-good': box('sb-good', 3),
+    },
+  }))
+  const loaded = new MockServer({ manual: true, rng: RNG, storage })
+  const w = loaded.snapshot()
+  expect(w.sandboxes[sb('sb-zero')].capacity).toBe(1)
+  expect(w.sandboxes[sb('sb-frac')].capacity).toBe(1)
+  expect(w.sandboxes[sb('sb-missing')].capacity).toBe(1)
+  expect(w.sandboxes[sb('sb-good')].capacity).toBe(3)
+  expect(w.sandboxes[sb('sb-good')].leases).toEqual([])
 })
 
 test('the scheduler takes the least-loaded attached sandbox and clears only the finished run lease', () => {
