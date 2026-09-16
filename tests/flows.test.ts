@@ -6,53 +6,8 @@
  * force deterministic failures instead.
  */
 import { expect, test } from 'vitest'
-import { createApi } from '../src/api/client'
-import { MockServer } from '../src/api/mockServer'
-import type { AgentId, FactoryEvent, SandboxId, Task, TaskId, TriggerId, World } from '../src/domain/types'
-
-const RNG = () => 0.5
-const sb = (id: string) => id as SandboxId
-
-type Fixture = {
-  api: ReturnType<typeof createApi>
-  agent: (name: string) => AgentId
-  world: () => World
-  task: (id: TaskId) => Task
-  firstTask: (agentId: AgentId) => Task
-  events: () => FactoryEvent[]
-  runs: () => World['runs']
-}
-
-/** Fixture with the seeded graph isolated: periodic triggers off, handoff and extra runs-in edges removed. */
-function makeFixture(): Fixture {
-  const server = new MockServer({ manual: true, rng: RNG })
-  const api = createApi(server)
-  let latest: World | undefined
-  api.subscribe((w) => { latest = w })
-  const world = (): World => {
-    if (!latest) throw new Error('no world snapshot')
-    return latest
-  }
-  const agent = (name: string): AgentId => {
-    const found = Object.values(world().agents).find((a) => a.name === name)
-    if (!found) throw new Error(`no agent named ${name}`)
-    return found.id
-  }
-  const task = (id: TaskId): Task => {
-    const t = world().tasks[id]
-    if (!t) throw new Error(`no task ${id}`)
-    return t
-  }
-  const firstTask = (agentId: AgentId): Task => {
-    const t = Object.values(world().tasks).find((x) => x.agentId === agentId)
-    if (!t) throw new Error(`no task for agent ${agentId}`)
-    return t
-  }
-  // isolate from seeded periodic triggers and base handoff edges so tests build their own graphs
-  for (const tr of Object.values(world().triggers)) api.triggers.update(tr.id, { enabled: false })
-  api.graph.removeEdges(Object.values(world().edges).filter((e) => e.kind === 'handoff').map((e) => e.id))
-  return { api, agent, world, task, firstTask, events: () => world().events, runs: () => world().runs }
-}
+import type { AgentId, Task, TriggerId } from '../src/domain/types'
+import { makeFixture, sb, type Fixture } from './fixture'
 
 /** Manual trigger wired to the given agents, for counted firings. */
 function manualTrigger(fixture: Fixture, targets: string[]): TriggerId {

@@ -5,14 +5,14 @@ A sandbox hosts up to its `capacity` concurrent runs. The scheduler picks the le
 ## Base fixture
 
 1. Run `npm run dev` and open the app.
-2. Click Reset in the top bar so the seeded world loads, or use a fresh browser profile. The world persists edits to `localStorage` under `factory.world.v2`, so a second run would otherwise start with the previous run's changes (builder-a capacity 3, edges removed, triggers disabled) and checkpoint 1 would be unreachable.
+2. Click Reset in the top bar so the seeded world loads, or use a fresh browser profile. The world persists edits to `localStorage` under `factory.world.v3`, so a second run would otherwise start with the previous run's changes (builder-a capacity 3, edges removed, triggers disabled) and checkpoint 1 would be unreachable.
 3. Pause the simulation from the top bar.
 4. Disable the seeded triggers (Nightly sweep, GitHub PR opened) in their inspectors.
 5. Remove the seeded handoff edges Planner → Coder and Coder → Reviewer.
 6. Remove the `runs-in` edge Coder → mac-studio so Coder is attached only to builder-a.
 7. Set Coder concurrency to 3 in its inspector.
 
-builder-a is seeded with capacity 2. HMR of `src/api/mockServer.ts` re-seeds the world, so reload the page after editing it.
+builder-a is seeded with capacity 2. HMR of `src/api/mockServer.ts` rebuilds the server from the saved v3 world and replays any in-flight run as `interrupted by reload`, so reload the page after editing it.
 
 ## Capacity sequence (AC3, AC5, AC6)
 
@@ -32,7 +32,7 @@ builder-a is seeded with capacity 2. HMR of `src/api/mockServer.ts` re-seeds the
 ## Evidence
 
 - Browser screenshots from the Build acceptance run (2026-09-15) are kept locally under the runner's `uat-evidence/` directory (`uat-evidence/` is gitignored; not committed), plus a recording if the browser recorder was available; if unavailable, that limitation is recorded in the run's `evidence.md`.
-- Deterministic API scenarios for capacity, least-loaded selection, lifecycle failure and the v2 storage key: `tests/capacity.test.ts` via `npm test`.
+- Deterministic API scenarios for capacity, least-loaded selection, lifecycle failure and the v3 storage key: `tests/capacity.test.ts` via `npm test`.
 
 ## Verification
 

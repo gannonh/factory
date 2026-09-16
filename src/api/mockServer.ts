@@ -31,16 +31,26 @@ import {
   type World,
 } from '../domain/types'
 
-const STORAGE_KEY = 'factory.world.v2'
+export const STORAGE_KEY = 'factory.world.v3'
+export type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 const TICK_MS = 400
 const MAX_LOGS = 2000
 const MAX_EVENTS = 400
+const MAX_COMPLETED_RUNS = 200
 const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 }
 
-let seq = 0
-const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}${(seq++).toString(36)}`
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const isCapacity = (v: number) => Number.isInteger(v) && v >= 1
+
+/** `window.localStorage` access throws when site data is blocked; run in memory then. */
+function browserStorage(): StorageLike | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
 
 const RUN_LOG_LINES: Array<[LogLevel, string]> = [
   ['debug', 'tool call read_file src/index.ts'],
@@ -87,14 +97,27 @@ export class MockServer {
   private timer: ReturnType<typeof setInterval> | null = null
   private saveTimer: ReturnType<typeof setTimeout> | null = null
   private rng: () => number
+  private storage: StorageLike | null
+  private seq = 0
 
   /**
    * `manual` stops the automatic interval; tests then advance simulated time with
    * `advance(ms)`. `rng` makes run outcomes, durations, and metric noise repeatable.
+   * `storage` defaults to `window.localStorage` in the browser and to none elsewhere.
    */
-  constructor(options: { manual?: boolean; rng?: () => number } = {}) {
-    this.world = load() ?? seedWorld(Date.now())
+  constructor(options: { manual?: boolean; rng?: () => number; storage?: StorageLike } = {}) {
     this.rng = options.rng ?? Math.random
+    this.storage = options.storage ?? browserStorage()
+    const restored = load(this.storage)
+    if (restored) {
+      this.world = restored
+      this.seq = restored.events.reduce((max, e) => Math.max(max, e.id), 0)
+      const interrupted = Object.values(restored.runs).filter((run) => run.status === 'running')
+      for (const run of interrupted) this.finishRun(run, { status: 'failed', reason: 'interrupted by reload' })
+      if (interrupted.length > 0) this.publish()
+    } else {
+      this.world = seedWorld(Date.now())
+    }
     if (!options.manual) this.start()
   }
 
@@ -136,11 +159,15 @@ export class MockServer {
     if (this.saveTimer) return
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null
-      save(this.world)
+      save(this.world, this.storage)
     }, 1000)
   }
 
   // ---- writes -------------------------------------------------------------
+
+  private uid(prefix: string) {
+    return `${prefix}-${Date.now().toString(36)}${(this.seq++).toString(36)}`
+  }
 
   private patchAgent(id: AgentId, patch: Partial<Agent>) {
     const cur = this.world.agents[id]
@@ -169,14 +196,14 @@ export class MockServer {
   }
 
   private log(level: LogLevel, msg: string, ref: { runId?: RunId; agentId?: AgentId } = {}) {
-    const line = { id: ++seq, ts: this.world.now, level, runId: ref.runId ?? null, agentId: ref.agentId ?? null, msg }
+    const line = { id: ++this.seq, ts: this.world.now, level, runId: ref.runId ?? null, agentId: ref.agentId ?? null, msg }
     const logs = this.world.logs.length >= MAX_LOGS ? this.world.logs.slice(-MAX_LOGS + 1) : this.world.logs.slice()
     logs.push(line)
     this.world.logs = logs
   }
 
   private event(kind: FactoryEvent['kind'], subject: Subject, msg: string) {
-    const ev = { id: ++seq, ts: this.world.now, kind, subject, msg }
+    const ev = { id: ++this.seq, ts: this.world.now, kind, subject, msg }
     const events = this.world.events.length >= MAX_EVENTS ? this.world.events.slice(-MAX_EVENTS + 1) : this.world.events.slice()
     events.push(ev)
     this.world.events = events
@@ -198,7 +225,7 @@ export class MockServer {
     const w = this.world
     if (kind === 'agent') {
       const n = Object.keys(w.agents).length + 1
-      const id = uid('ag') as AgentId
+      const id = this.uid('ag') as AgentId
       const agent: Agent = {
         id, name: `Agent ${n}`, role: 'generalist', model: 'claude-sonnet-5', temperature: 0.3, concurrency: 1,
         timeoutMs: 120_000, retry: { maxAttempts: 2, backoffMs: 1000, backoff: 'fixed' }, tools: ['read_file', 'bash'],
@@ -211,7 +238,7 @@ export class MockServer {
     }
     if (kind === 'sandbox') {
       const n = Object.keys(w.sandboxes).length + 1
-      const id = uid('sb') as SandboxId
+      const id = this.uid('sb') as SandboxId
       const sb: Sandbox = {
         id, name: `sandbox-${n}`, kind: 'docker', host: 'docker.internal', image: 'ghcr.io/factory/dev:node22',
         state: 'provisioning', stateSince: w.now, progress: 0, metrics: { cpu: 0, mem: 0, disk: 4 }, history: [],
@@ -224,7 +251,7 @@ export class MockServer {
       return id
     }
     const n = Object.keys(w.triggers).length + 1
-    const id = uid('tr') as TriggerId
+    const id = this.uid('tr') as TriggerId
     const tr: Trigger = {
       id, name: `Trigger ${n}`, kind: 'manual', intervalMs: 30_000, enabled: true, lastFiredAt: w.now, fired: 0,
       template: 'Do the thing', position,
@@ -263,7 +290,7 @@ export class MockServer {
     if (Object.values(w.edges).some((e) => e.source === source && e.target === target && e.kind === kind)) {
       return { ok: false, reason: 'edge already exists' }
     }
-    const id = uid('ed') as EdgeId
+    const id = this.uid('ed') as EdgeId
     w.edges = { ...w.edges, [id]: { id, kind, source, target } }
     this.event('graph', { kind: 'edge', id }, `Connected ${this.nameOf(source)} → ${this.nameOf(target)} (${EDGE_RULES[kind].label})`)
     this.publish()
@@ -301,8 +328,8 @@ export class MockServer {
   }
 
   enqueueTask(agentId: AgentId, input: { title: string; prompt: string; priority: Priority }, origin: Task['origin'] = { kind: 'manual' }): TaskId {
-    const flowId = uid('fl') as FlowId
-    const id = uid('tk') as TaskId
+    const flowId = this.uid('fl') as FlowId
+    const id = this.uid('tk') as TaskId
     const task: Task = { id, flowId, agentId, title: input.title, prompt: input.prompt, priority: input.priority, status: 'queued', origin, input: null, createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
     this.world.tasks = { ...this.world.tasks, [id]: task }
     this.event('task', { kind: 'agent', id: agentId }, `Queued “${task.title}” for ${this.nameOf(agentId)}`)
@@ -334,7 +361,7 @@ export class MockServer {
   }
 
   createSandbox(input: { name: string; kind: SandboxKind; host: string; image: string; capacity?: number }, position?: Position): SandboxId {
-    const id = uid('sb') as SandboxId
+    const id = this.uid('sb') as SandboxId
     const capacity = input.capacity !== undefined && isCapacity(input.capacity) ? input.capacity : 1
     const sb: Sandbox = {
       id, ...input, capacity, state: 'provisioning', stateSince: this.world.now, progress: 0,
@@ -370,7 +397,11 @@ export class MockServer {
   }
 
   reset() {
-    if (typeof window !== 'undefined') localStorage.removeItem(STORAGE_KEY)
+    try {
+      this.storage?.removeItem(STORAGE_KEY)
+    } catch {
+      /* storage unavailable: reset in memory only */
+    }
     this.world = seedWorld(Date.now())
     this.publish()
   }
@@ -452,7 +483,7 @@ export class MockServer {
     this.patchTrigger(id, { lastFiredAt: this.world.now, fired: tr.fired + 1 })
     const targets = Object.values(this.world.edges).filter((e) => e.kind === 'triggers' && e.source === id)
     this.event('trigger', { kind: 'trigger', id }, `${tr.name} fired (${tr.kind})`)
-    const flowId = uid('fl') as FlowId
+    const flowId = this.uid('fl') as FlowId
     for (const e of targets) {
       this.enqueueTaskSilently(e.target as AgentId, { title: tr.template, prompt: `${tr.template}\n\nTriggered by ${tr.name}.`, priority: tr.kind === 'webhook' ? 'high' : 'normal', origin: { kind: 'trigger', id }, input: null }, flowId)
     }
@@ -460,7 +491,7 @@ export class MockServer {
 
   private enqueueTaskSilently(agentId: AgentId, fields: Pick<Task, 'title' | 'prompt' | 'priority' | 'origin' | 'input'>, flowId: FlowId) {
     if (!this.world.agents[agentId]) return
-    const id = uid('tk') as TaskId
+    const id = this.uid('tk') as TaskId
     const task: Task = { id, flowId, agentId, ...fields, status: 'queued', createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
     this.world.tasks = { ...this.world.tasks, [id]: task }
     this.event('task', { kind: 'agent', id: agentId }, `Queued “${task.title}” for ${this.nameOf(agentId)}`)
@@ -517,7 +548,7 @@ export class MockServer {
           this.enqueueTaskSilently(e.target as AgentId, {
             title: `${run.title} → ${this.nameOf(e.target)}`, prompt, priority: task?.priority ?? 'normal',
             origin: { kind: 'handoff', from: run.agentId, runId: run.id }, input: { ...output, runId: run.id },
-          }, task?.flowId ?? (uid('fl') as FlowId))
+          }, task?.flowId ?? (this.uid('fl') as FlowId))
         }
       }
     } else if (completion.status === 'failed' && task && agent) {
@@ -639,7 +670,7 @@ export class MockServer {
   }
 
   private startRun(agent: Agent, task: Task, sandbox: Sandbox) {
-    const id = uid('run') as RunId
+    const id = this.uid('run') as RunId
     const run: Run = {
       id, taskId: task.id, agentId: agent.id, sandboxId: sandbox.id, title: task.title, attempt: task.attempts + 1,
       status: 'running', progress: 0, durationMs: this.rand(7000, 18000), startedAt: this.world.now, endedAt: null, tokens: 0,
@@ -669,26 +700,91 @@ export class MockServer {
   }
 }
 
-type Persisted = Pick<World, 'agents' | 'sandboxes' | 'triggers' | 'edges' | 'sim'>
+type Persisted = Pick<World, 'now' | 'agents' | 'sandboxes' | 'triggers' | 'edges' | 'sim' | 'tasks' | 'runs' | 'events'>
 
-function save(w: World) {
-  if (typeof window === 'undefined') return
-  const data: Persisted = { agents: w.agents, sandboxes: w.sandboxes, triggers: w.triggers, edges: w.edges, sim: w.sim }
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** A record whose entries are all records; rejects arrays and null entries. */
+function isRecordMap(value: unknown): value is Record<string, Record<string, unknown>> {
+  return isRecord(value) && Object.values(value).every(isRecord)
+}
+
+/**
+ * Shape check for a saved payload. Anything restoration consumes must be
+ * present and the right kind; a malformed save is rejected whole so the caller
+ * seeds a fresh world instead of crashing while restoring it.
+ */
+function isPersisted(value: unknown): value is Persisted {
+  return isRecord(value)
+    && typeof value.now === 'number' && Number.isFinite(value.now)
+    && isRecordMap(value.agents) && isRecordMap(value.sandboxes) && isRecordMap(value.triggers)
+    && isRecordMap(value.edges) && isRecordMap(value.tasks) && isRecordMap(value.runs)
+    && isRecord(value.sim) && typeof value.sim.paused === 'boolean'
+    && (value.sim.speed === 1 || value.sim.speed === 2 || value.sim.speed === 4)
+    && Array.isArray(value.events) && value.events.every((e) => isRecord(e) && typeof e.id === 'number' && Number.isFinite(e.id))
+}
+
+/**
+ * The save payload for a world: what survives a reload. Logs never do. Every
+ * running run is kept plus the newest MAX_COMPLETED_RUNS finished runs; tasks
+ * are kept when they are pending, referenced by a kept run, or share a flow
+ * with a kept queued/waiting task, so post-reload dependency evaluation sees
+ * the same prerequisites. Returned slices alias the live world and must be
+ * serialized or copied before the world mutates.
+ */
+export function retainWorld(w: World): Persisted {
+  const runs: World['runs'] = {}
+  for (const run of Object.values(w.runs)) if (run.status === 'running') runs[run.id] = run
+  const completed = Object.values(w.runs)
+    .filter((run) => run.status !== 'running')
+    .sort((a, b) => b.startedAt - a.startedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .slice(0, MAX_COMPLETED_RUNS)
+  for (const run of completed) runs[run.id] = run
+
+  const runTaskIds = new Set(Object.values(runs).map((run) => run.taskId))
+  const pendingFlowIds = new Set(
+    Object.values(w.tasks).filter((t) => t.status === 'queued' || t.status === 'waiting').map((t) => t.flowId),
+  )
+  const tasks: World['tasks'] = {}
+  for (const task of Object.values(w.tasks)) {
+    const pending = task.status === 'queued' || task.status === 'waiting'
+    if (task.status === 'running' || pending || runTaskIds.has(task.id) || pendingFlowIds.has(task.flowId)) tasks[task.id] = task
+  }
+
+  return {
+    now: w.now,
+    agents: w.agents,
+    sandboxes: w.sandboxes,
+    triggers: w.triggers,
+    edges: w.edges,
+    sim: w.sim,
+    tasks,
+    runs,
+    events: w.events.slice(-MAX_EVENTS),
+  }
+}
+
+function save(w: World, storage: StorageLike | null) {
+  if (!storage) return
+  const data = retainWorld(w)
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+    storage.setItem(STORAGE_KEY, JSON.stringify(data))
   } catch {
     /* storage unavailable: run in memory only */
   }
 }
 
-function load(): World | null {
-  if (typeof window === 'undefined') return null
+function load(storage: StorageLike | null): World | null {
+  if (!storage) return null
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = storage.getItem(STORAGE_KEY)
     if (!raw) return null
-    const p = JSON.parse(raw) as Persisted
-    if (!p.agents || !p.sandboxes || !p.triggers || !p.edges) return null
-    const now = Date.now()
+    const parsed: unknown = JSON.parse(raw)
+    if (!isPersisted(parsed)) return null
+    const p = parsed
+    const now = p.now
     const agents = Object.fromEntries(Object.entries(p.agents).map(([id, a]) => [id, { ...a, status: a.status === 'paused' ? 'paused' : 'idle' }])) as World['agents']
     const sandboxes = Object.fromEntries(Object.entries(p.sandboxes).map(([id, s]) => [id, {
       ...s,
@@ -698,7 +794,18 @@ function load(): World | null {
       stateSince: now,
     }])) as World['sandboxes']
     const triggers = Object.fromEntries(Object.entries(p.triggers).map(([id, t]) => [id, { ...t, lastFiredAt: null }])) as World['triggers']
-    return { ...seedWorld(now), agents, sandboxes, triggers, edges: p.edges, sim: p.sim ?? { paused: false, speed: 1 } }
+    return {
+      now,
+      agents,
+      sandboxes,
+      triggers,
+      edges: p.edges,
+      tasks: p.tasks,
+      runs: p.runs,
+      logs: [],
+      events: p.events,
+      sim: p.sim,
+    }
   } catch {
     return null
   }

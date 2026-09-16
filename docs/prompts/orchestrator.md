@@ -30,13 +30,13 @@ Vite 8, React 19, TypeScript 6, @xyflow/react 12, zustand, Tailwind 4, @dagrejs/
 - While a connection drag is in progress every node renders a full-size invisible drop handle, so dropping anywhere on a node connects. Edges pin sourceHandle "out" and targetHandle "in".
 - Selection: React Flow's local selected flags are the source; one guarded effect in Canvas.tsx mirrors them into the store, and a second effect pushes external selections (event clicks) back in. A two-way sync through onSelectionChange caused an infinite render loop; do not reintroduce it.
 - Scheduler: per-agent concurrency; a sandbox hosts up to its `capacity` concurrent runs, the scheduler picks the least-loaded running sandbox attached by a runs-in edge with `leases.length < capacity` (edge insertion order breaks ties), and tasks wait with a `blockedOn` reason when no attached sandbox has a free slot. A `depends-on` edge makes the target agent's task wait on every existing task of the source agents within the same flow: any failed or cancelled upstream task cancels it (emitting a task event naming both tasks, their ids, and the flow), any queued, waiting or running upstream task keeps it waiting with a `waiting on` reason naming those tasks, and all succeeded or no match lets it proceed to the normal admission checks. Each manual enqueue and each trigger firing mints a flow id; handoff tasks inherit the producing task's flow. Failed runs retry after fixed or exponential backoff via task.retryAt. Deleting a node finishes its runs before removal. `npm test` exercises this through the public API.
-- Persistence: agents, sandboxes, triggers, edges and sim settings in localStorage; runs, tasks, logs and events are session-only.
+- Persistence: agents, sandboxes, triggers, edges, sim settings, `now`, tasks, runs and events in localStorage under `factory.world.v3` (key bumped so older saves are discarded). Each save keeps every running run, the newest 200 completed runs, the tasks they reference, all pending tasks and every task sharing a pending task's flow, plus the newest 400 events. A running run restored at load is replayed through `finishRun` as `interrupted by reload`, so its task retries per policy or fails. Logs stay session-only.
 
 ## Gotchas for workers
 
 - React Flow handles listen to mouse events, not pointer events. The in-app browser's drag does not create connections; verify connections with dispatched MouseEvents from the JS tool, or by driving the mock server directly.
 - A node spawned near the right edge can sit under the inspector panel.
-- HMR of mockServer.ts re-seeds the world; reload the page after editing it.
+- HMR of mockServer.ts rebuilds the server from the saved v3 world and replays any in-flight run as `interrupted by reload`; reload the page after editing it.
 - The simulation is verified without a browser by `npm test` running the vitest suites (`tests/flows.test.ts`, `tests/capacity.test.ts`): manual-mode servers with an injected rng, driven through the public api object. For ad hoc inspection write a temporary vitest case and import src/api/mockServer.ts directly, then delete it.
 
 ## Open product decisions
@@ -51,7 +51,6 @@ Vite 8, React 19, TypeScript 6, @xyflow/react 12, zustand, Tailwind 4, @dagrejs/
 2. Address any CodeRabbit findings that land on PR #1.
 3. Real backend adapter behind src/api/client.ts, starting with a local host.
 4. Undo, copy and paste, node grouping on the canvas.
-5. Persisted run history beyond the session.
 
 ## How to dispatch
 
