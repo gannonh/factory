@@ -332,7 +332,7 @@ export class MockServer {
     const id = this.uid('tk') as TaskId
     const task: Task = { id, flowId, agentId, title: input.title, prompt: input.prompt, priority: input.priority, status: 'queued', origin, input: null, createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
     this.world.tasks = { ...this.world.tasks, [id]: task }
-    this.event('task', { kind: 'agent', id: agentId }, `Queued “${task.title}” for ${this.nameOf(agentId)}`)
+    this.event('task', { kind: 'task', id }, `Queued “${task.title}” for ${this.nameOf(agentId)}`)
     this.publish()
     return id
   }
@@ -341,7 +341,7 @@ export class MockServer {
     const t = this.world.tasks[id]
     if (!t || (t.status !== 'queued' && t.status !== 'waiting')) return
     this.patchTask(id, { status: 'cancelled', blockedOn: null })
-    this.event('task', { kind: 'agent', id: t.agentId }, `Cancelled “${t.title}”`)
+    this.event('task', { kind: 'task', id }, `Cancelled “${t.title}”`)
     this.publish()
   }
 
@@ -494,7 +494,7 @@ export class MockServer {
     const id = this.uid('tk') as TaskId
     const task: Task = { id, flowId, agentId, ...fields, status: 'queued', createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
     this.world.tasks = { ...this.world.tasks, [id]: task }
-    this.event('task', { kind: 'agent', id: agentId }, `Queued “${task.title}” for ${this.nameOf(agentId)}`)
+    this.event('task', { kind: 'task', id }, `Queued “${task.title}” for ${this.nameOf(agentId)}`)
   }
 
   private tickRuns(dt: number) {
@@ -627,7 +627,7 @@ export class MockServer {
         const cur = w.tasks[task.id]
         if (!cur || (cur.status !== 'queued' && cur.status !== 'waiting')) continue
         this.patchTask(task.id, { status: 'cancelled', retryAt: null, blockedOn: null })
-        this.event('task', { kind: 'agent', id: task.agentId },
+        this.event('task', { kind: 'task', id: task.id },
           `Cancelled “${task.title}” (task ${task.id}, flow ${task.flowId}): prerequisite “${terminal.title}” (task ${terminal.id}) ${terminal.status}`)
         continue
       }
