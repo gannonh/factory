@@ -36,7 +36,7 @@ Vite 8, React 19, TypeScript 6, @xyflow/react 12, zustand, Tailwind 4, @dagrejs/
 
 - React Flow handles listen to mouse events, not pointer events. The in-app browser's drag does not create connections; verify connections with dispatched MouseEvents from the JS tool, or by driving the mock server directly.
 - A node spawned near the right edge can sit under the inspector panel.
-- HMR of mockServer.ts re-seeds the world; reload the page after editing it.
+- HMR of mockServer.ts rebuilds the server from the saved v3 world and replays any in-flight run as `interrupted by reload`; reload the page after editing it.
 - The simulation is verified without a browser by `npm test` running the vitest suites (`tests/flows.test.ts`, `tests/capacity.test.ts`): manual-mode servers with an injected rng, driven through the public api object. For ad hoc inspection write a temporary vitest case and import src/api/mockServer.ts directly, then delete it.
 
 ## Open product decisions

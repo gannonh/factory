@@ -12,7 +12,7 @@ A sandbox hosts up to its `capacity` concurrent runs. The scheduler picks the le
 6. Remove the `runs-in` edge Coder → mac-studio so Coder is attached only to builder-a.
 7. Set Coder concurrency to 3 in its inspector.
 
-builder-a is seeded with capacity 2. HMR of `src/api/mockServer.ts` re-seeds the world, so reload the page after editing it.
+builder-a is seeded with capacity 2. HMR of `src/api/mockServer.ts` rebuilds the server from the saved v3 world and replays any in-flight run as `interrupted by reload`, so reload the page after editing it.
 
 ## Capacity sequence (AC3, AC5, AC6)
 

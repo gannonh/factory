@@ -6,73 +6,17 @@
  * no interval, so save timeouts are the only pending timers.
  */
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import { createApi, type Api } from '../src/api/client'
 import { MockServer, retainWorld, STORAGE_KEY } from '../src/api/mockServer'
 import { seedWorld } from '../src/domain/seed'
-import type { AgentId, FactoryEvent, FlowId, Run, RunId, SandboxId, Task, TaskId, TriggerId, World } from '../src/domain/types'
-
-const RNG = () => 0.5
-const sb = (id: string) => id as SandboxId
-
-function makeStorage() {
-  const store = new Map<string, string>()
-  return {
-    store,
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => { store.set(key, value) },
-    removeItem: (key: string) => { store.delete(key) },
-  }
-}
-
-type Storage = ReturnType<typeof makeStorage>
-
-type Fixture = {
-  server: MockServer
-  api: Api
-  world: () => World
-  agent: (name: string) => AgentId
-  task: (id: TaskId) => Task
-  flushSave: () => void
-}
-
-/**
- * Boot a manual server on `storage`. `isolate` turns the seeded triggers off
- * and drops the seeded handoff edges, mirroring the other API fixtures.
- */
-function boot(storage: Storage, isolate = false): Fixture {
-  const server = new MockServer({ manual: true, rng: RNG, storage })
-  const api = createApi(server)
-  let latest = server.snapshot()
-  api.subscribe((w) => { latest = w })
-  const fixture: Fixture = {
-    server,
-    api,
-    world: () => latest,
-    agent: (name) => {
-      const found = Object.values(latest.agents).find((a) => a.name === name)
-      if (!found) throw new Error(`no agent named ${name}`)
-      return found.id
-    },
-    task: (id) => {
-      const t = latest.tasks[id]
-      if (!t) throw new Error(`no task ${id}`)
-      return t
-    },
-    flushSave: () => vi.advanceTimersByTime(1000),
-  }
-  if (isolate) {
-    for (const tr of Object.values(latest.triggers)) api.triggers.update(tr.id, { enabled: false })
-    api.graph.removeEdges(Object.values(latest.edges).filter((e) => e.kind === 'handoff').map((e) => e.id))
-  }
-  return fixture
-}
+import type { AgentId, FactoryEvent, FlowId, Run, RunId, Task, TaskId, TriggerId, World } from '../src/domain/types'
+import { makeFixture, makeStorage, RNG, sb } from './fixture'
 
 beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
 
 test('a completed run and simulated time survive a reload', () => {
   const storage = makeStorage()
-  const first = boot(storage, true)
+  const first = makeFixture({ storage, isolate: true })
   first.api.agents.enqueue(first.agent('Planner'), { title: 'plan', prompt: 'p', priority: 'normal' })
   first.api.sim.advance(1)
   first.api.sim.advance(12_500)
@@ -81,7 +25,7 @@ test('a completed run and simulated time survive a reload', () => {
   expect(run.status).toBe('succeeded')
   first.flushSave()
 
-  const second = boot(storage)
+  const second = makeFixture({ storage, isolate: false })
   const after = second.world()
   const restored = after.runs[run.id]
   expect(restored.status).toBe('succeeded')
@@ -97,14 +41,14 @@ test('a completed run and simulated time survive a reload', () => {
 
 test('a run in progress at reload is failed with interrupted by reload and its task retries', () => {
   const storage = makeStorage()
-  const first = boot(storage, true)
+  const first = makeFixture({ storage, isolate: true })
   first.api.agents.enqueue(first.agent('Coder'), { title: 'work', prompt: 'p', priority: 'normal' })
   first.api.sim.advance(1)
   const run = Object.values(first.world().runs)[0]
   expect(run.status).toBe('running')
   first.flushSave()
 
-  const second = boot(storage)
+  const second = makeFixture({ storage, isolate: false })
   const w = second.world()
   const restored = w.runs[run.id]
   expect(restored.status).toBe('failed')
@@ -125,7 +69,7 @@ test('a run in progress at reload is failed with interrupted by reload and its t
 
 test('an interrupted run with no retries left fails its task like a live failure', () => {
   const storage = makeStorage()
-  const first = boot(storage, true)
+  const first = makeFixture({ storage, isolate: true })
   const coder = first.agent('Coder')
   first.api.agents.update(coder, { retry: { maxAttempts: 1, backoffMs: 2000, backoff: 'fixed' } })
   first.api.agents.enqueue(coder, { title: 'work', prompt: 'p', priority: 'normal' })
@@ -134,7 +78,7 @@ test('an interrupted run with no retries left fails its task like a live failure
   expect(run.status).toBe('running')
   first.flushSave()
 
-  const second = boot(storage)
+  const second = makeFixture({ storage, isolate: false })
   const w = second.world()
   const restored = w.runs[run.id]
   expect(restored.status).toBe('failed')
@@ -150,7 +94,7 @@ test('an interrupted run with no retries left fails its task like a live failure
 
 test('a waiting handoff task survives a reload with its origin, input and blockedOn', () => {
   const storage = makeStorage()
-  const first = boot(storage)
+  const first = makeFixture({ storage, isolate: false })
   const planner = first.agent('Planner')
   const coder = first.agent('Coder')
   for (const tr of Object.values(first.world().triggers)) first.api.triggers.update(tr.id, { enabled: false })
@@ -168,7 +112,7 @@ test('a waiting handoff task survives a reload with its origin, input and blocke
   expect(handoff!.blockedOn).toBe('no sandbox attached')
   first.flushSave()
 
-  const second = boot(storage)
+  const second = makeFixture({ storage, isolate: false })
   const w = second.world()
   const restored = w.tasks[handoff!.id]
   expect(restored.status).toBe(handoff!.status)
@@ -185,7 +129,7 @@ test('a waiting handoff task survives a reload with its origin, input and blocke
 
 test('a task waiting on a retry deadline survives a reload and honours retryAt', () => {
   const storage = makeStorage()
-  const first = boot(storage, true)
+  const first = makeFixture({ storage, isolate: true })
   const coder = first.agent('Coder')
   first.api.agents.update(coder, { timeoutMs: 5000 })
   first.api.agents.enqueue(coder, { title: 'slow', prompt: 'p', priority: 'normal' })
@@ -200,7 +144,7 @@ test('a task waiting on a retry deadline survives a reload and honours retryAt',
   expect(retryAt).toBeGreaterThan(first.world().now)
   first.flushSave()
 
-  const second = boot(storage)
+  const second = makeFixture({ storage, isolate: false })
   const w = second.world()
   const restored = w.tasks[task.id]
   expect(w.runs[failed.id].error).toBe('timeout')
@@ -216,7 +160,7 @@ test('a task waiting on a retry deadline survives a reload and honours retryAt',
 
 test('a fresh module reseeds ids above the restored events', async () => {
   const storage = makeStorage()
-  const first = boot(storage, true)
+  const first = makeFixture({ storage, isolate: true })
   first.api.agents.enqueue(first.agent('Planner'), { title: 'plan', prompt: 'p', priority: 'normal' })
   first.api.sim.advance(1)
   first.api.sim.advance(12_500)
@@ -242,7 +186,7 @@ test('a fresh module reseeds ids above the restored events', async () => {
 
 test('reset clears the saved history and restores the seed', () => {
   const storage = makeStorage()
-  const first = boot(storage, true)
+  const first = makeFixture({ storage, isolate: true })
   first.api.agents.enqueue(first.agent('Planner'), { title: 'plan', prompt: 'p', priority: 'normal' })
   first.api.sim.advance(1)
   first.api.sim.advance(12_500)
@@ -263,7 +207,7 @@ test('reset clears the saved history and restores the seed', () => {
   expect(Object.keys(saved.runs)).toEqual([])
   expect(saved.events).toEqual([])
 
-  const third = boot(storage)
+  const third = makeFixture({ storage, isolate: false })
   expect(Object.keys(third.world().tasks)).toEqual([])
   expect(Object.keys(third.world().runs)).toEqual([])
   expect(Object.keys(third.world().agents)).toHaveLength(4)
@@ -271,7 +215,7 @@ test('reset clears the saved history and restores the seed', () => {
 
 test('a reload keeps the newest 200 completed runs plus the interrupted one, never orphaning tasks', () => {
   const storage = makeStorage()
-  const first = boot(storage)
+  const first = makeFixture({ storage, isolate: false })
   const planner = first.agent('Planner')
   const coder = first.agent('Coder')
   const qa = first.agent('QA')
@@ -307,7 +251,7 @@ test('a reload keeps the newest 200 completed runs plus the interrupted one, nev
   const newest200 = new Set(completed.slice(-200).map((r) => r.id))
   first.flushSave()
 
-  const second = boot(storage)
+  const second = makeFixture({ storage, isolate: false })
   const w = second.world()
   const runs = Object.values(w.runs)
   expect(runs).toHaveLength(201)
