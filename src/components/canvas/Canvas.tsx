@@ -32,7 +32,8 @@ function buildNodes(world: World): FactoryNode[] {
     })
   }
   for (const s of Object.values(world.sandboxes)) {
-    out.push({ id: s.id, type: 'sandbox', position: s.position, data: { sandbox: s, leaseName: s.lease ? world.agents[s.lease.agentId]?.name ?? null : null } })
+    const holders = [...new Set(s.leases.map((l) => world.agents[l.agentId]?.name).filter((n): n is string => Boolean(n)))]
+    out.push({ id: s.id, type: 'sandbox', position: s.position, data: { sandbox: s, holders } })
   }
   return out
 }
@@ -45,7 +46,7 @@ function buildEdges(world: World): FactoryEdgeType[] {
       active = !!t && t.lastFiredAt !== null && world.now - t.lastFiredAt < 2500
     } else if (e.kind === 'runs-in') {
       const s = world.sandboxes[e.target as keyof typeof world.sandboxes]
-      active = !!s && s.lease?.agentId === e.source
+      active = !!s && s.leases.some((l) => l.agentId === e.source)
     } else {
       active = world.agents[e.source as keyof typeof world.agents]?.status === 'working'
     }

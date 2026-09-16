@@ -31,7 +31,7 @@ import {
   type World,
 } from '../domain/types'
 
-const STORAGE_KEY = 'factory.world.v1'
+const STORAGE_KEY = 'factory.world.v2'
 const TICK_MS = 400
 const MAX_LOGS = 2000
 const MAX_EVENTS = 400
@@ -40,6 +40,7 @@ const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 }
 let seq = 0
 const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}${(seq++).toString(36)}`
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
+const isCapacity = (v: number) => Number.isInteger(v) && v >= 1
 
 const RUN_LOG_LINES: Array<[LogLevel, string]> = [
   ['debug', 'tool call read_file src/index.ts'],
@@ -214,7 +215,7 @@ export class MockServer {
       const sb: Sandbox = {
         id, name: `sandbox-${n}`, kind: 'docker', host: 'docker.internal', image: 'ghcr.io/factory/dev:node22',
         state: 'provisioning', stateSince: w.now, progress: 0, metrics: { cpu: 0, mem: 0, disk: 4 }, history: [],
-        lease: null, restartPending: false, position,
+        leases: [], capacity: 1, restartPending: false, position,
       }
       w.sandboxes = { ...w.sandboxes, [id]: sb }
       this.event('sandbox', { kind: 'sandbox', id }, `Provisioning ${sb.name}`)
@@ -322,27 +323,35 @@ export class MockServer {
     if (!sb) return
     const next = SANDBOX_TRANSITIONS[sb.state][action]
     if (!next) return
-    if (sb.lease) {
-      const run = this.world.runs[sb.lease.runId]
+    for (const lease of [...sb.leases]) {
+      const run = this.world.runs[lease.runId]
       if (run && run.status === 'running') this.finishRun(run, { status: 'failed', reason: `sandbox ${action}` })
     }
-    this.patchSandbox(id, { state: next, stateSince: this.world.now, progress: 0, lease: null, restartPending: action === 'restart' })
+    this.patchSandbox(id, { state: next, stateSince: this.world.now, progress: 0, leases: [], restartPending: action === 'restart' })
     this.event('sandbox', { kind: 'sandbox', id }, `${sb.name}: ${action} → ${next}`)
     this.log('info', `${sb.name} ${action} requested (${sb.state} → ${next})`)
     this.publish()
   }
 
-  createSandbox(input: { name: string; kind: SandboxKind; host: string; image: string }, position?: Position): SandboxId {
+  createSandbox(input: { name: string; kind: SandboxKind; host: string; image: string; capacity?: number }, position?: Position): SandboxId {
     const id = uid('sb') as SandboxId
+    const capacity = input.capacity !== undefined && isCapacity(input.capacity) ? input.capacity : 1
     const sb: Sandbox = {
-      id, ...input, state: 'provisioning', stateSince: this.world.now, progress: 0, metrics: { cpu: 0, mem: 0, disk: 4 },
-      history: [], lease: null, restartPending: false, position: position ?? this.nextFreePosition(),
+      id, ...input, capacity, state: 'provisioning', stateSince: this.world.now, progress: 0,
+      metrics: { cpu: 0, mem: 0, disk: 4 }, history: [], leases: [], restartPending: false, position: position ?? this.nextFreePosition(),
     }
     this.world.sandboxes = { ...this.world.sandboxes, [id]: sb }
     this.event('sandbox', { kind: 'sandbox', id }, `Provisioning ${sb.name}`)
     this.log('info', `provisioning ${sb.name} (${sb.kind}) on ${sb.host}`)
     this.publish()
     return id
+  }
+
+  updateSandbox(id: SandboxId, patch: { capacity: number }) {
+    if (!isCapacity(patch.capacity)) return
+    if (!this.world.sandboxes[id]) return
+    this.patchSandbox(id, { capacity: patch.capacity })
+    this.publish()
   }
 
   updateTrigger(id: TriggerId, patch: Partial<Omit<Trigger, 'id' | 'position'>>) {
@@ -402,7 +411,7 @@ export class MockServer {
           this.log(next === 'running' ? 'info' : 'debug', `${sb.name} → ${next}`)
         }
       }
-      const busy = sb.lease !== null
+      const busy = sb.leases.length > 0
       const off = sb.state === 'stopped' || sb.state === 'destroying'
       const target = off ? { cpu: 0, mem: 0, disk: sb.metrics.disk } : busy
         ? { cpu: this.rand(55, 95), mem: this.rand(45, 80), disk: sb.metrics.disk + this.rand(0, 0.15) }
@@ -494,7 +503,9 @@ export class MockServer {
       error: completion.status === 'failed' ? completion.reason : null,
     })
     const sb = w.sandboxes[run.sandboxId]
-    if (sb && sb.lease?.runId === run.id) this.patchSandbox(sb.id, { lease: null })
+    if (sb && sb.leases.some((l) => l.runId === run.id)) {
+      this.patchSandbox(sb.id, { leases: sb.leases.filter((l) => l.runId !== run.id) })
+    }
     if (output) {
       if (agent) this.patchAgent(agent.id, { completed: agent.completed + 1 })
       if (task) this.patchTask(task.id, { status: 'succeeded' })
@@ -543,7 +554,7 @@ export class MockServer {
    * records (never agent or run status), so terminal prerequisite failures
    * cannot hide behind paused, full, or retrying agents. Phase 2 runs the
    * existing admission checks (priority, concurrency, pause, retry deadline,
-   * sandbox lease) for tasks whose dependencies allow them to proceed.
+   * sandbox capacity) for tasks whose dependencies allow them to proceed.
    */
   private schedule() {
     const w = this.world
@@ -610,10 +621,15 @@ export class MockServer {
         if (free <= 0) break
         if (depBlocked.has(task.id)) continue
         if (task.retryAt !== null && task.retryAt > w.now) continue
-        const sandbox = edges.filter((e) => e.kind === 'runs-in' && e.source === agent.id).map((e) => w.sandboxes[e.target as SandboxId]).find((x) => x && x.state === 'running' && x.lease === null)
+        // least-loaded attached sandbox with room; the reduce keeps edge insertion
+        // order on ties, so an idle Coder still picks mac-studio before builder-a
+        const attached = edges.filter((e) => e.kind === 'runs-in' && e.source === agent.id)
+        const candidates = attached
+          .map((e) => w.sandboxes[e.target as SandboxId])
+          .filter((x): x is Sandbox => !!x && x.state === 'running' && x.leases.length < x.capacity)
+        const sandbox = candidates.length === 0 ? undefined : candidates.reduce((best, x) => (x.leases.length < best.leases.length ? x : best))
         if (!sandbox) {
-          const any = edges.some((e) => e.kind === 'runs-in' && e.source === agent.id)
-          this.patchTask(task.id, { status: 'waiting', blockedOn: any ? 'no free sandbox' : 'no sandbox attached' })
+          this.patchTask(task.id, { status: 'waiting', blockedOn: attached.length > 0 ? 'no free sandbox' : 'no sandbox attached' })
           continue
         }
         this.startRun(agent, task, sandbox)
@@ -631,7 +647,7 @@ export class MockServer {
     }
     this.world.runs = { ...this.world.runs, [id]: run }
     this.patchTask(task.id, { status: 'running', attempts: task.attempts + 1, retryAt: null, blockedOn: null })
-    this.patchSandbox(sandbox.id, { lease: { agentId: agent.id, runId: id, since: this.world.now } })
+    this.patchSandbox(sandbox.id, { leases: [...sandbox.leases, { agentId: agent.id, runId: id, since: this.world.now }] })
     this.patchAgent(agent.id, { status: 'working' })
     this.log('info', `run started on ${sandbox.name} (attempt ${run.attempt}): ${task.title}`, { runId: id, agentId: agent.id })
     if (task.input) {
@@ -674,7 +690,13 @@ function load(): World | null {
     if (!p.agents || !p.sandboxes || !p.triggers || !p.edges) return null
     const now = Date.now()
     const agents = Object.fromEntries(Object.entries(p.agents).map(([id, a]) => [id, { ...a, status: a.status === 'paused' ? 'paused' : 'idle' }])) as World['agents']
-    const sandboxes = Object.fromEntries(Object.entries(p.sandboxes).map(([id, s]) => [id, { ...s, lease: null, history: [], stateSince: now }])) as World['sandboxes']
+    const sandboxes = Object.fromEntries(Object.entries(p.sandboxes).map(([id, s]) => [id, {
+      ...s,
+      capacity: isCapacity(s.capacity) ? s.capacity : 1,
+      leases: [],
+      history: [],
+      stateSince: now,
+    }])) as World['sandboxes']
     const triggers = Object.fromEntries(Object.entries(p.triggers).map(([id, t]) => [id, { ...t, lastFiredAt: null }])) as World['triggers']
     return { ...seedWorld(now), agents, sandboxes, triggers, edges: p.edges, sim: p.sim ?? { paused: false, speed: 1 } }
   } catch {

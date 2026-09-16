@@ -4,7 +4,7 @@ import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, type Agent, type Sandbox, type
 import { Dot, cx } from '../ui'
 
 export type AgentNodeType = Node<{ agent: Agent; running: number; queued: number }, 'agent'>
-export type SandboxNodeType = Node<{ sandbox: Sandbox; leaseName: string | null }, 'sandbox'>
+export type SandboxNodeType = Node<{ sandbox: Sandbox; holders: string[] }, 'sandbox'>
 export type TriggerNodeType = Node<{ trigger: Trigger; nextIn: number | null }, 'trigger'>
 export type FactoryNode = AgentNodeType | SandboxNodeType | TriggerNodeType
 
@@ -45,7 +45,7 @@ export function AgentNode({ data, selected }: NodeProps<AgentNodeType>) {
 }
 
 export function SandboxNode({ data, selected }: NodeProps<SandboxNodeType>) {
-  const { sandbox, leaseName } = data
+  const { sandbox, holders } = data
   const color = SANDBOX_STATE_COLOR[sandbox.state]
   const timed = sandbox.state !== 'running' && sandbox.state !== 'stopped' && sandbox.state !== 'error'
   return (
@@ -72,7 +72,10 @@ export function SandboxNode({ data, selected }: NodeProps<SandboxNodeType>) {
             ))}
           </div>
         )}
-        <div className="text-[10px] text-ink-400 truncate">{leaseName ? <span className="text-cyan-300">leased by {leaseName}</span> : timed ? `${Math.round(sandbox.progress * 100)}%` : 'no lease'}</div>
+        <div className="text-[10px] text-ink-400 truncate">
+          <span className="font-mono tabular-nums">leases {sandbox.leases.length}/{sandbox.capacity}</span>
+          {holders.length > 0 && <span className="text-cyan-300"> · {holders.join(', ')}</span>}
+        </div>
       </div>
     </div>
   )

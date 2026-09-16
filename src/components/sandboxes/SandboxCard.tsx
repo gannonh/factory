@@ -24,9 +24,7 @@ export function SandboxCard({ sandbox, expanded, onClick, selected }: { sandbox:
   const color = SANDBOX_STATE_COLOR[sandbox.state]
   const allowed = SANDBOX_TRANSITIONS[sandbox.state]
   const timed = TIMED_LABEL[sandbox.state]
-  const lease = sandbox.lease
-  const leaseAgent = lease ? world.agents[lease.agentId] : null
-  const leaseRun = lease ? world.runs[lease.runId] : null
+  const leases = sandbox.leases
   const cpuHistory = sandbox.history.map((m) => m.cpu)
   return (
     <div
@@ -65,14 +63,17 @@ export function SandboxCard({ sandbox, expanded, onClick, selected }: { sandbox:
         </div>
       )}
 
-      <div className="rounded-md border border-ink-700 bg-ink-900 px-2 py-1.5 text-[11px]">
-        {lease && leaseAgent ? (
-          <div className="flex items-center gap-2">
-            <span className="size-1.5 rounded-full bg-cyan-400 pulse-working" />
-            <span className="text-cyan-200 font-medium">{leaseAgent.name}</span>
-            <span className="text-ink-400 truncate flex-1">{leaseRun?.title ?? ''}</span>
-            <span className="text-ink-500 font-mono tabular-nums">{fmtDuration(world.now - lease.since)}</span>
-          </div>
+      <div className="rounded-md border border-ink-700 bg-ink-900 px-2 py-1.5 text-[11px] flex flex-col gap-1">
+        <div className="font-mono tabular-nums text-ink-400">leases {leases.length}/{sandbox.capacity}</div>
+        {leases.length > 0 ? (
+          leases.map((lease) => (
+            <div key={lease.runId} className="flex items-center gap-2">
+              <span className="size-1.5 rounded-full bg-cyan-400 pulse-working" />
+              <span className="text-cyan-200 font-medium">{world.agents[lease.agentId]?.name}</span>
+              <span className="text-ink-400 truncate flex-1">{world.runs[lease.runId]?.title ?? ''}</span>
+              <span className="text-ink-500 font-mono tabular-nums">{fmtDuration(world.now - lease.since)}</span>
+            </div>
+          ))
         ) : (
           <span className="text-ink-500">no lease holder · {sandbox.state} {fmtAgo(world.now, sandbox.stateSince)}</span>
         )}
