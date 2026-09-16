@@ -16,21 +16,11 @@ export function EventsTab() {
   }, [world.events.length])
 
   const open = (ev: FactoryEvent) => {
-    const s = ev.subject
-    if (s.kind === 'run') {
-      if (world.runs[s.id]) select(s)
-      setDockTab('runs')
-      return
-    }
-    if (s.kind === 'edge') {
-      if (world.edges[s.id]) {
-        setView('canvas')
-        select({ kind: 'edge', id: s.id })
-      }
-      return
-    }
-    const selection = existingSubject(world, s)
-    if (selection) select(selection)
+    const selection = existingSubject(world, ev.subject)
+    if (ev.subject.kind === 'run') setDockTab('runs')
+    if (!selection) return
+    if (selection.kind === 'edge') setView('canvas')
+    select(selection)
   }
 
   if (world.events.length === 0) return <div className="h-full flex items-center justify-center text-xs text-ink-500">No events yet.</div>

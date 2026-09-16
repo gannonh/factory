@@ -247,7 +247,7 @@ export function nodeKindOf(world: World, id: string): NodeKind | null {
   return null
 }
 
-/** The subject when its record still exists in the world, otherwise null. Used to open stale event subjects safely. */
+/** Resolve a subject against the world: the subject while its record exists, otherwise null. Used by event clicks and selection cleanup. */
 export function existingSubject(world: World, subject: Subject): Subject | null {
   switch (subject.kind) {
     case 'agent': return world.agents[subject.id] ? subject : null
