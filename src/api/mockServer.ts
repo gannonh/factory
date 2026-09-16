@@ -398,7 +398,11 @@ export class MockServer {
   }
 
   reset() {
-    this.storage?.removeItem(STORAGE_KEY)
+    try {
+      this.storage?.removeItem(STORAGE_KEY)
+    } catch {
+      /* storage unavailable: reset in memory only */
+    }
     this.world = seedWorld(Date.now())
     this.publish()
   }
@@ -699,6 +703,30 @@ export class MockServer {
 
 type Persisted = Pick<World, 'now' | 'agents' | 'sandboxes' | 'triggers' | 'edges' | 'sim' | 'tasks' | 'runs' | 'events'>
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** A record whose entries are all records; rejects arrays and null entries. */
+function isRecordMap(value: unknown): value is Record<string, Record<string, unknown>> {
+  return isRecord(value) && Object.values(value).every(isRecord)
+}
+
+/**
+ * Shape check for a saved payload. Anything restoration consumes must be
+ * present and the right kind; a malformed save is rejected whole so the caller
+ * seeds a fresh world instead of crashing while restoring it.
+ */
+function isPersisted(value: unknown): value is Persisted {
+  return isRecord(value)
+    && typeof value.now === 'number' && Number.isFinite(value.now)
+    && isRecordMap(value.agents) && isRecordMap(value.sandboxes) && isRecordMap(value.triggers)
+    && isRecordMap(value.edges) && isRecordMap(value.tasks) && isRecordMap(value.runs)
+    && isRecord(value.sim) && typeof value.sim.paused === 'boolean'
+    && (value.sim.speed === 1 || value.sim.speed === 2 || value.sim.speed === 4)
+    && Array.isArray(value.events) && value.events.every((e) => isRecord(e) && typeof e.id === 'number' && Number.isFinite(e.id))
+}
+
 /**
  * The save payload for a world: what survives a reload. Logs never do. Every
  * running run is kept plus the newest MAX_COMPLETED_RUNS finished runs; tasks
@@ -754,8 +782,9 @@ function load(storage: StorageLike | null): World | null {
   try {
     const raw = storage.getItem(STORAGE_KEY)
     if (!raw) return null
-    const p = JSON.parse(raw) as Persisted
-    if (!p.agents || !p.sandboxes || !p.triggers || !p.edges || !p.tasks || !p.runs || !p.events || typeof p.now !== 'number') return null
+    const parsed: unknown = JSON.parse(raw)
+    if (!isPersisted(parsed)) return null
+    const p = parsed
     const now = p.now
     const agents = Object.fromEntries(Object.entries(p.agents).map(([id, a]) => [id, { ...a, status: a.status === 'paused' ? 'paused' : 'idle' }])) as World['agents']
     const sandboxes = Object.fromEntries(Object.entries(p.sandboxes).map(([id, s]) => [id, {
@@ -773,7 +802,7 @@ function load(storage: StorageLike | null): World | null {
       sandboxes,
       triggers,
       edges: p.edges,
-      sim: p.sim ?? { paused: false, speed: 1 },
+      sim: p.sim,
       tasks: p.tasks,
       runs: p.runs,
       events: p.events,

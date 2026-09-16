@@ -324,6 +324,27 @@ test('a reload keeps the newest 200 completed runs plus the interrupted one, nev
   expect(w.tasks[coderTask.id].flowId).toBe(plannerTask.flowId)
 })
 
+test('a malformed v3 save is discarded instead of crashing the load', () => {
+  const malformed = [
+    { label: 'events as an object', patch: { events: {} } },
+    { label: 'runs as an array', patch: { runs: [] } },
+    { label: 'non-numeric now', patch: { now: 'soon' } },
+    { label: 'null run entry', patch: { runs: { 'run-x': null } } },
+    { label: 'event without an id', patch: { events: [{ msg: 'no id' }] } },
+  ]
+  for (const { label, patch } of malformed) {
+    const storage = makeStorage()
+    storage.setItem(STORAGE_KEY, JSON.stringify({
+      now: 1, agents: {}, sandboxes: {}, triggers: {}, edges: {}, sim: { paused: false, speed: 1 },
+      tasks: {}, runs: {}, events: [], ...patch,
+    }))
+    let server: MockServer | undefined
+    expect(() => { server = new MockServer({ manual: true, rng: RNG, storage }) }, label).not.toThrow()
+    expect(Object.keys(server!.snapshot().agents), label).toHaveLength(4) // seed, not the malformed save
+    expect(Object.keys(server!.snapshot().runs), label).toEqual([])
+  }
+})
+
 test('retainWorld selects runs, tasks and events by the persistence rules', () => {
   const w = seedWorld(1000)
   const run = (id: string, taskId: TaskId, startedAt: number, status: Run['status']): Run => ({
