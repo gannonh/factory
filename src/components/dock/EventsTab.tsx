@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import type { EventKind, FactoryEvent } from '../../domain/types'
+import { existingSubject, type EventKind, type FactoryEvent } from '../../domain/types'
 import { useStore } from '../../store'
 import { cx, fmtTime } from '../ui'
 
@@ -16,22 +16,11 @@ export function EventsTab() {
   }, [world.events.length])
 
   const open = (ev: FactoryEvent) => {
-    const s = ev.subject
-    if (s.kind === 'run') {
-      if (world.runs[s.id]) select(s)
-      setDockTab('runs')
-      return
-    }
-    if (s.kind === 'edge') {
-      if (world.edges[s.id]) {
-        setView('canvas')
-        select({ kind: 'edge', id: s.id })
-      }
-      return
-    }
-    if (s.kind === 'agent' && world.agents[s.id]) select(s)
-    else if (s.kind === 'sandbox' && world.sandboxes[s.id]) select(s)
-    else if (s.kind === 'trigger' && world.triggers[s.id]) select(s)
+    const selection = existingSubject(world, ev.subject)
+    if (ev.subject.kind === 'run') setDockTab('runs')
+    if (!selection) return
+    if (selection.kind === 'edge') setView('canvas')
+    select(selection)
   }
 
   if (world.events.length === 0) return <div className="h-full flex items-center justify-center text-xs text-ink-500">No events yet.</div>

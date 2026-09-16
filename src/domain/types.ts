@@ -247,6 +247,18 @@ export function nodeKindOf(world: World, id: string): NodeKind | null {
   return null
 }
 
+/** Resolve a subject against the world: the subject while its record exists, otherwise null. Used by event clicks and selection cleanup. */
+export function existingSubject(world: World, subject: Subject): Subject | null {
+  switch (subject.kind) {
+    case 'agent': return world.agents[subject.id] ? subject : null
+    case 'sandbox': return world.sandboxes[subject.id] ? subject : null
+    case 'trigger': return world.triggers[subject.id] ? subject : null
+    case 'run': return world.runs[subject.id] ? subject : null
+    case 'task': return world.tasks[subject.id] ? subject : null
+    case 'edge': return world.edges[subject.id] ? subject : null
+  }
+}
+
 export function taskOriginLabel(world: World, origin: Task['origin']): string {
   switch (origin.kind) {
     case 'trigger': return world.triggers[origin.id]?.name ?? 'trigger'
