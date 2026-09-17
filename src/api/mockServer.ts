@@ -3,6 +3,7 @@ import {
   EDGE_RULES,
   SANDBOX_TIMED,
   SANDBOX_TRANSITIONS,
+  attachedEdges,
   edgeKindFor,
   nodeKindOf,
   type Agent,
@@ -43,6 +44,18 @@ const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const isCapacity = (v: number) => Number.isInteger(v) && v >= 1
+
+/** What may join two nodes, or null when either endpoint is gone. */
+function connectable(world: World, source: NodeId, target: NodeId): { from: NodeKind; to: NodeKind; kinds: EdgeKind[] } | null {
+  const from = nodeKindOf(world, source)
+  const to = nodeKindOf(world, target)
+  return from && to ? { from, to, kinds: edgeKindFor(from, to) } : null
+}
+
+/** Whether an edge with these endpoints and kind already exists, ignoring `exceptId`. */
+function edgeExists(world: World, source: NodeId, target: NodeId, kind: EdgeKind, exceptId?: EdgeId): boolean {
+  return Object.values(world.edges).some((e) => e.id !== exceptId && e.source === source && e.target === target && e.kind === kind)
+}
 
 /** `window.localStorage` access throws when site data is blocked; run in memory then. */
 function browserStorage(): StorageLike | null {
@@ -273,10 +286,11 @@ export class MockServer {
       else if (gone.has(r.sandboxId)) this.finishRun(r, { status: 'failed', reason: 'sandbox deleted' })
     }
     for (const t of Object.values(w.tasks)) if (gone.has(t.agentId) && (t.status === 'queued' || t.status === 'waiting')) this.patchTask(t.id, { status: 'cancelled', blockedOn: null })
+    const attached = new Set<string>(attachedEdges(w, ids).map((e) => e.id))
     w.agents = Object.fromEntries(Object.entries(w.agents).filter(([id]) => !gone.has(id))) as World['agents']
     w.triggers = Object.fromEntries(Object.entries(w.triggers).filter(([id]) => !gone.has(id))) as World['triggers']
     for (const id of ids) if (w.sandboxes[id as SandboxId]) this.removeSandbox(id as SandboxId)
-    w.edges = Object.fromEntries(Object.entries(w.edges).filter(([, e]) => !gone.has(e.source) && !gone.has(e.target))) as World['edges']
+    w.edges = Object.fromEntries(Object.entries(w.edges).filter(([id]) => !attached.has(id))) as World['edges']
     this.event('graph', { kind: 'agent', id: ids[0] as AgentId }, `Deleted ${ids.length} node${ids.length === 1 ? '' : 's'}`)
     this.publish()
   }
@@ -309,10 +323,9 @@ export class MockServer {
     let restored = 0
     for (const { id, kind, source, target } of edges) {
       if (w.edges[id]) continue
-      const from = nodeKindOf(w, source)
-      const to = nodeKindOf(w, target)
-      if (!from || !to || !edgeKindFor(from, to).includes(kind)) continue
-      if (Object.values(w.edges).some((e) => e.source === source && e.target === target && e.kind === kind)) continue
+      const join = connectable(w, source, target)
+      if (!join || !join.kinds.includes(kind)) continue
+      if (edgeExists(w, source, target, kind)) continue
       w.edges = { ...w.edges, [id]: { id, kind, source, target } }
       restored += 1
     }
@@ -321,15 +334,11 @@ export class MockServer {
 
   connect(source: NodeId, target: NodeId, preferred: EdgeKind | null): { ok: true; id: EdgeId } | { ok: false; reason: string } {
     const w = this.world
-    const from = nodeKindOf(w, source)
-    const to = nodeKindOf(w, target)
-    if (!from || !to) return { ok: false, reason: 'unknown node' }
-    const kinds = edgeKindFor(from, to)
-    if (kinds.length === 0) return { ok: false, reason: `${from} → ${to} is not a valid connection` }
-    const kind = preferred && kinds.includes(preferred) ? preferred : kinds[0]
-    if (Object.values(w.edges).some((e) => e.source === source && e.target === target && e.kind === kind)) {
-      return { ok: false, reason: 'edge already exists' }
-    }
+    const join = connectable(w, source, target)
+    if (!join) return { ok: false, reason: 'unknown node' }
+    if (join.kinds.length === 0) return { ok: false, reason: `${join.from} → ${join.to} is not a valid connection` }
+    const kind = preferred && join.kinds.includes(preferred) ? preferred : join.kinds[0]
+    if (edgeExists(w, source, target, kind)) return { ok: false, reason: 'edge already exists' }
     const id = this.uid('ed') as EdgeId
     w.edges = { ...w.edges, [id]: { id, kind, source, target } }
     this.event('graph', { kind: 'edge', id }, `Connected ${this.nameOf(source)} → ${this.nameOf(target)} (${EDGE_RULES[kind].label})`)
@@ -340,10 +349,9 @@ export class MockServer {
   setEdgeKind(id: EdgeId, kind: EdgeKind) {
     const e = this.world.edges[id]
     if (!e) return
-    const from = nodeKindOf(this.world, e.source)
-    const to = nodeKindOf(this.world, e.target)
-    if (!from || !to || !edgeKindFor(from, to).includes(kind)) return
-    if (Object.values(this.world.edges).some((o) => o.id !== id && o.source === e.source && o.target === e.target && o.kind === kind)) return
+    const join = connectable(this.world, e.source, e.target)
+    if (!join || !join.kinds.includes(kind)) return
+    if (edgeExists(this.world, e.source, e.target, kind, id)) return
     this.world.edges = { ...this.world.edges, [id]: { ...e, kind } }
     this.publish()
   }
@@ -502,8 +510,9 @@ export class MockServer {
 
   private removeSandbox(id: SandboxId) {
     const w = this.world
+    const attached = new Set<string>(attachedEdges(w, [id]).map((e) => e.id))
     w.sandboxes = Object.fromEntries(Object.entries(w.sandboxes).filter(([k]) => k !== id)) as World['sandboxes']
-    w.edges = Object.fromEntries(Object.entries(w.edges).filter(([, e]) => e.source !== id && e.target !== id)) as World['edges']
+    w.edges = Object.fromEntries(Object.entries(w.edges).filter(([edgeId]) => !attached.has(edgeId))) as World['edges']
   }
 
   private tickTriggers() {

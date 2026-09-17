@@ -6,7 +6,6 @@
  * keep their native text undo.
  */
 import { useEffect } from 'react'
-import { history } from './store'
 
 type ShortcutEvent = Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>
 type ShortcutTarget = { tagName?: string; type?: string; isContentEditable?: boolean }
@@ -28,7 +27,7 @@ export function historyShortcut(event: ShortcutEvent, target: ShortcutTarget | n
   return null
 }
 
-export function useHistoryShortcuts() {
+export function useHistoryShortcuts(history: { undo: () => void; redo: () => void }) {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const action = historyShortcut(e, e.target instanceof HTMLElement ? e.target : null)
@@ -39,5 +38,5 @@ export function useHistoryShortcuts() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+  }, [history])
 }
