@@ -1,6 +1,6 @@
 import { Pause, Play, RotateCcw } from 'lucide-react'
 import { api } from '../api/client'
-import { useStore } from '../store'
+import { history, useStore } from '../store'
 import { Button, cx } from './ui'
 
 export function TopBar() {
@@ -49,7 +49,7 @@ export function TopBar() {
             </button>
           ))}
         </div>
-        <Button variant="ghost" onClick={() => api.sim.reset()} title="Reset to seed data">
+        <Button variant="ghost" onClick={() => history.reset()} title="Reset to seed data">
           <RotateCcw size={13} />
           Reset
         </Button>

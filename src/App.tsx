@@ -6,10 +6,12 @@ import { Inspector } from './components/inspector/Inspector'
 import { AgentsView } from './components/agents/AgentsView'
 import { SandboxesView } from './components/sandboxes/SandboxesView'
 import { Dock } from './components/dock/Dock'
-import { useStore } from './store'
+import { history, useStore } from './store'
+import { useHistoryShortcuts } from './historyShortcuts'
 
 export default function App() {
   const view = useStore((s) => s.view)
+  useHistoryShortcuts(history)
   return (
     <ReactFlowProvider>
       <div className="h-full flex flex-col">

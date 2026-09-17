@@ -271,6 +271,12 @@ export function edgeKindFor(from: NodeKind, to: NodeKind): EdgeKind[] {
   return EDGE_KINDS.filter((k) => EDGE_RULES[k].from === from && EDGE_RULES[k].to === to)
 }
 
+/** Edges with an endpoint among `ids`; deleting a node takes these with it. */
+export function attachedEdges(world: World, ids: Iterable<NodeId>): Edge[] {
+  const endpoints = new Set<string>(ids)
+  return Object.values(world.edges).filter((e) => endpoints.has(e.source) || endpoints.has(e.target))
+}
+
 export const AGENT_STATUS_COLOR: Record<AgentStatus, string> = {
   idle: '#64748b',
   working: '#22d3ee',

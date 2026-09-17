@@ -1,7 +1,6 @@
 import { Trash2 } from 'lucide-react'
-import { api } from '../../api/client'
 import { EDGE_RULES, edgeKindFor, nodeKindOf, type Edge } from '../../domain/types'
-import { useStore } from '../../store'
+import { history, useStore } from '../../store'
 import { Button, Section, cx } from '../ui'
 
 export function EdgeInspector({ edge }: { edge: Edge }) {
@@ -23,7 +22,7 @@ export function EdgeInspector({ edge }: { edge: Edge }) {
           {options.map((k) => (
             <button
               key={k}
-              onClick={() => api.graph.setEdgeKind(edge.id, k)}
+              onClick={() => history.setEdgeKind(edge.id, k)}
               className={cx('flex items-center gap-3 rounded-md border px-2 py-1.5 text-xs text-left', edge.kind === k ? 'border-cyan-400/50 bg-cyan-500/10' : 'border-ink-700 hover:bg-ink-800')}
             >
               <svg width="30" height="6"><line x1="0" y1="3" x2="30" y2="3" stroke={EDGE_RULES[k].color} strokeWidth="2" strokeDasharray={EDGE_RULES[k].dash || undefined} /></svg>
@@ -33,7 +32,7 @@ export function EdgeInspector({ edge }: { edge: Edge }) {
           ))}
         </div>
       </Section>
-      <Button variant="danger" onClick={() => api.graph.removeEdges([edge.id])}><Trash2 size={12} />Delete edge</Button>
+      <Button variant="danger" onClick={() => history.removeEdges([edge.id])}><Trash2 size={12} />Delete edge</Button>
     </>
   )
 }
