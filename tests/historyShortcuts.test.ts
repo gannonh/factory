@@ -33,12 +33,15 @@ test('the letter printed on the key decides on QWERTZ and AZERTY layouts', () =>
   expect(historyShortcut({ ...keys, key: 'z', code: 'KeyY', ctrlKey: true }, body)).toBe('undo')
   expect(historyShortcut({ ...keys, key: 'y', code: 'KeyZ', ctrlKey: true }, body)).toBe('redo')
   expect(historyShortcut({ ...keys, key: 'z', code: 'KeyW', ctrlKey: true }, body)).toBe('undo')
+  expect(historyShortcut({ ...keys, key: 'Z', code: 'KeyW', ctrlKey: true, shiftKey: true }, body)).toBe('redo')
+  expect(historyShortcut({ ...keys, key: 'w', code: 'KeyZ', ctrlKey: true }, body)).toBeNull()
 })
 
 test('a key that is not a Latin letter falls back to the Z or Y key position', () => {
   expect(historyShortcut({ ...keys, key: 'я', code: 'KeyZ', ctrlKey: true }, body)).toBe('undo')
   expect(historyShortcut({ ...keys, key: 'н', code: 'KeyY', ctrlKey: true }, body)).toBe('redo')
-  expect(historyShortcut({ ...keys, key: ';', code: 'Semicolon', ctrlKey: true }, body)).toBeNull()
+  // a Latin letter on the Y position (Dvorak F) keeps its own meaning
+  expect(historyShortcut({ ...keys, key: 'f', code: 'KeyY', ctrlKey: true }, body)).toBeNull()
 })
 
 test('a missing Cmd or Ctrl, a held Alt, or another key is not a shortcut', () => {
