@@ -192,6 +192,16 @@ test('undo of a trigger delete restores it with lastFiredAt null and its capture
   expect(Object.values(fixture.world().edges).some((e) => e.source === trigger.id)).toBe(true)
 })
 
+test('undo of a paused agent delete restores it still paused', () => {
+  const { fixture, history } = setup()
+  const planner = fixture.agent('Planner')
+  fixture.api.agents.setPaused(planner, true)
+
+  history.delete({ nodeIds: [planner], edgeIds: [] })
+  history.undo()
+  expect(fixture.world().agents[planner].status).toBe('paused')
+})
+
 test('a node delete with a separately selected edge is one undo step', () => {
   const { fixture, history } = setup()
   const created = history.createNode('trigger', { x: 0, y: 0 })
@@ -311,6 +321,19 @@ test('typing a character and deleting it again leaves nothing to undo', () => {
   history.undo()
   expect(fixture.world().agents).not.toHaveProperty(created)
   expect(history.canUndo()).toBe(false)
+})
+
+test('an edit after a dropped entry starts a new undo step instead of extending the entry below', () => {
+  const { fixture, history } = setup()
+  const planner = fixture.agent('Planner')
+  const role = fixture.world().agents[planner].role
+
+  history.updateAgent(planner, { name: 'Lead' })
+  history.updateAgent(planner, { role: 'architect' })
+  history.updateAgent(planner, { role })
+  history.updateAgent(planner, { name: 'Lead2' })
+  history.undo()
+  expect(fixture.world().agents[planner].name).toBe('Lead')
 })
 
 test('an undo or redo between same-key edits starts a new undo step', () => {

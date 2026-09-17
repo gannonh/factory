@@ -203,7 +203,10 @@ export function createHistory(api: Api, getWorld: () => World) {
     },
     connect: (source: NodeId, target: NodeId, preferred: EdgeKind | null) => {
       const result = api.graph.connect(source, target, preferred)
-      if (result.ok) push({ kind: 'connect', edge: getWorld().edges[result.id] })
+      if (result.ok) {
+        const edge = getWorld().edges[result.id]
+        if (edge) push({ kind: 'connect', edge })
+      }
       return result
     },
     removeEdges: (ids: EdgeId[]) => {
