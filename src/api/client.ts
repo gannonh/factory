@@ -4,7 +4,7 @@
  */
 import { mockServer, MockServer } from './mockServer'
 import type {
-  Agent, AgentId, EdgeId, EdgeKind, NodeId, NodeKind, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
+  Agent, AgentId, Edge, EdgeId, EdgeKind, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
 } from '../domain/types'
 
 const buildApi = (server: MockServer) => ({
@@ -16,6 +16,9 @@ const buildApi = (server: MockServer) => ({
     connect: (source: NodeId, target: NodeId, preferred: EdgeKind | null) => server.connect(source, target, preferred),
     setEdgeKind: (id: EdgeId, kind: EdgeKind) => server.setEdgeKind(id, kind),
     removeEdges: (ids: EdgeId[]) => server.removeEdges(ids),
+    /** put full records back under their original ids; used by undo and redo */
+    restoreNodes: (nodes: NodeRef[]) => server.restoreNodes(nodes),
+    restoreEdges: (edges: Edge[]) => server.restoreEdges(edges),
   },
   agents: {
     update: (id: AgentId, patch: Partial<Omit<Agent, 'id' | 'status' | 'position'>>) => server.updateAgent(id, patch),

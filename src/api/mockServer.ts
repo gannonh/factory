@@ -7,6 +7,7 @@ import {
   nodeKindOf,
   type Agent,
   type AgentId,
+  type Edge,
   type EdgeId,
   type EdgeKind,
   type FactoryEvent,
@@ -14,6 +15,7 @@ import {
   type LogLevel,
   type NodeId,
   type NodeKind,
+  type NodeRef,
   type Position,
   type Priority,
   type Run,
@@ -277,6 +279,44 @@ export class MockServer {
     w.edges = Object.fromEntries(Object.entries(w.edges).filter(([, e]) => !gone.has(e.source) && !gone.has(e.target))) as World['edges']
     this.event('graph', { kind: 'agent', id: ids[0] as AgentId }, `Deleted ${ids.length} node${ids.length === 1 ? '' : 's'}`)
     this.publish()
+  }
+
+  /** Put node records back under their original ids with the reload normalization; ids already present are skipped. */
+  restoreNodes(nodes: NodeRef[]) {
+    const w = this.world
+    const restored: Subject[] = []
+    for (const ref of nodes) {
+      if (nodeKindOf(w, ref.node.id)) continue
+      if (ref.kind === 'agent') {
+        w.agents = { ...w.agents, [ref.node.id]: restoredAgent(ref.node) }
+        restored.push({ kind: 'agent', id: ref.node.id })
+      } else if (ref.kind === 'sandbox') {
+        w.sandboxes = { ...w.sandboxes, [ref.node.id]: restoredSandbox(ref.node, w.now) }
+        restored.push({ kind: 'sandbox', id: ref.node.id })
+      } else {
+        w.triggers = { ...w.triggers, [ref.node.id]: restoredTrigger(ref.node) }
+        restored.push({ kind: 'trigger', id: ref.node.id })
+      }
+    }
+    if (restored.length === 0) return
+    this.event('graph', restored[0], restored.length === 1 ? `Restored ${this.nameOf(restored[0].id)}` : `Restored ${restored.length} nodes`)
+    this.publish()
+  }
+
+  /** Put edges back under their original ids, in order, under the same validity and duplicate rules as `connect`. */
+  restoreEdges(edges: Edge[]) {
+    const w = this.world
+    let restored = 0
+    for (const { id, kind, source, target } of edges) {
+      if (w.edges[id]) continue
+      const from = nodeKindOf(w, source)
+      const to = nodeKindOf(w, target)
+      if (!from || !to || !edgeKindFor(from, to).includes(kind)) continue
+      if (Object.values(w.edges).some((e) => e.source === source && e.target === target && e.kind === kind)) continue
+      w.edges = { ...w.edges, [id]: { id, kind, source, target } }
+      restored += 1
+    }
+    if (restored > 0) this.publish()
   }
 
   connect(source: NodeId, target: NodeId, preferred: EdgeKind | null): { ok: true; id: EdgeId } | { ok: false; reason: string } {
@@ -776,6 +816,23 @@ function save(w: World, storage: StorageLike | null) {
   }
 }
 
+/**
+ * Normalization for a node record coming back from a save or an undo: runtime
+ * state (live status, leases, metric history, trigger schedule) starts fresh,
+ * everything else returns as captured.
+ */
+function restoredAgent(a: Agent): Agent {
+  return { ...a, status: a.status === 'paused' ? 'paused' : 'idle' }
+}
+
+function restoredSandbox(s: Sandbox, now: number): Sandbox {
+  return { ...s, capacity: isCapacity(s.capacity) ? s.capacity : 1, leases: [], history: [], stateSince: now }
+}
+
+function restoredTrigger(t: Trigger): Trigger {
+  return { ...t, lastFiredAt: null }
+}
+
 function load(storage: StorageLike | null): World | null {
   if (!storage) return null
   try {
@@ -785,15 +842,9 @@ function load(storage: StorageLike | null): World | null {
     if (!isPersisted(parsed)) return null
     const p = parsed
     const now = p.now
-    const agents = Object.fromEntries(Object.entries(p.agents).map(([id, a]) => [id, { ...a, status: a.status === 'paused' ? 'paused' : 'idle' }])) as World['agents']
-    const sandboxes = Object.fromEntries(Object.entries(p.sandboxes).map(([id, s]) => [id, {
-      ...s,
-      capacity: isCapacity(s.capacity) ? s.capacity : 1,
-      leases: [],
-      history: [],
-      stateSince: now,
-    }])) as World['sandboxes']
-    const triggers = Object.fromEntries(Object.entries(p.triggers).map(([id, t]) => [id, { ...t, lastFiredAt: null }])) as World['triggers']
+    const agents = Object.fromEntries(Object.entries(p.agents).map(([id, a]) => [id, restoredAgent(a)])) as World['agents']
+    const sandboxes = Object.fromEntries(Object.entries(p.sandboxes).map(([id, s]) => [id, restoredSandbox(s, now)])) as World['sandboxes']
+    const triggers = Object.fromEntries(Object.entries(p.triggers).map(([id, t]) => [id, restoredTrigger(t)])) as World['triggers']
     return {
       now,
       agents,
