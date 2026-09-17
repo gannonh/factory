@@ -11,15 +11,15 @@ A task waits for every existing prerequisite task within its own flow; unrelated
 5. Disable the seeded triggers (Nightly sweep, GitHub PR opened) in their inspectors.
 6. Create a manual trigger and connect it to both Planner and Coder with `triggers` edges.
 7. Draw a `depends-on` edge Planner → Coder (use the agent→agent edge toggle).
-8. Give Planner and Coder concurrency 1 in their inspectors.
+8. Give Planner concurrency 2 and Coder concurrency 1 in their inspectors.
 
 ## Overlap sequence (AC2, AC3, AC7, AC8)
 
 1. Fire the manual trigger twice while paused. Two firings, two flows: Queue shows both tasks per agent with distinct flow badges.
 2. Resume. Planner/F1 starts on mac-studio; Coder/F1 waits with `waiting on “<planner task title>” (task tk-…)` in the Waiting-on column; Planner/F2 waits with `no free sandbox`.
-3. When Planner/F1 succeeds (≈13s of simulated time), Coder/F1 starts on builder-a while Planner/F2 runs on mac-studio. Both flows visible in Runs with badges.
+3. When Planner/F1 succeeds (after its simulated run of 7–18s), Coder/F1 starts on builder-a while Planner/F2 runs on mac-studio. Both flows visible in Runs with badges.
 4. Open a task inspector: the full flow id is selectable text; hover/focus a Queue or Runs badge for the full id.
-5. Enqueue a manual task on Coder while Planner is busy: it has a fresh flow and starts on the next eligible pass, because no Planner task exists in its flow.
+5. Enqueue a manual task on Coder while Planner is busy: it has a fresh flow with no Planner task, so the dependency never holds it; it stays queued with no reason until it is Coder's next unblocked task and a concurrency slot is free.
 
 ## Failure sequence (AC5, AC7)
 
