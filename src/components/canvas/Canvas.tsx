@@ -2,11 +2,10 @@ import {
   Background, BackgroundVariant, Controls, MiniMap, ReactFlow, SelectionMode, useEdgesState, useNodesState, useReactFlow,
   type Connection, type IsValidConnection, type OnEdgesChange, type OnNodesChange,
 } from '@xyflow/react'
-import { LayoutGrid, Maximize2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api } from '../../api/client'
+import { LayoutGrid, Maximize2, Redo2, Undo2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, edgeKindFor, nodeKindOf, type AgentId, type EdgeId, type NodeId, type NodeKind, type SandboxId, type Subject, type TriggerId, type World } from '../../domain/types'
-import { useStore, type Selection } from '../../store'
+import { history, useStore, type Selection } from '../../store'
 import { Button, cx } from '../ui'
 import { ContextMenu, type MenuState } from './ContextMenu'
 import { EdgeLegend, edgeTypes, type FactoryEdgeType } from './FactoryEdge'
@@ -84,6 +83,8 @@ export function Canvas() {
   const { screenToFlowPosition, fitView } = useReactFlow()
   const fitted = useRef(false)
   const graphSelectionPending = useRef(false)
+  const canUndo = useSyncExternalStore(history.subscribe, history.canUndo)
+  const canRedo = useSyncExternalStore(history.subscribe, history.canRedo)
 
   useEffect(() => {
     const currentSelection = useStore.getState().selection
@@ -174,7 +175,7 @@ export function Canvas() {
   const onConnect = useCallback(
     (c: Connection) => {
       if (!c.source || !c.target) return
-      const r = api.graph.connect(c.source as NodeId, c.target as NodeId, agentEdgeTool)
+      const r = history.connect(c.source as NodeId, c.target as NodeId, agentEdgeTool)
       if (!r.ok) setToast(r.reason)
     },
     [agentEdgeTool],
@@ -182,7 +183,7 @@ export function Canvas() {
 
   const onNodeDragStop = useCallback(
     (_: unknown, __: FactoryNode, dragged: FactoryNode[]) => {
-      api.graph.updatePositions(dragged.map((n) => ({ id: n.id as NodeId, position: n.position })))
+      history.move(dragged.map((n) => ({ id: n.id as NodeId, position: n.position })))
     },
     [],
   )
@@ -198,14 +199,14 @@ export function Canvas() {
   const spawn = useCallback(
     (kind: NodeKind) => {
       if (!menu) return
-      select(nodeSelection(kind, api.graph.createNode(kind, menu.flow)))
+      select(nodeSelection(kind, history.createNode(kind, menu.flow)))
       setMenu(null)
     },
     [menu, select],
   )
 
   const runLayout = useCallback(() => {
-    api.graph.updatePositions(autoLayout(world))
+    history.move(autoLayout(world))
     requestAnimationFrame(() => fitView({ padding: 0.15, duration: 400 }))
   }, [world, fitView])
 
@@ -227,8 +228,7 @@ export function Canvas() {
         onConnect={onConnect}
         isValidConnection={isValidConnection}
         onNodeDragStop={onNodeDragStop}
-        onNodesDelete={(ns) => api.graph.deleteNodes(ns.map((n) => n.id as NodeId))}
-        onEdgesDelete={(es) => api.graph.removeEdges(es.map((e) => e.id as EdgeId))}
+        onDelete={({ nodes: ns, edges: es }) => history.delete({ nodeIds: ns.map((n) => n.id as NodeId), edgeIds: es.map((e) => e.id as EdgeId) })}
         onPaneContextMenu={onPaneContextMenu}
         onPaneClick={() => setMenu(null)}
         selectionOnDrag
@@ -247,6 +247,12 @@ export function Canvas() {
 
       <div className="absolute top-3 left-3 flex items-center gap-2">
         <div className="flex items-center gap-1 rounded-lg border border-ink-700 bg-ink-900/90 backdrop-blur p-1">
+          <Button variant="ghost" size="xs" onClick={() => history.undo()} disabled={!canUndo} title="Undo (⌘/Ctrl+Z)">
+            <Undo2 size={13} /> Undo <span className="text-ink-500">⌘/Ctrl+Z</span>
+          </Button>
+          <Button variant="ghost" size="xs" onClick={() => history.redo()} disabled={!canRedo} title="Redo (⇧⌘/Ctrl+Z or ⌘/Ctrl+Y)">
+            <Redo2 size={13} /> Redo <span className="text-ink-500">⇧⌘/Ctrl+Z</span>
+          </Button>
           <Button variant="ghost" size="xs" onClick={runLayout} title="Auto-layout (dagre)"><LayoutGrid size={13} /> Layout</Button>
           <Button variant="ghost" size="xs" onClick={() => fitView({ padding: 0.15, duration: 300 })} title="Fit view"><Maximize2 size={13} /> Fit</Button>
         </div>

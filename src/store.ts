@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { api } from './api/client'
 import { existingSubject, type EdgeKind, type LogLevel, type Subject, type World } from './domain/types'
 import { seedWorld } from './domain/seed'
+import { createHistory } from './history'
 
 export type View = 'canvas' | 'agents' | 'sandboxes'
 export type DockTab = 'queue' | 'runs' | 'logs' | 'events'
@@ -53,5 +54,7 @@ api.subscribe((world) => {
     return s.selection && existingSubject(world, s.selection) === null ? { world, selection: null } : { world }
   })
 })
+
+export const history = createHistory(api, () => useStore.getState().world)
 
 export const useWorld = () => useStore((s) => s.world)

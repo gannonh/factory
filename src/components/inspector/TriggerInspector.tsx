@@ -1,12 +1,12 @@
 import { Zap } from 'lucide-react'
 import { api } from '../../api/client'
 import type { Trigger, TriggerKind } from '../../domain/types'
-import { useStore } from '../../store'
+import { history, useStore } from '../../store'
 import { Button, Field, Input, Section, Select, Textarea, fmtAgo } from '../ui'
 
 export function TriggerInspector({ trigger }: { trigger: Trigger }) {
   const world = useStore((s) => s.world)
-  const update = (patch: Partial<Omit<Trigger, 'id' | 'position'>>) => api.triggers.update(trigger.id, patch)
+  const update = (patch: Partial<Omit<Trigger, 'id' | 'position'>>) => history.updateTrigger(trigger.id, patch)
   const targets = Object.values(world.edges).filter((e) => e.kind === 'triggers' && e.source === trigger.id).map((e) => world.agents[e.target as keyof typeof world.agents]?.name).filter(Boolean)
   const periodic = trigger.kind !== 'manual'
   return (
