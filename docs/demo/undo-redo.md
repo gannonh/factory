@@ -7,7 +7,7 @@ The canvas keeps a session undo stack for graph edits. It records right-click sp
 1. Run `npm run dev` and open http://localhost:5173.
 2. Click Reset in the top bar, then Pause. Click Fit in the canvas toolbar if the graph sits under the toolbar. Undo and Redo in the canvas toolbar are disabled.
 
-The shortcut keys act only while focus is outside text entry, so click the canvas background after typing in an inspector field before pressing them. To check ids, wait one second for the throttled save and run `JSON.parse(localStorage.getItem('factory.world.v3')).edges` (or `.agents`, `.triggers`) in DevTools.
+Each section below starts from this fixture, so its step counts begin with an empty undo stack. The shortcut keys act only while focus is outside text entry, so click the canvas background after typing in an inspector field before pressing them. Clicking the background also closes the inspector; select the node again to read its values. To check ids, wait one second for the throttled save and run `JSON.parse(localStorage.getItem('factory.world.v3')).edges` (or `.agents`, `.triggers`) in DevTools.
 
 ## Demonstration (AC1, AC2, AC3, AC4)
 
@@ -56,7 +56,7 @@ The shortcut keys act only while focus is outside text entry, so click the canva
 2. Resume the simulation. When two Coder runs are `running` and two tasks are queued, note Coder's `failed` counter in its inspector (0 after Reset).
 3. With the simulation still running, click Coder on the canvas, press Delete, then press Cmd/Ctrl+Z.
 4. Coder returns with its four edges, shows `idle`, and its `failed` counter equals the value noted in step 2. Its `done` counter keeps any run that finished before the delete.
-5. In the Runs tab each run that was running when Coder was deleted shows `failed`; opening one shows Failure reason `agent deleted`, and the Events tab shows `Coder gave up on “…” (agent deleted)`. The run's task stays `failed`.
+5. In the Runs tab each run that was running when Coder was deleted shows `failed`; opening one shows Failure reason `agent deleted`, and the Events tab shows `Coder gave up on “…” (agent deleted)`. The run's task stays `failed`: its task panel opens from the task's `Queued “…” for Coder` event.
 6. Click the `Queued “…” for Coder` event of a task that was still queued at the delete. Its task panel shows `cancelled`.
 
 ## Stack bounds and rejections (AC6)
@@ -73,8 +73,8 @@ The shortcut keys act only while focus is outside text entry, so click the canva
 
 1. The canvas toolbar shows `Undo ⌘/Ctrl+Z` and `Redo ⇧⌘/Ctrl+Z` before Layout and Fit. Hovering Redo shows `Redo (⇧⌘/Ctrl+Z or ⌘/Ctrl+Y)`.
 2. Select Nightly sweep and click its `enabled` checkbox. With the checkbox still focused, press Cmd/Ctrl+Z. The checkbox is checked again.
-3. Select Planner and pick another Model. With the select still focused, press Cmd/Ctrl+Z. The previous model returns; Shift+Cmd/Ctrl+Z and Cmd/Ctrl+Y re-apply the new one.
-4. Click into Planner's role input and type two characters. Cmd/Ctrl+Z inside the field removes the last typed character through the browser's text undo; the model change from step 3 stays. The same keys inside the system prompt textarea or the Concurrency number input leave the undo stack alone.
+3. Select Planner and pick another Model. With the select still focused, press Cmd/Ctrl+Z. The previous model returns. Shift+Cmd/Ctrl+Z re-applies the new one; after another Cmd/Ctrl+Z, Cmd/Ctrl+Y re-applies it too.
+4. Click into Planner's role input and type two characters. Cmd/Ctrl+Z inside the field undoes the typing through the browser's text undo; the model change from step 3 stays. The same keys inside the system prompt textarea or the Concurrency number input leave the undo stack alone.
 5. Click Layout, switch to the Agents view and press Cmd/Ctrl+Z: the layout is undone. Switch to the Sandboxes view: Shift+Cmd/Ctrl+Z redoes it and Cmd/Ctrl+Z undoes it again.
 6. With focus outside text entry, Cmd/Ctrl+Y redoes, and the app cancels the key's default action so the browser's own shortcut for it (the History page in Chrome on macOS) does not run. Inside text entry the app leaves the default action alone.
 
