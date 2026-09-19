@@ -13,6 +13,7 @@ import {
   type EdgeKind,
   type FactoryEvent,
   type FlowId,
+  type GraphFragment,
   type LogLevel,
   type NodeId,
   type NodeKind,
@@ -41,6 +42,7 @@ const MAX_LOGS = 2000
 const MAX_EVENTS = 400
 const MAX_COMPLETED_RUNS = 200
 const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 }
+const ID_PREFIX: Record<NodeKind, string> = { agent: 'ag', sandbox: 'sb', trigger: 'tr' }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const isCapacity = (v: number) => Number.isInteger(v) && v >= 1
@@ -338,6 +340,49 @@ export class MockServer {
       restored += 1
     }
     if (restored > 0) this.publish()
+  }
+
+  /**
+   * Copy a fragment into the graph under new ids, each node moved by `offset`.
+   * Only edges with both endpoints among the fragment's nodes are recreated, so
+   * a fragment that carries an external edge never copies it.
+   */
+  paste(fragment: GraphFragment, offset: Position): GraphFragment {
+    const w = this.world
+    const newIds = new Map<string, NodeId>()
+    const nodes: NodeRef[] = []
+    for (const ref of fragment.nodes) {
+      if (newIds.has(ref.node.id)) continue
+      const copy = pastedNode(ref, this.uid(ID_PREFIX[ref.kind]), offset, w.now)
+      newIds.set(ref.node.id, copy.node.id)
+      nodes.push(copy)
+      if (copy.kind === 'agent') w.agents = { ...w.agents, [copy.node.id]: copy.node }
+      else if (copy.kind === 'trigger') w.triggers = { ...w.triggers, [copy.node.id]: copy.node }
+      else {
+        w.sandboxes = { ...w.sandboxes, [copy.node.id]: copy.node }
+        this.log('info', `provisioning ${copy.node.name} (${copy.node.kind}) on ${copy.node.host}`)
+      }
+    }
+    if (nodes.length === 0) return { nodes: [], edges: [] }
+    const edges: Edge[] = []
+    for (const { kind, source: from, target: to } of fragment.edges) {
+      const source = newIds.get(from)
+      const target = newIds.get(to)
+      if (!source || !target) continue
+      if (!connectable(w, source, target)?.kinds.includes(kind) || edgeExists(w, source, target, kind)) continue
+      const edge: Edge = { id: this.uid('ed') as EdgeId, kind, source, target }
+      w.edges = { ...w.edges, [edge.id]: edge }
+      edges.push(edge)
+    }
+    const first = nodes[0]
+    const subject: Subject = first.kind === 'agent'
+      ? { kind: 'agent', id: first.node.id }
+      : first.kind === 'sandbox'
+        ? { kind: 'sandbox', id: first.node.id }
+        : { kind: 'trigger', id: first.node.id }
+    this.event('graph', subject, `Pasted ${nodes.length} node${nodes.length === 1 ? '' : 's'}`)
+    this.publish()
+    return { nodes, edges }
   }
 
   connect(source: NodeId, target: NodeId, preferred: EdgeKind | null): { ok: true; id: EdgeId } | { ok: false; reason: string } {
@@ -848,6 +893,37 @@ function restoredSandbox(s: Sandbox, now: number): Sandbox {
 
 function restoredTrigger(t: Trigger): Trigger {
   return { ...t, lastFiredAt: null }
+}
+
+/** A pasted copy of a node: configuration only, under a new id, with the runtime state of a newly created node. */
+function pastedNode(ref: NodeRef, id: string, offset: Position, now: number): NodeRef {
+  const position = { x: ref.node.position.x + offset.x, y: ref.node.position.y + offset.y }
+  switch (ref.kind) {
+    case 'agent': {
+      const { name, role, model, temperature, concurrency, timeoutMs, retry, tools, systemPrompt, status } = ref.node
+      return {
+        kind: 'agent',
+        node: {
+          id: id as AgentId, name, role, model, temperature, concurrency, timeoutMs, retry: { ...retry }, tools: [...tools], systemPrompt,
+          status: status === 'paused' ? 'paused' : 'idle', position, completed: 0, failed: 0,
+        },
+      }
+    }
+    case 'sandbox': {
+      const { name, kind, host, image, capacity } = ref.node
+      return {
+        kind: 'sandbox',
+        node: {
+          id: id as SandboxId, name, kind, host, image, capacity: isCapacity(capacity) ? capacity : 1, state: 'provisioning', stateSince: now, progress: 0,
+          metrics: { cpu: 0, mem: 0, disk: 4 }, history: [], leases: [], restartPending: false, position,
+        },
+      }
+    }
+    case 'trigger': {
+      const { name, kind, intervalMs, enabled, template } = ref.node
+      return { kind: 'trigger', node: { id: id as TriggerId, name, kind, intervalMs, enabled, template, lastFiredAt: null, fired: 0, position } }
+    }
+  }
 }
 
 function load(storage: StorageLike | null): World | null {
