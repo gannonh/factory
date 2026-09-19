@@ -4,7 +4,7 @@
  */
 import { mockServer, MockServer } from './mockServer'
 import type {
-  Agent, AgentId, Edge, EdgeId, EdgeKind, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
+  Agent, AgentId, Edge, EdgeId, EdgeKind, GraphFragment, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
 } from '../domain/types'
 
 const buildApi = (server: MockServer) => ({
@@ -19,6 +19,8 @@ const buildApi = (server: MockServer) => ({
     /** put full records back under their original ids; used by undo and redo */
     restoreNodes: (nodes: NodeRef[]) => server.restoreNodes(nodes),
     restoreEdges: (edges: Edge[]) => server.restoreEdges(edges),
+    /** copy a fragment under new ids at `offset`: configuration only, and only the edges between its own nodes */
+    paste: (fragment: GraphFragment, offset: Position) => server.paste(fragment, offset),
   },
   agents: {
     update: (id: AgentId, patch: Partial<Omit<Agent, 'id' | 'status' | 'position'>>) => server.updateAgent(id, patch),

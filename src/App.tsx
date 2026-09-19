@@ -7,11 +7,11 @@ import { AgentsView } from './components/agents/AgentsView'
 import { SandboxesView } from './components/sandboxes/SandboxesView'
 import { Dock } from './components/dock/Dock'
 import { history, useStore } from './store'
-import { useHistoryShortcuts } from './historyShortcuts'
+import { useShortcuts } from './shortcuts'
 
 export default function App() {
   const view = useStore((s) => s.view)
-  useHistoryShortcuts(history)
+  useShortcuts({ undo: history.undo, redo: history.redo })
   return (
     <ReactFlowProvider>
       <div className="h-full flex flex-col">

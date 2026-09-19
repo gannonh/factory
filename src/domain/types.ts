@@ -247,6 +247,15 @@ export function nodeKindOf(world: World, id: string): NodeKind | null {
   return null
 }
 
+export function nodeRef(world: World, id: NodeId): NodeRef | null {
+  switch (nodeKindOf(world, id)) {
+    case 'agent': return { kind: 'agent', node: world.agents[id as AgentId] }
+    case 'sandbox': return { kind: 'sandbox', node: world.sandboxes[id as SandboxId] }
+    case 'trigger': return { kind: 'trigger', node: world.triggers[id as TriggerId] }
+    default: return null
+  }
+}
+
 /** Resolve a subject against the world: the subject while its record exists, otherwise null. Used by event clicks and selection cleanup. */
 export function existingSubject(world: World, subject: Subject): Subject | null {
   switch (subject.kind) {
@@ -275,6 +284,16 @@ export function edgeKindFor(from: NodeKind, to: NodeKind): EdgeKind[] {
 export function attachedEdges(world: World, ids: Iterable<NodeId>): Edge[] {
   const endpoints = new Set<string>(ids)
   return Object.values(world.edges).filter((e) => endpoints.has(e.source) || endpoints.has(e.target))
+}
+
+/** Nodes plus the edges that travel with them: what copy holds, and what paste takes and returns. */
+export type GraphFragment = { nodes: NodeRef[]; edges: Edge[] }
+
+/** The nodes in `ids` and only the edges whose source and target are both in `ids`. */
+export function fragmentOf(world: World, ids: Iterable<NodeId>): GraphFragment {
+  const nodes = [...new Set(ids)].map((id) => nodeRef(world, id)).filter((ref) => ref !== null)
+  const inside = new Set<string>(nodes.map((ref) => ref.node.id))
+  return { nodes, edges: Object.values(world.edges).filter((e) => inside.has(e.source) && inside.has(e.target)) }
 }
 
 export const AGENT_STATUS_COLOR: Record<AgentStatus, string> = {

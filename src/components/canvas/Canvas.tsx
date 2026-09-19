@@ -5,7 +5,8 @@ import {
 import { LayoutGrid, Maximize2, Redo2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, edgeKindFor, nodeKindOf, type AgentId, type EdgeId, type NodeId, type NodeKind, type SandboxId, type Subject, type TriggerId, type World } from '../../domain/types'
-import { history, useStore, type Selection } from '../../store'
+import { useShortcuts } from '../../shortcuts'
+import { clipboard, history, useStore, type Selection } from '../../store'
 import { Button, cx } from '../ui'
 import { ContextMenu, type MenuState } from './ContextMenu'
 import { EdgeLegend, edgeTypes, type FactoryEdgeType } from './FactoryEdge'
@@ -80,9 +81,10 @@ export function Canvas() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<FactoryEdgeType>([])
   const [menu, setMenu] = useState<MenuState>(null)
   const [toast, setToast] = useState<string | null>(null)
-  const { screenToFlowPosition, fitView } = useReactFlow()
+  const { screenToFlowPosition, fitView, getNodes } = useReactFlow()
   const fitted = useRef(false)
   const graphSelectionPending = useRef(false)
+  const [pasted, setPasted] = useState<NodeId[]>([])
   const canUndo = useSyncExternalStore(history.subscribe, history.canUndo)
   const canRedo = useSyncExternalStore(history.subscribe, history.canRedo)
 
@@ -102,6 +104,15 @@ export function Canvas() {
       return buildEdges(world).map((e) => ({ ...e, selected: prevById.get(e.id)?.selected ?? selectedId === e.id }))
     })
   }, [world, setNodes, setEdges])
+
+  // declared after the world sync so its updater runs second and finds the pasted nodes already added
+  useEffect(() => {
+    if (pasted.length === 0) return
+    const ids = new Set<string>(pasted)
+    graphSelectionPending.current = true
+    setNodes((prev) => prev.map((n) => ({ ...n, selected: ids.has(n.id) })))
+    setEdges((prev) => prev.map((e) => ({ ...e, selected: false })))
+  }, [pasted, setNodes, setEdges])
 
   /** set by the mirror effect when a canvas selection is pushed into the store; the effect below consumes it */
   const pushed = useRef<{ selection: Selection } | null>(null)
@@ -205,6 +216,14 @@ export function Canvas() {
     [menu, select],
   )
 
+  const selectedNodeIds = () => getNodes().filter((n) => n.selected).map((n) => n.id as NodeId)
+  useShortcuts({
+    // selected text, in the dock logs for example, keeps the native copy
+    copy: () => !window.getSelection()?.toString() && clipboard.copy(selectedNodeIds()),
+    paste: () => setPasted(clipboard.paste()),
+    duplicate: () => setPasted(clipboard.duplicate(selectedNodeIds())),
+  })
+
   const runLayout = useCallback(() => {
     history.move(autoLayout(world))
     requestAnimationFrame(() => fitView({ padding: 0.15, duration: 400 }))
@@ -271,7 +290,7 @@ export function Canvas() {
       </div>
       <div className="absolute top-3 right-3"><EdgeLegend /></div>
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[10px] text-ink-500 pointer-events-none">
-        drag to marquee-select · space/middle-drag to pan · right-click to spawn · ⌫ deletes
+        drag to marquee-select · space/middle-drag to pan · right-click to spawn · ⌫ deletes · ⌘/Ctrl+C, V, D copy, paste, duplicate
       </div>
       {toast && (
         <div className="absolute top-14 left-1/2 -translate-x-1/2 rounded-md border border-red-400/40 bg-red-500/15 text-red-200 px-3 py-1.5 text-xs shadow-lg">

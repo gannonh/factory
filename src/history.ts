@@ -7,10 +7,12 @@ import type { Api } from './api/client'
 import {
   attachedEdges,
   nodeKindOf,
+  nodeRef,
   type AgentId,
   type Edge,
   type EdgeId,
   type EdgeKind,
+  type GraphFragment,
   type NodeId,
   type NodeKind,
   type NodeRef,
@@ -37,7 +39,7 @@ type PatchWrite =
 type PatchEntry = { kind: 'patch'; key: string; before: PatchWrite; after: PatchWrite }
 
 type HistoryEntry =
-  | { kind: 'create'; node: NodeRef }
+  | { kind: 'create'; nodes: NodeRef[]; edges: Edge[] }
   | { kind: 'delete'; nodes: NodeRef[]; edges: Edge[] }
   | { kind: 'connect'; edge: Edge }
   | { kind: 'remove-edges'; edges: Edge[] }
@@ -59,15 +61,6 @@ function deepEqual(a: unknown, b: unknown): boolean {
 function pick<T extends object>(record: T | undefined, keys: string[]): Partial<T> | null {
   if (!record) return null
   return Object.fromEntries(keys.map((key) => [key, (record as Record<string, unknown>)[key]])) as Partial<T>
-}
-
-function nodeRef(world: World, id: NodeId): NodeRef | null {
-  switch (nodeKindOf(world, id)) {
-    case 'agent': return { kind: 'agent', node: world.agents[id as AgentId] }
-    case 'sandbox': return { kind: 'sandbox', node: world.sandboxes[id as SandboxId] }
-    case 'trigger': return { kind: 'trigger', node: world.triggers[id as TriggerId] }
-    default: return null
-  }
 }
 
 export function createHistory(api: Api, getWorld: () => World) {
@@ -168,7 +161,7 @@ export function createHistory(api: Api, getWorld: () => World) {
 
   function revert(entry: HistoryEntry) {
     switch (entry.kind) {
-      case 'create': return deleteExistingNodes([entry.node.node.id])
+      case 'create': return deleteExistingNodes(entry.nodes.map((ref) => ref.node.id))
       case 'delete':
         api.graph.restoreNodes(entry.nodes)
         return api.graph.restoreEdges(entry.edges)
@@ -182,7 +175,9 @@ export function createHistory(api: Api, getWorld: () => World) {
 
   function apply(entry: HistoryEntry) {
     switch (entry.kind) {
-      case 'create': return api.graph.restoreNodes([entry.node])
+      case 'create':
+        api.graph.restoreNodes(entry.nodes)
+        return api.graph.restoreEdges(entry.edges)
       case 'delete':
         deleteExistingNodes(entry.nodes.map((ref) => ref.node.id))
         return removeExistingEdges(entry.edges.map((e) => e.id))
@@ -224,8 +219,14 @@ export function createHistory(api: Api, getWorld: () => World) {
     createNode: (kind: NodeKind, position: Position): NodeId => {
       const id = api.graph.createNode(kind, position)
       const ref = nodeRef(getWorld(), id)
-      if (ref) push({ kind: 'create', node: ref })
+      if (ref) push({ kind: 'create', nodes: [ref], edges: [] })
       return id
+    },
+    /** Paste or duplicate: every new node and the edges between them in one entry. */
+    paste: (fragment: GraphFragment, offset: Position): GraphFragment => {
+      const created = api.graph.paste(fragment, offset)
+      if (created.nodes.length > 0) push({ kind: 'create', ...created })
+      return created
     },
     /** One Delete keypress: the nodes, every edge attached to them, and separately selected edges. */
     delete: ({ nodeIds, edgeIds }: { nodeIds: NodeId[]; edgeIds: EdgeId[] }) => {
