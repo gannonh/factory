@@ -279,6 +279,14 @@ export class MockServer {
 
   deleteNodes(ids: NodeId[]) {
     const w = this.world
+    if (ids.length === 0) return
+    const firstId = ids[0]
+    const kind = nodeKindOf(w, firstId)
+    const subject: Subject = kind === 'sandbox'
+      ? { kind, id: firstId as SandboxId }
+      : kind === 'trigger'
+        ? { kind, id: firstId as TriggerId }
+        : { kind: 'agent', id: firstId as AgentId }
     const gone = new Set<string>(ids)
     for (const r of Object.values(w.runs)) {
       if (r.status !== 'running') continue
@@ -291,7 +299,7 @@ export class MockServer {
     w.triggers = Object.fromEntries(Object.entries(w.triggers).filter(([id]) => !gone.has(id))) as World['triggers']
     for (const id of ids) if (w.sandboxes[id as SandboxId]) this.removeSandbox(id as SandboxId)
     w.edges = Object.fromEntries(Object.entries(w.edges).filter(([id]) => !attached.has(id))) as World['edges']
-    this.event('graph', { kind: 'agent', id: ids[0] as AgentId }, `Deleted ${ids.length} node${ids.length === 1 ? '' : 's'}`)
+    this.event('graph', subject, `Deleted ${ids.length} node${ids.length === 1 ? '' : 's'}`)
     this.publish()
   }
 
