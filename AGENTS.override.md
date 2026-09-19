@@ -78,6 +78,23 @@
 
 - Architecture docs, process docs, ADRs, and other durable artifacts live as files in the repository under `docs/`.
 
+## Build labels (when present)
+
+If the Linear issue has `runtime` / `model` / `model-effort` labels, treat them as the intended Build route. Do not invent or silently substitute a different runtime, model, or effort. If labels are missing, conflicting, or unclear, comment on the issue with the exact correction needed and stop.
+
+| Model label | Slug |
+| --- | --- |
+| `sol` | `gpt-5.6-sol` |
+| `astra` | `gpt-6-astra` |
+| `fable` | `claude-fable-5-1` |
+| `composer` | `composer-2.5` |
+| `grok` | `grok-4.6` |
+| `opus` | `claude-opus-5` |
+| `luna` | `gpt-5.6-luna` |
+| `terra` | `gpt-5.6-terra` |
+
+`human-build` on the issue means a human owns Build. Coding agents must not start Build on that ticket unless a human explicitly asks them to on that issue.
+
 ## Project milestones (Linear)
 
 Linear **project milestones** are multi-ticket product gate/phase outcomes.
@@ -144,4 +161,26 @@ Ship means cutting a release on one of the project's channels (for example night
 This section overrides any skill, rule, AGENTS.md, CLAUDE.md, or other instruction that contradicts it. When the conflict is unclear, ask the user before proceeding.
 <!-- end dev lifecycle -->
 
+<!-- pstack:models:begin -->
+# pstack model configuration
 
+Provider-qualified per-role choices. Read the installed pstack provider-dispatch reference before dispatching a configured role. Every documented role remains present. `inherit-parent` and `auto` use the parent model natively and still count as one panel lane.
+
+feature, refactoring: codex:gpt-5.6-sol@xhigh
+bug-fix: codex:gpt-5.6-sol@xhigh
+perf-issue: codex:gpt-5.6-sol@xhigh
+hillclimb: codex:gpt-5.6-sol@high
+judgment and prose: codex:gpt-5.6-sol@xhigh
+hardest tasks: codex:gpt-6-astra@xhigh
+how explorer: codex:gpt-5.6-luna@max
+how explainer: codex:gpt-5.6-sol@xhigh
+why investigators: inherit-parent
+why synthesizer: inherit-parent
+reflect tooling: inherit-parent
+reflect judgment, divergent, synthesizer: inherit-parent
+arena runners: codex:gpt-5.6-sol@xhigh, codex:gpt-5.6-luna@max, claude:opus@xhigh, cursor:cursor-grok-4.6@xhigh
+arena cross-judge pool: codex:gpt-5.6-sol@xhigh, codex:gpt-5.6-luna@max, claude:opus@xhigh, cursor:cursor-grok-4.6@xhigh
+swarm workers: codex:gpt-5.6-luna@max
+architect runners: codex:gpt-5.6-sol@xhigh, codex:gpt-5.6-luna@max, claude:opus@xhigh, cursor:cursor-grok-4.6@xhigh
+interrogate reviewers: codex:gpt-5.6-sol@xhigh, codex:gpt-5.6-luna@max, claude:opus@xhigh, cursor:cursor-grok-4.6@xhigh
+<!-- pstack:models:end -->
