@@ -207,9 +207,9 @@ export function Canvas() {
   )
 
   const selectedNodeIds = () => getNodes().filter((n) => n.selected).map((n) => n.id as NodeId)
-  // the canvas owns Cmd/Ctrl+V and Cmd/Ctrl+D whatever they land, so Cmd+D never reaches the bookmark dialog
+  // the canvas keeps Cmd/Ctrl+V and Cmd/Ctrl+D even when nothing lands, so Cmd+D never opens the bookmark dialog
   const applyPaste = (ids: NodeId[]) => {
-    // the paste already reached the store, so the world carrying these ids is the next thing to render
+    // the copies already reached the store, so the next world to render is the one holding them
     if (ids.length > 0) pasted.current = new Set(ids)
     return true
   }
