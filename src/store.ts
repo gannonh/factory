@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { api } from './api/client'
 import { existingSubject, type EdgeKind, type LogLevel, type Subject, type World } from './domain/types'
 import { seedWorld } from './domain/seed'
+import { createClipboard } from './clipboard'
 import { createHistory } from './history'
 
 export type View = 'canvas' | 'agents' | 'sandboxes'
@@ -56,5 +57,6 @@ api.subscribe((world) => {
 })
 
 export const history = createHistory(api, () => useStore.getState().world)
+export const clipboard = createClipboard(history, () => useStore.getState().world)
 
 export const useWorld = () => useStore((s) => s.world)
