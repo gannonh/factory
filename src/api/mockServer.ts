@@ -301,17 +301,31 @@ export class MockServer {
     this.publish()
   }
 
+  /** Write a node record into its bucket. The caller owns normalization; paste and restore differ only there. */
+  private putNode(ref: NodeRef): Subject {
+    const w = this.world
+    if (ref.kind === 'agent') w.agents = { ...w.agents, [ref.node.id]: ref.node }
+    else if (ref.kind === 'sandbox') w.sandboxes = { ...w.sandboxes, [ref.node.id]: ref.node }
+    else w.triggers = { ...w.triggers, [ref.node.id]: ref.node }
+    return nodeSubject(ref.kind, ref.node.id)
+  }
+
+  /** Write an edge under the same validity and duplicate rules as `connect`. False when the graph rejected it. */
+  private putEdge(edge: Edge): boolean {
+    const w = this.world
+    if (w.edges[edge.id]) return false
+    if (!connectable(w, edge.source, edge.target)?.kinds.includes(edge.kind)) return false
+    if (edgeExists(w, edge.source, edge.target, edge.kind)) return false
+    w.edges = { ...w.edges, [edge.id]: edge }
+    return true
+  }
+
   /** Put node records back under their original ids with the reload normalization; ids already present are skipped. */
   restoreNodes(nodes: NodeRef[]) {
     const w = this.world
-    const restored: Subject[] = []
-    for (const ref of nodes) {
-      if (nodeKindOf(w, ref.node.id)) continue
-      if (ref.kind === 'agent') w.agents = { ...w.agents, [ref.node.id]: restoredAgent(ref.node) }
-      else if (ref.kind === 'sandbox') w.sandboxes = { ...w.sandboxes, [ref.node.id]: restoredSandbox(ref.node, w.now) }
-      else w.triggers = { ...w.triggers, [ref.node.id]: restoredTrigger(ref.node) }
-      restored.push(nodeSubject(ref.kind, ref.node.id))
-    }
+    const restored = nodes
+      .filter((ref) => !nodeKindOf(w, ref.node.id))
+      .map((ref) => this.putNode(restoredNode(ref, w.now)))
     if (restored.length === 0) return
     this.event('graph', restored[0], restored.length === 1 ? `Restored ${this.nameOf(restored[0].id)}` : `Restored ${restored.length} nodes`)
     this.publish()
@@ -319,17 +333,8 @@ export class MockServer {
 
   /** Put edges back under their original ids, in order, under the same validity and duplicate rules as `connect`. */
   restoreEdges(edges: Edge[]) {
-    const w = this.world
-    let restored = 0
-    for (const { id, kind, source, target } of edges) {
-      if (w.edges[id]) continue
-      const join = connectable(w, source, target)
-      if (!join || !join.kinds.includes(kind)) continue
-      if (edgeExists(w, source, target, kind)) continue
-      w.edges = { ...w.edges, [id]: { id, kind, source, target } }
-      restored += 1
-    }
-    if (restored > 0) this.publish()
+    const restored = edges.filter((edge) => this.putEdge(edge))
+    if (restored.length > 0) this.publish()
   }
 
   /** Copy a fragment into the graph under new ids, each node moved by `offset`. Only edges with both endpoints in the fragment are recreated. */
@@ -338,28 +343,20 @@ export class MockServer {
     const newIds = new Map<string, NodeId>()
     const nodes: NodeRef[] = []
     for (const ref of fragment.nodes) {
-      if (newIds.has(ref.node.id)) continue
       const copy = pastedNode(ref, this.uid(ID_PREFIX[ref.kind]), offset, w.now)
       newIds.set(ref.node.id, copy.node.id)
       nodes.push(copy)
-      if (copy.kind === 'agent') w.agents = { ...w.agents, [copy.node.id]: copy.node }
-      else if (copy.kind === 'trigger') w.triggers = { ...w.triggers, [copy.node.id]: copy.node }
-      else {
-        w.sandboxes = { ...w.sandboxes, [copy.node.id]: copy.node }
-        this.log('info', `provisioning ${copy.node.name} (${copy.node.kind}) on ${copy.node.host}`)
-      }
+      this.putNode(copy)
+      if (copy.kind === 'sandbox') this.log('info', `provisioning ${copy.node.name} (${copy.node.kind}) on ${copy.node.host}`)
     }
     if (nodes.length === 0) return { nodes: [], edges: [] }
-    const edges: Edge[] = []
-    for (const { kind, source: from, target: to } of fragment.edges) {
+    const edges = fragment.edges.flatMap(({ kind, source: from, target: to }) => {
       const source = newIds.get(from)
       const target = newIds.get(to)
-      if (!source || !target) continue
-      if (!connectable(w, source, target)?.kinds.includes(kind) || edgeExists(w, source, target, kind)) continue
+      if (!source || !target) return []
       const edge: Edge = { id: this.uid('ed') as EdgeId, kind, source, target }
-      w.edges = { ...w.edges, [edge.id]: edge }
-      edges.push(edge)
-    }
+      return this.putEdge(edge) ? [edge] : []
+    })
     this.event('graph', nodeSubject(nodes[0].kind, nodes[0].node.id), `Pasted ${nodes.length} node${nodes.length === 1 ? '' : 's'}`)
     this.publish()
     return { nodes, edges }
@@ -873,6 +870,15 @@ function restoredSandbox(s: Sandbox, now: number): Sandbox {
 
 function restoredTrigger(t: Trigger): Trigger {
   return { ...t, lastFiredAt: null }
+}
+
+/** A stored record readied for the live world again: the reload normalization, under its own id. */
+function restoredNode(ref: NodeRef, now: number): NodeRef {
+  switch (ref.kind) {
+    case 'agent': return { kind: 'agent', node: restoredAgent(ref.node) }
+    case 'sandbox': return { kind: 'sandbox', node: restoredSandbox(ref.node, now) }
+    case 'trigger': return { kind: 'trigger', node: restoredTrigger(ref.node) }
+  }
 }
 
 /** Configuration only, under a new id. Runtime state starts as a new node's, except that a paused agent stays paused. */
