@@ -211,11 +211,16 @@ export function Canvas() {
   )
 
   const selectedNodeIds = () => getNodes().filter((n) => n.selected).map((n) => n.id as NodeId)
+  // the canvas owns Cmd/Ctrl+V and Cmd/Ctrl+D whatever they land, so Cmd+D never reaches the bookmark dialog
+  const applyPaste = (ids: NodeId[]) => {
+    if (ids.length > 0) setPasted(ids)
+    return true
+  }
   useShortcuts({
     // selected text, in the dock logs for example, keeps the native copy
     copy: () => !window.getSelection()?.toString() && clipboard.copy(selectedNodeIds()),
-    paste: () => setPasted(clipboard.paste()),
-    duplicate: () => setPasted(clipboard.duplicate(selectedNodeIds())),
+    paste: () => applyPaste(clipboard.paste()),
+    duplicate: () => applyPaste(clipboard.duplicate(selectedNodeIds())),
   })
 
   const runLayout = useCallback(() => {

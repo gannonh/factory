@@ -19,7 +19,7 @@ const KEYMAP: Record<string, { plain?: ShortcutAction; shift?: ShortcutAction }>
   v: { plain: 'paste' },
   d: { plain: 'duplicate' },
 }
-const CODE_LETTER: Record<string, string> = { KeyZ: 'z', KeyY: 'y', KeyC: 'c', KeyV: 'v', KeyD: 'd' }
+const CODE_LETTER = new Map(Object.keys(KEYMAP).map((letter) => [`Key${letter.toUpperCase()}`, letter]))
 const NON_TEXT_INPUTS = new Set(['checkbox', 'radio', 'range', 'color', 'button', 'submit', 'reset', 'file', 'image'])
 
 function isTextEntry(target: ShortcutTarget | null): boolean {
@@ -30,13 +30,13 @@ function isTextEntry(target: ShortcutTarget | null): boolean {
 
 export function shortcut(event: ShortcutEvent, target: ShortcutTarget | null): ShortcutAction | null {
   if (!(event.metaKey || event.ctrlKey) || event.altKey || isTextEntry(target)) return null
-  const letter = /^[a-z]$/i.test(event.key) ? event.key.toLowerCase() : CODE_LETTER[event.code]
+  const letter = /^[a-z]$/i.test(event.key) ? event.key.toLowerCase() : CODE_LETTER.get(event.code)
   const binding = letter === undefined ? undefined : KEYMAP[letter]
   return (event.shiftKey ? binding?.shift : binding?.plain) ?? null
 }
 
-/** A handler that returns false did not handle the key, so the browser default still runs. */
-export type ShortcutHandlers = Partial<Record<ShortcutAction, () => boolean | void>>
+/** A handler reports whether it handled the key. False leaves the browser default in place. */
+export type ShortcutHandlers = Partial<Record<ShortcutAction, () => boolean>>
 
 /** An action without a handler is left alone, so components can each bind their own actions. Handlers need no memoization. */
 export function useShortcuts(handlers: ShortcutHandlers) {
@@ -48,7 +48,7 @@ export function useShortcuts(handlers: ShortcutHandlers) {
     const onKeyDown = (e: KeyboardEvent) => {
       const action = shortcut(e, e.target instanceof HTMLElement ? e.target : null)
       const handler = action && latest.current[action]
-      if (handler && handler() !== false) e.preventDefault()
+      if (handler?.()) e.preventDefault()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)

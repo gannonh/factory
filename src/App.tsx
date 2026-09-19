@@ -11,7 +11,10 @@ import { useShortcuts } from './shortcuts'
 
 export default function App() {
   const view = useStore((s) => s.view)
-  useShortcuts({ undo: history.undo, redo: history.redo })
+  useShortcuts({
+    undo: () => { history.undo(); return true },
+    redo: () => { history.redo(); return true },
+  })
   return (
     <ReactFlowProvider>
       <div className="h-full flex flex-col">

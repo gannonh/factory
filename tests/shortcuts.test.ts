@@ -99,3 +99,14 @@ test('a key that is not a Latin letter falls back to the C, V or D key position'
   // a Latin letter on the C position (Dvorak J) keeps its own meaning
   expect(shortcut({ ...keys, key: 'j', code: 'KeyC', ctrlKey: true }, body)).toBeNull()
 })
+
+test('every bound letter matches by key position too, whatever the layout prints', () => {
+  for (const letter of 'abcdefghijklmnopqrstuvwxyz') {
+    const code = `Key${letter.toUpperCase()}`
+    for (const shiftKey of [false, true]) {
+      const byLetter = shortcut({ ...keys, key: letter, code, ctrlKey: true, shiftKey }, body)
+      const byPosition = shortcut({ ...keys, key: 'ю', code, ctrlKey: true, shiftKey }, body)
+      expect([letter, shiftKey, byPosition]).toEqual([letter, shiftKey, byLetter])
+    }
+  }
+})
