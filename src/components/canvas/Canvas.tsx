@@ -5,7 +5,8 @@ import {
 import { LayoutGrid, Maximize2, Redo2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, edgeKindFor, nodeKindOf, type AgentId, type EdgeId, type NodeId, type NodeKind, type SandboxId, type Subject, type TriggerId, type World } from '../../domain/types'
-import { history, useStore, type Selection } from '../../store'
+import { useShortcuts } from '../../shortcuts'
+import { clipboard, history, useStore, type Selection } from '../../store'
 import { Button, cx } from '../ui'
 import { ContextMenu, type MenuState } from './ContextMenu'
 import { EdgeLegend, edgeTypes, type FactoryEdgeType } from './FactoryEdge'
@@ -80,26 +81,36 @@ export function Canvas() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<FactoryEdgeType>([])
   const [menu, setMenu] = useState<MenuState>(null)
   const [toast, setToast] = useState<string | null>(null)
-  const { screenToFlowPosition, fitView } = useReactFlow()
+  const { screenToFlowPosition, fitView, getNodes } = useReactFlow()
   const fitted = useRef(false)
   const graphSelectionPending = useRef(false)
+  /**
+   * Ids of nodes a paste just created, which become the canvas selection once
+   * the world sync below adds them. A paste publishes the world from inside the
+   * key handler and React renders after the handler returns, so the handler
+   * sets this before that sync runs.
+   */
+  const arriving = useRef<Set<string> | null>(null)
   const canUndo = useSyncExternalStore(history.subscribe, history.canUndo)
   const canRedo = useSyncExternalStore(history.subscribe, history.canRedo)
 
   useEffect(() => {
     const currentSelection = useStore.getState().selection
     const selectedId = isCanvasSelection(currentSelection) ? currentSelection.id : null
+    const arrived = arriving.current
+    arriving.current = null
+    if (arrived) graphSelectionPending.current = true
     setNodes((prev) => {
       const prevById = new Map(prev.map((n) => [n.id, n]))
       return buildNodes(world).map((n) => {
         const p = prevById.get(n.id)
         const dragging = p?.dragging ?? false
-        return { ...n, position: dragging && p ? p.position : n.position, dragging, selected: p ? p.selected ?? false : selectedId === n.id, measured: p?.measured }
+        return { ...n, position: dragging && p ? p.position : n.position, dragging, selected: arrived ? arrived.has(n.id) : p ? p.selected ?? false : selectedId === n.id, measured: p?.measured }
       }) as FactoryNode[]
     })
     setEdges((prev) => {
       const prevById = new Map(prev.map((e) => [e.id, e]))
-      return buildEdges(world).map((e) => ({ ...e, selected: prevById.get(e.id)?.selected ?? selectedId === e.id }))
+      return buildEdges(world).map((e) => ({ ...e, selected: arrived ? false : prevById.get(e.id)?.selected ?? selectedId === e.id }))
     })
   }, [world, setNodes, setEdges])
 
@@ -205,6 +216,17 @@ export function Canvas() {
     [menu, select],
   )
 
+  const selectedNodeIds = () => getNodes().filter((n) => n.selected).map((n) => n.id as NodeId)
+  const selectArriving = (ids: NodeId[]) => {
+    if (ids.length > 0) arriving.current = new Set(ids)
+  }
+  useShortcuts({
+    // selected text, in the dock logs for example, keeps the native copy
+    copy: () => !window.getSelection()?.toString() && clipboard.copy(selectedNodeIds()),
+    paste: () => selectArriving(clipboard.paste()),
+    duplicate: () => selectArriving(clipboard.duplicate(selectedNodeIds())),
+  })
+
   const runLayout = useCallback(() => {
     history.move(autoLayout(world))
     requestAnimationFrame(() => fitView({ padding: 0.15, duration: 400 }))
@@ -271,7 +293,7 @@ export function Canvas() {
       </div>
       <div className="absolute top-3 right-3"><EdgeLegend /></div>
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[10px] text-ink-500 pointer-events-none">
-        drag to marquee-select · space/middle-drag to pan · right-click to spawn · ⌫ deletes
+        drag to marquee-select · space/middle-drag to pan · right-click to spawn · ⌫ deletes · ⌘/Ctrl+C, V, D copy, paste, duplicate
       </div>
       {toast && (
         <div className="absolute top-14 left-1/2 -translate-x-1/2 rounded-md border border-red-400/40 bg-red-500/15 text-red-200 px-3 py-1.5 text-xs shadow-lg">
