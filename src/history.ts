@@ -38,9 +38,12 @@ type PatchWrite =
 
 type PatchEntry = { kind: 'patch'; key: string; before: PatchWrite; after: PatchWrite }
 
+/** What create adds and delete removes: the same set, read in opposite directions. */
+type NodeSet = { nodes: NodeRef[]; edges: Edge[] }
+
 type HistoryEntry =
-  | { kind: 'create'; nodes: NodeRef[]; edges: Edge[] }
-  | { kind: 'delete'; nodes: NodeRef[]; edges: Edge[] }
+  | ({ kind: 'create' } & NodeSet)
+  | ({ kind: 'delete' } & NodeSet)
   | { kind: 'connect'; edge: Edge }
   | { kind: 'remove-edges'; edges: Edge[] }
   | { kind: 'edge-kind'; id: EdgeId; before: EdgeKind; after: EdgeKind }
@@ -159,12 +162,20 @@ export function createHistory(api: Api, getWorld: () => World) {
     if (existing.length > 0) api.graph.removeEdges(existing)
   }
 
+  function addNodeSet(entry: NodeSet) {
+    api.graph.restoreNodes(entry.nodes)
+    api.graph.restoreEdges(entry.edges)
+  }
+
+  function removeNodeSet(entry: NodeSet) {
+    deleteExistingNodes(entry.nodes.map((ref) => ref.node.id))
+    removeExistingEdges(entry.edges.map((e) => e.id))
+  }
+
   function revert(entry: HistoryEntry) {
     switch (entry.kind) {
-      case 'create': return deleteExistingNodes(entry.nodes.map((ref) => ref.node.id))
-      case 'delete':
-        api.graph.restoreNodes(entry.nodes)
-        return api.graph.restoreEdges(entry.edges)
+      case 'create': return removeNodeSet(entry)
+      case 'delete': return addNodeSet(entry)
       case 'connect': return removeExistingEdges([entry.edge.id])
       case 'remove-edges': return api.graph.restoreEdges(entry.edges)
       case 'edge-kind': return api.graph.setEdgeKind(entry.id, entry.before)
@@ -175,12 +186,8 @@ export function createHistory(api: Api, getWorld: () => World) {
 
   function apply(entry: HistoryEntry) {
     switch (entry.kind) {
-      case 'create':
-        api.graph.restoreNodes(entry.nodes)
-        return api.graph.restoreEdges(entry.edges)
-      case 'delete':
-        deleteExistingNodes(entry.nodes.map((ref) => ref.node.id))
-        return removeExistingEdges(entry.edges.map((e) => e.id))
+      case 'create': return addNodeSet(entry)
+      case 'delete': return removeNodeSet(entry)
       case 'connect': return api.graph.restoreEdges([entry.edge])
       case 'remove-edges': return removeExistingEdges(entry.edges.map((e) => e.id))
       case 'edge-kind': return api.graph.setEdgeKind(entry.id, entry.after)
