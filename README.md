@@ -65,7 +65,7 @@ Simulation
 
 - Real backends: connecting to local, VPS and remote hosts, real agent processes, real logs.
 - Auth, teams, multiple projects.
-- Copy and paste, node grouping.
+- Node grouping.
 
 ## License
 
