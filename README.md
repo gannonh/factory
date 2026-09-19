@@ -26,6 +26,7 @@ Canvas (React Flow v12)
 - Auto-layout (dagre, left to right, sandboxes below the agents that use them), fit view, marquee select, right-click spawn, minimap, keyboard delete.
 - Dragging a connection onto any part of a node connects it. A toolbar toggle picks handoff or depends-on for agent-to-agent edges. The edge inspector switches kinds after the fact.
 - Undo and redo for spawn, delete, move, layout, connect, edge kind changes, edge deletes and inspector edits, from the Undo and Redo toolbar buttons or Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z (or Cmd/Ctrl+Y). Restored nodes and edges keep their ids. Typing into one inspector field is one step. History lasts for the session: a reload or Reset clears it.
+- Copy, paste and duplicate a selection with Cmd/Ctrl+C, Cmd/Ctrl+V and Cmd/Ctrl+D. The copies get new ids, the same configuration and a 40 px offset, and become the selection. Only edges between the copied nodes come along. Runtime state (runs, tasks, leases, metrics, counters, last-fired time) is not cloned. Each paste or duplicate is one undo step.
 
 Agents
 
@@ -56,14 +57,15 @@ Simulation
 - `src/api/mockServer.ts` owns state, the tick loop, the scheduler, and persistence.
 - `src/api/client.ts` is the API surface the UI calls. Replacing this object with HTTP plus a websocket is the whole backend swap.
 - `src/store.ts` holds the world snapshot plus UI state (view, selection, dock).
-- `src/history.ts` is the session undo and redo stack. Canvas and inspector graph edits go through it, and it replays them through the API under the original ids. `src/historyShortcuts.ts` binds the keys.
+- `src/history.ts` is the session undo and redo stack. Canvas and inspector graph edits go through it, and it replays them through the API under the original ids. `src/shortcuts.ts` matches and binds the keys.
+- `src/clipboard.ts` holds the copied graph fragment and pastes it through the history, which calls `api.graph.paste`.
 - `src/components/canvas` is the React Flow graph, `inspector` the right panel, `agents` and `sandboxes` the list views, `dock` the bottom panel.
 
 ## Not in the MVP yet
 
 - Real backends: connecting to local, VPS and remote hosts, real agent processes, real logs.
 - Auth, teams, multiple projects.
-- Copy and paste, node grouping.
+- Node grouping.
 
 ## License
 

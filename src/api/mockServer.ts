@@ -6,6 +6,7 @@ import {
   attachedEdges,
   edgeKindFor,
   nodeKindOf,
+  nodeSubject,
   type Agent,
   type AgentId,
   type Edge,
@@ -13,6 +14,7 @@ import {
   type EdgeKind,
   type FactoryEvent,
   type FlowId,
+  type GraphFragment,
   type LogLevel,
   type NodeId,
   type NodeKind,
@@ -41,6 +43,7 @@ const MAX_LOGS = 2000
 const MAX_EVENTS = 400
 const MAX_COMPLETED_RUNS = 200
 const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 }
+const ID_PREFIX: Record<NodeKind, string> = { agent: 'ag', sandbox: 'sb', trigger: 'tr' }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const isCapacity = (v: number) => Number.isInteger(v) && v >= 1
@@ -281,12 +284,7 @@ export class MockServer {
     const w = this.world
     if (ids.length === 0) return
     const firstId = ids[0]
-    const kind = nodeKindOf(w, firstId)
-    const subject: Subject = kind === 'sandbox'
-      ? { kind, id: firstId as SandboxId }
-      : kind === 'trigger'
-        ? { kind, id: firstId as TriggerId }
-        : { kind: 'agent', id: firstId as AgentId }
+    const subject = nodeSubject(nodeKindOf(w, firstId) ?? 'agent', firstId)
     const gone = new Set<string>(ids)
     for (const r of Object.values(w.runs)) {
       if (r.status !== 'running') continue
@@ -303,23 +301,31 @@ export class MockServer {
     this.publish()
   }
 
+  /** Write a node record into its bucket. The caller owns normalization; paste and restore differ only there. */
+  private putNode(ref: NodeRef): Subject {
+    const w = this.world
+    if (ref.kind === 'agent') w.agents = { ...w.agents, [ref.node.id]: ref.node }
+    else if (ref.kind === 'sandbox') w.sandboxes = { ...w.sandboxes, [ref.node.id]: ref.node }
+    else w.triggers = { ...w.triggers, [ref.node.id]: ref.node }
+    return nodeSubject(ref.kind, ref.node.id)
+  }
+
+  /** Write an edge under the same validity and duplicate rules as `connect`. False when the graph rejected it. */
+  private putEdge(edge: Edge): boolean {
+    const w = this.world
+    if (w.edges[edge.id]) return false
+    if (!connectable(w, edge.source, edge.target)?.kinds.includes(edge.kind)) return false
+    if (edgeExists(w, edge.source, edge.target, edge.kind)) return false
+    w.edges = { ...w.edges, [edge.id]: edge }
+    return true
+  }
+
   /** Put node records back under their original ids with the reload normalization; ids already present are skipped. */
   restoreNodes(nodes: NodeRef[]) {
     const w = this.world
-    const restored: Subject[] = []
-    for (const ref of nodes) {
-      if (nodeKindOf(w, ref.node.id)) continue
-      if (ref.kind === 'agent') {
-        w.agents = { ...w.agents, [ref.node.id]: restoredAgent(ref.node) }
-        restored.push({ kind: 'agent', id: ref.node.id })
-      } else if (ref.kind === 'sandbox') {
-        w.sandboxes = { ...w.sandboxes, [ref.node.id]: restoredSandbox(ref.node, w.now) }
-        restored.push({ kind: 'sandbox', id: ref.node.id })
-      } else {
-        w.triggers = { ...w.triggers, [ref.node.id]: restoredTrigger(ref.node) }
-        restored.push({ kind: 'trigger', id: ref.node.id })
-      }
-    }
+    const restored = nodes
+      .filter((ref) => !nodeKindOf(w, ref.node.id))
+      .map((ref) => this.putNode(restoredNode(ref, w.now)))
     if (restored.length === 0) return
     this.event('graph', restored[0], restored.length === 1 ? `Restored ${this.nameOf(restored[0].id)}` : `Restored ${restored.length} nodes`)
     this.publish()
@@ -327,17 +333,33 @@ export class MockServer {
 
   /** Put edges back under their original ids, in order, under the same validity and duplicate rules as `connect`. */
   restoreEdges(edges: Edge[]) {
+    const restored = edges.filter((edge) => this.putEdge(edge))
+    if (restored.length > 0) this.publish()
+  }
+
+  /** Copy a fragment into the graph under new ids, each node moved by `offset`. Only edges with both endpoints in the fragment are recreated. */
+  paste(fragment: GraphFragment, offset: Position): GraphFragment {
     const w = this.world
-    let restored = 0
-    for (const { id, kind, source, target } of edges) {
-      if (w.edges[id]) continue
-      const join = connectable(w, source, target)
-      if (!join || !join.kinds.includes(kind)) continue
-      if (edgeExists(w, source, target, kind)) continue
-      w.edges = { ...w.edges, [id]: { id, kind, source, target } }
-      restored += 1
+    const newIds = new Map<string, NodeId>()
+    const nodes: NodeRef[] = []
+    for (const ref of fragment.nodes) {
+      const copy = pastedNode(ref, this.uid(ID_PREFIX[ref.kind]), offset, w.now)
+      newIds.set(ref.node.id, copy.node.id)
+      nodes.push(copy)
+      this.putNode(copy)
+      if (copy.kind === 'sandbox') this.log('info', `provisioning ${copy.node.name} (${copy.node.kind}) on ${copy.node.host}`)
     }
-    if (restored > 0) this.publish()
+    if (nodes.length === 0) return { nodes: [], edges: [] }
+    const edges = fragment.edges.flatMap(({ kind, source: from, target: to }) => {
+      const source = newIds.get(from)
+      const target = newIds.get(to)
+      if (!source || !target) return []
+      const edge: Edge = { id: this.uid('ed') as EdgeId, kind, source, target }
+      return this.putEdge(edge) ? [edge] : []
+    })
+    this.event('graph', nodeSubject(nodes[0].kind, nodes[0].node.id), `Pasted ${nodes.length} node${nodes.length === 1 ? '' : 's'}`)
+    this.publish()
+    return { nodes, edges }
   }
 
   connect(source: NodeId, target: NodeId, preferred: EdgeKind | null): { ok: true; id: EdgeId } | { ok: false; reason: string } {
@@ -848,6 +870,46 @@ function restoredSandbox(s: Sandbox, now: number): Sandbox {
 
 function restoredTrigger(t: Trigger): Trigger {
   return { ...t, lastFiredAt: null }
+}
+
+/** A stored record readied for the live world again: the reload normalization, under its own id. */
+function restoredNode(ref: NodeRef, now: number): NodeRef {
+  switch (ref.kind) {
+    case 'agent': return { kind: 'agent', node: restoredAgent(ref.node) }
+    case 'sandbox': return { kind: 'sandbox', node: restoredSandbox(ref.node, now) }
+    case 'trigger': return { kind: 'trigger', node: restoredTrigger(ref.node) }
+  }
+}
+
+/** Configuration only, under a new id. Runtime state starts as a new node's, except that a paused agent stays paused. */
+function pastedNode(ref: NodeRef, id: string, offset: Position, now: number): NodeRef {
+  const position = { x: ref.node.position.x + offset.x, y: ref.node.position.y + offset.y }
+  switch (ref.kind) {
+    case 'agent': {
+      const { name, role, model, temperature, concurrency, timeoutMs, retry, tools, systemPrompt, status } = ref.node
+      return {
+        kind: 'agent',
+        node: {
+          id: id as AgentId, name, role, model, temperature, concurrency, timeoutMs, retry: { ...retry }, tools: [...tools], systemPrompt,
+          status: status === 'paused' ? 'paused' : 'idle', position, completed: 0, failed: 0,
+        },
+      }
+    }
+    case 'sandbox': {
+      const { name, kind, host, image, capacity } = ref.node
+      return {
+        kind: 'sandbox',
+        node: {
+          id: id as SandboxId, name, kind, host, image, capacity: isCapacity(capacity) ? capacity : 1, state: 'provisioning', stateSince: now, progress: 0,
+          metrics: { cpu: 0, mem: 0, disk: 4 }, history: [], leases: [], restartPending: false, position,
+        },
+      }
+    }
+    case 'trigger': {
+      const { name, kind, intervalMs, enabled, template } = ref.node
+      return { kind: 'trigger', node: { id: id as TriggerId, name, kind, intervalMs, enabled, template, lastFiredAt: null, fired: 0, position } }
+    }
+  }
 }
 
 function load(storage: StorageLike | null): World | null {

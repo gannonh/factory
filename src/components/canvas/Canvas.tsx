@@ -4,8 +4,9 @@ import {
 } from '@xyflow/react'
 import { LayoutGrid, Maximize2, Redo2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, edgeKindFor, nodeKindOf, type AgentId, type EdgeId, type NodeId, type NodeKind, type SandboxId, type Subject, type TriggerId, type World } from '../../domain/types'
-import { history, useStore, type Selection } from '../../store'
+import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, edgeKindFor, nodeKindOf, nodeSubject, type EdgeId, type NodeId, type NodeKind, type Subject, type World } from '../../domain/types'
+import { useShortcuts } from '../../shortcuts'
+import { clipboard, history, useStore, type Selection } from '../../store'
 import { Button, cx } from '../ui'
 import { ContextMenu, type MenuState } from './ContextMenu'
 import { EdgeLegend, edgeTypes, type FactoryEdgeType } from './FactoryEdge'
@@ -53,12 +54,6 @@ function buildEdges(world: World): FactoryEdgeType[] {
   })
 }
 
-function nodeSelection(kind: NodeKind, id: NodeId): Selection {
-  if (kind === 'agent') return { kind, id: id as AgentId }
-  if (kind === 'sandbox') return { kind, id: id as SandboxId }
-  return { kind, id: id as TriggerId }
-}
-
 type CanvasSelection = Extract<Subject, { kind: 'agent' | 'sandbox' | 'trigger' | 'edge' }>
 
 function isCanvasSelection(selection: Selection): selection is CanvasSelection {
@@ -80,13 +75,18 @@ export function Canvas() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<FactoryEdgeType>([])
   const [menu, setMenu] = useState<MenuState>(null)
   const [toast, setToast] = useState<string | null>(null)
-  const { screenToFlowPosition, fitView } = useReactFlow()
+  const { screenToFlowPosition, fitView, getNodes } = useReactFlow()
   const fitted = useRef(false)
   const graphSelectionPending = useRef(false)
+  /** ids the next world sync should select, set by paste and duplicate; the world they landed in triggers that sync */
+  const pasted = useRef<Set<string> | null>(null)
   const canUndo = useSyncExternalStore(history.subscribe, history.canUndo)
   const canRedo = useSyncExternalStore(history.subscribe, history.canRedo)
 
   useEffect(() => {
+    const fresh = pasted.current
+    pasted.current = null
+    if (fresh) graphSelectionPending.current = true
     const currentSelection = useStore.getState().selection
     const selectedId = isCanvasSelection(currentSelection) ? currentSelection.id : null
     setNodes((prev) => {
@@ -94,12 +94,13 @@ export function Canvas() {
       return buildNodes(world).map((n) => {
         const p = prevById.get(n.id)
         const dragging = p?.dragging ?? false
-        return { ...n, position: dragging && p ? p.position : n.position, dragging, selected: p ? p.selected ?? false : selectedId === n.id, measured: p?.measured }
+        const selected = fresh ? fresh.has(n.id) : p ? p.selected ?? false : selectedId === n.id
+        return { ...n, position: dragging && p ? p.position : n.position, dragging, selected, measured: p?.measured }
       }) as FactoryNode[]
     })
     setEdges((prev) => {
       const prevById = new Map(prev.map((e) => [e.id, e]))
-      return buildEdges(world).map((e) => ({ ...e, selected: prevById.get(e.id)?.selected ?? selectedId === e.id }))
+      return buildEdges(world).map((e) => ({ ...e, selected: fresh ? false : prevById.get(e.id)?.selected ?? selectedId === e.id }))
     })
   }, [world, setNodes, setEdges])
 
@@ -151,7 +152,7 @@ export function Canvas() {
     if (n) {
       if (cur?.id === n.id) return
       const kind = nodeKindOf(w, n.id)
-      if (kind) push(nodeSelection(kind, n.id as NodeId))
+      if (kind) push(nodeSubject(kind, n.id as NodeId))
       return
     }
     const e = edges.find((x) => x.selected)
@@ -199,11 +200,25 @@ export function Canvas() {
   const spawn = useCallback(
     (kind: NodeKind) => {
       if (!menu) return
-      select(nodeSelection(kind, history.createNode(kind, menu.flow)))
+      select(nodeSubject(kind, history.createNode(kind, menu.flow)))
       setMenu(null)
     },
     [menu, select],
   )
+
+  const selectedNodeIds = () => getNodes().filter((n) => n.selected).map((n) => n.id as NodeId)
+  // the canvas keeps Cmd/Ctrl+V and Cmd/Ctrl+D even when nothing lands, so Cmd+D never opens the bookmark dialog
+  const applyPaste = (ids: NodeId[]) => {
+    // the copies already reached the store, so the next world to render is the one holding them
+    if (ids.length > 0) pasted.current = new Set(ids)
+    return true
+  }
+  useShortcuts({
+    // selected text, in the dock logs for example, keeps the native copy
+    copy: () => !window.getSelection()?.toString() && clipboard.copy(selectedNodeIds()),
+    paste: () => applyPaste(clipboard.paste()),
+    duplicate: () => applyPaste(clipboard.duplicate(selectedNodeIds())),
+  })
 
   const runLayout = useCallback(() => {
     history.move(autoLayout(world))
@@ -271,7 +286,7 @@ export function Canvas() {
       </div>
       <div className="absolute top-3 right-3"><EdgeLegend /></div>
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[10px] text-ink-500 pointer-events-none">
-        drag to marquee-select · space/middle-drag to pan · right-click to spawn · ⌫ deletes
+        drag to marquee-select · space/middle-drag to pan · right-click to spawn · ⌫ deletes · ⌘/Ctrl+C, V, D copy, paste, duplicate
       </div>
       {toast && (
         <div className="absolute top-14 left-1/2 -translate-x-1/2 rounded-md border border-red-400/40 bg-red-500/15 text-red-200 px-3 py-1.5 text-xs shadow-lg">
