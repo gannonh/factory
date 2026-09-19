@@ -7,7 +7,7 @@
  * click decision is verified through `existingSubject` instead of rendering.
  */
 import { expect, test } from 'vitest'
-import { existingSubject, type AgentId, type EdgeId, type RunId, type SandboxId, type Subject, type TaskId, type TriggerId } from '../src/domain/types'
+import { existingSubject, type AgentId, type EdgeId, type NodeId, type NodeKind, type RunId, type SandboxId, type Subject, type TaskId, type TriggerId } from '../src/domain/types'
 import { makeFixture, sb, type Fixture } from './fixture'
 
 /** Manual trigger wired to the given agents, for counted firings. */
@@ -22,6 +22,12 @@ function lastTaskEvent(fixture: Fixture, prefix: string) {
   const events = fixture.events().filter((e) => e.kind === 'task' && e.msg.startsWith(prefix))
   const event = events[events.length - 1]
   if (!event) throw new Error(`no task event starting with ${prefix}`)
+  return event
+}
+
+function lastDeletedEvent(fixture: Fixture) {
+  const event = [...fixture.events()].reverse().find((e) => e.kind === 'graph' && e.msg.startsWith('Deleted '))
+  if (!event) throw new Error('no deleted graph event')
   return event
 }
 
@@ -54,6 +60,30 @@ test('a cancelled event subject selects its task, which still shows status cance
   const subject = lastTaskEvent(fixture, 'Cancelled').subject
   expect(existingSubject(fixture.world(), subject)).toEqual({ kind: 'task', id })
   expect(fixture.task(id).status).toBe('cancelled')
+})
+
+test('a delete event subject keeps the deleted node kind for every node type', () => {
+  const fixture = makeFixture()
+  const deleted: Array<{ kind: NodeKind; id: NodeId }> = [
+    { kind: 'agent', id: fixture.agent('Planner') },
+    { kind: 'sandbox', id: sb('sb-local-1') },
+    { kind: 'trigger', id: Object.values(fixture.world().triggers)[0].id },
+  ]
+
+  for (const { kind, id } of deleted) {
+    fixture.api.graph.deleteNodes([id])
+    expect(lastDeletedEvent(fixture).subject).toEqual({ kind, id })
+  }
+})
+
+test('a multi-node delete event uses the first node kind', () => {
+  const fixture = makeFixture()
+  const sandbox = sb('sb-local-1')
+  const trigger = Object.values(fixture.world().triggers)[0].id
+
+  fixture.api.graph.deleteNodes([sandbox, trigger])
+
+  expect(lastDeletedEvent(fixture).subject).toEqual({ kind: 'sandbox', id: sandbox })
 })
 
 test('existingSubject resolves every kind only while its record exists and never throws', () => {
