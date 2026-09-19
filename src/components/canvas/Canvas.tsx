@@ -84,35 +84,35 @@ export function Canvas() {
   const { screenToFlowPosition, fitView, getNodes } = useReactFlow()
   const fitted = useRef(false)
   const graphSelectionPending = useRef(false)
-  /**
-   * Ids of nodes a paste just created, which become the canvas selection once
-   * the world sync below adds them. A paste publishes the world from inside the
-   * key handler and React renders after the handler returns, so the handler
-   * sets this before that sync runs.
-   */
-  const arriving = useRef<Set<string> | null>(null)
+  const [pasted, setPasted] = useState<NodeId[]>([])
   const canUndo = useSyncExternalStore(history.subscribe, history.canUndo)
   const canRedo = useSyncExternalStore(history.subscribe, history.canRedo)
 
   useEffect(() => {
     const currentSelection = useStore.getState().selection
     const selectedId = isCanvasSelection(currentSelection) ? currentSelection.id : null
-    const arrived = arriving.current
-    arriving.current = null
-    if (arrived) graphSelectionPending.current = true
     setNodes((prev) => {
       const prevById = new Map(prev.map((n) => [n.id, n]))
       return buildNodes(world).map((n) => {
         const p = prevById.get(n.id)
         const dragging = p?.dragging ?? false
-        return { ...n, position: dragging && p ? p.position : n.position, dragging, selected: arrived ? arrived.has(n.id) : p ? p.selected ?? false : selectedId === n.id, measured: p?.measured }
+        return { ...n, position: dragging && p ? p.position : n.position, dragging, selected: p ? p.selected ?? false : selectedId === n.id, measured: p?.measured }
       }) as FactoryNode[]
     })
     setEdges((prev) => {
       const prevById = new Map(prev.map((e) => [e.id, e]))
-      return buildEdges(world).map((e) => ({ ...e, selected: arrived ? false : prevById.get(e.id)?.selected ?? selectedId === e.id }))
+      return buildEdges(world).map((e) => ({ ...e, selected: prevById.get(e.id)?.selected ?? selectedId === e.id }))
     })
   }, [world, setNodes, setEdges])
+
+  // declared after the world sync so its updater runs second and finds the pasted nodes already added
+  useEffect(() => {
+    if (pasted.length === 0) return
+    const ids = new Set<string>(pasted)
+    graphSelectionPending.current = true
+    setNodes((prev) => prev.map((n) => ({ ...n, selected: ids.has(n.id) })))
+    setEdges((prev) => prev.map((e) => ({ ...e, selected: false })))
+  }, [pasted, setNodes, setEdges])
 
   /** set by the mirror effect when a canvas selection is pushed into the store; the effect below consumes it */
   const pushed = useRef<{ selection: Selection } | null>(null)
@@ -217,14 +217,11 @@ export function Canvas() {
   )
 
   const selectedNodeIds = () => getNodes().filter((n) => n.selected).map((n) => n.id as NodeId)
-  const selectArriving = (ids: NodeId[]) => {
-    if (ids.length > 0) arriving.current = new Set(ids)
-  }
   useShortcuts({
     // selected text, in the dock logs for example, keeps the native copy
     copy: () => !window.getSelection()?.toString() && clipboard.copy(selectedNodeIds()),
-    paste: () => selectArriving(clipboard.paste()),
-    duplicate: () => selectArriving(clipboard.duplicate(selectedNodeIds())),
+    paste: () => setPasted(clipboard.paste()),
+    duplicate: () => setPasted(clipboard.duplicate(selectedNodeIds())),
   })
 
   const runLayout = useCallback(() => {

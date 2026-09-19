@@ -286,7 +286,7 @@ export function attachedEdges(world: World, ids: Iterable<NodeId>): Edge[] {
   return Object.values(world.edges).filter((e) => endpoints.has(e.source) || endpoints.has(e.target))
 }
 
-/** Nodes plus edges that travel with them: the clipboard payload, a paste result, and what undo of a create restores. */
+/** Nodes plus the edges that travel with them: what copy holds, and what paste takes and returns. */
 export type GraphFragment = { nodes: NodeRef[]; edges: Edge[] }
 
 /** The nodes in `ids` and only the edges whose source and target are both in `ids`. */

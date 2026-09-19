@@ -1,8 +1,4 @@
-/**
- * Copy, paste and duplicate for canvas selections. Copy snapshots the fragment,
- * so a paste still works after the originals change or are deleted. Pastes go
- * through the history, which makes each one a single undo step.
- */
+/** Copy snapshots the fragment, so a paste still works after the originals change or are deleted. */
 import { fragmentOf, type GraphFragment, type NodeId, type Position, type World } from './domain/types'
 
 export const PASTE_OFFSET = 40

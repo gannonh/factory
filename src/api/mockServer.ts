@@ -342,11 +342,7 @@ export class MockServer {
     if (restored > 0) this.publish()
   }
 
-  /**
-   * Copy a fragment into the graph under new ids, each node moved by `offset`.
-   * Only edges with both endpoints among the fragment's nodes are recreated, so
-   * a fragment that carries an external edge never copies it.
-   */
+  /** Copy a fragment into the graph under new ids, each node moved by `offset`. Only edges with both endpoints in the fragment are recreated. */
   paste(fragment: GraphFragment, offset: Position): GraphFragment {
     const w = this.world
     const newIds = new Map<string, NodeId>()
@@ -895,7 +891,7 @@ function restoredTrigger(t: Trigger): Trigger {
   return { ...t, lastFiredAt: null }
 }
 
-/** A pasted copy of a node: configuration only, under a new id, with the runtime state of a newly created node. */
+/** Configuration only, under a new id. Runtime state starts as a new node's, except that a paused agent stays paused. */
 function pastedNode(ref: NodeRef, id: string, offset: Position, now: number): NodeRef {
   const position = { x: ref.node.position.x + offset.x, y: ref.node.position.y + offset.y }
   switch (ref.kind) {

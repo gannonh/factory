@@ -12,7 +12,6 @@ export type ShortcutAction = 'undo' | 'redo' | 'copy' | 'paste' | 'duplicate'
 type ShortcutEvent = Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>
 type ShortcutTarget = { tagName?: string; type?: string; isContentEditable?: boolean }
 
-/** Cmd or Ctrl plus the letter, without and with Shift. */
 const KEYMAP: Record<string, { plain?: ShortcutAction; shift?: ShortcutAction }> = {
   z: { plain: 'undo', shift: 'redo' },
   y: { plain: 'redo' },
@@ -39,11 +38,7 @@ export function shortcut(event: ShortcutEvent, target: ShortcutTarget | null): S
 /** A handler that returns false did not handle the key, so the browser default still runs. */
 export type ShortcutHandlers = Partial<Record<ShortcutAction, () => boolean | void>>
 
-/**
- * Bind `handlers` on the window while the calling component is mounted. An
- * action without a handler is left alone, so components can each bind their
- * own actions. Handlers are read through a ref, so the listener binds once.
- */
+/** An action without a handler is left alone, so components can each bind their own actions. Handlers need no memoization. */
 export function useShortcuts(handlers: ShortcutHandlers) {
   const latest = useRef(handlers)
   useEffect(() => {
