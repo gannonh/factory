@@ -78,11 +78,15 @@ export function Canvas() {
   const { screenToFlowPosition, fitView, getNodes } = useReactFlow()
   const fitted = useRef(false)
   const graphSelectionPending = useRef(false)
-  const [pasted, setPasted] = useState<NodeId[]>([])
+  /** ids the next world sync should select, set by paste and duplicate; the world they landed in triggers that sync */
+  const pasted = useRef<Set<string> | null>(null)
   const canUndo = useSyncExternalStore(history.subscribe, history.canUndo)
   const canRedo = useSyncExternalStore(history.subscribe, history.canRedo)
 
   useEffect(() => {
+    const fresh = pasted.current
+    pasted.current = null
+    if (fresh) graphSelectionPending.current = true
     const currentSelection = useStore.getState().selection
     const selectedId = isCanvasSelection(currentSelection) ? currentSelection.id : null
     setNodes((prev) => {
@@ -90,23 +94,15 @@ export function Canvas() {
       return buildNodes(world).map((n) => {
         const p = prevById.get(n.id)
         const dragging = p?.dragging ?? false
-        return { ...n, position: dragging && p ? p.position : n.position, dragging, selected: p ? p.selected ?? false : selectedId === n.id, measured: p?.measured }
+        const selected = fresh ? fresh.has(n.id) : p ? p.selected ?? false : selectedId === n.id
+        return { ...n, position: dragging && p ? p.position : n.position, dragging, selected, measured: p?.measured }
       }) as FactoryNode[]
     })
     setEdges((prev) => {
       const prevById = new Map(prev.map((e) => [e.id, e]))
-      return buildEdges(world).map((e) => ({ ...e, selected: prevById.get(e.id)?.selected ?? selectedId === e.id }))
+      return buildEdges(world).map((e) => ({ ...e, selected: fresh ? false : prevById.get(e.id)?.selected ?? selectedId === e.id }))
     })
   }, [world, setNodes, setEdges])
-
-  // declared after the world sync so its updater runs second and finds the pasted nodes already added
-  useEffect(() => {
-    if (pasted.length === 0) return
-    const ids = new Set<string>(pasted)
-    graphSelectionPending.current = true
-    setNodes((prev) => prev.map((n) => ({ ...n, selected: ids.has(n.id) })))
-    setEdges((prev) => prev.map((e) => ({ ...e, selected: false })))
-  }, [pasted, setNodes, setEdges])
 
   /** set by the mirror effect when a canvas selection is pushed into the store; the effect below consumes it */
   const pushed = useRef<{ selection: Selection } | null>(null)
@@ -213,7 +209,8 @@ export function Canvas() {
   const selectedNodeIds = () => getNodes().filter((n) => n.selected).map((n) => n.id as NodeId)
   // the canvas owns Cmd/Ctrl+V and Cmd/Ctrl+D whatever they land, so Cmd+D never reaches the bookmark dialog
   const applyPaste = (ids: NodeId[]) => {
-    if (ids.length > 0) setPasted(ids)
+    // the paste already reached the store, so the world carrying these ids is the next thing to render
+    if (ids.length > 0) pasted.current = new Set(ids)
     return true
   }
   useShortcuts({
