@@ -4,7 +4,7 @@ import {
 } from '@xyflow/react'
 import { LayoutGrid, Maximize2, Redo2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, edgeKindFor, nodeKindOf, type AgentId, type EdgeId, type NodeId, type NodeKind, type SandboxId, type Subject, type TriggerId, type World } from '../../domain/types'
+import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, edgeKindFor, nodeKindOf, nodeSubject, type EdgeId, type NodeId, type NodeKind, type Subject, type World } from '../../domain/types'
 import { useShortcuts } from '../../shortcuts'
 import { clipboard, history, useStore, type Selection } from '../../store'
 import { Button, cx } from '../ui'
@@ -52,12 +52,6 @@ function buildEdges(world: World): FactoryEdgeType[] {
     }
     return { id: e.id, type: 'factory', source: e.source, target: e.target, sourceHandle: 'out', targetHandle: 'in', data: { kind: e.kind, active } }
   })
-}
-
-function nodeSelection(kind: NodeKind, id: NodeId): Selection {
-  if (kind === 'agent') return { kind, id: id as AgentId }
-  if (kind === 'sandbox') return { kind, id: id as SandboxId }
-  return { kind, id: id as TriggerId }
 }
 
 type CanvasSelection = Extract<Subject, { kind: 'agent' | 'sandbox' | 'trigger' | 'edge' }>
@@ -162,7 +156,7 @@ export function Canvas() {
     if (n) {
       if (cur?.id === n.id) return
       const kind = nodeKindOf(w, n.id)
-      if (kind) push(nodeSelection(kind, n.id as NodeId))
+      if (kind) push(nodeSubject(kind, n.id as NodeId))
       return
     }
     const e = edges.find((x) => x.selected)
@@ -210,7 +204,7 @@ export function Canvas() {
   const spawn = useCallback(
     (kind: NodeKind) => {
       if (!menu) return
-      select(nodeSelection(kind, history.createNode(kind, menu.flow)))
+      select(nodeSubject(kind, history.createNode(kind, menu.flow)))
       setMenu(null)
     },
     [menu, select],

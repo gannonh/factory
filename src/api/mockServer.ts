@@ -6,6 +6,7 @@ import {
   attachedEdges,
   edgeKindFor,
   nodeKindOf,
+  nodeSubject,
   type Agent,
   type AgentId,
   type Edge,
@@ -283,12 +284,7 @@ export class MockServer {
     const w = this.world
     if (ids.length === 0) return
     const firstId = ids[0]
-    const kind = nodeKindOf(w, firstId)
-    const subject: Subject = kind === 'sandbox'
-      ? { kind, id: firstId as SandboxId }
-      : kind === 'trigger'
-        ? { kind, id: firstId as TriggerId }
-        : { kind: 'agent', id: firstId as AgentId }
+    const subject = nodeSubject(nodeKindOf(w, firstId) ?? 'agent', firstId)
     const gone = new Set<string>(ids)
     for (const r of Object.values(w.runs)) {
       if (r.status !== 'running') continue
@@ -311,16 +307,10 @@ export class MockServer {
     const restored: Subject[] = []
     for (const ref of nodes) {
       if (nodeKindOf(w, ref.node.id)) continue
-      if (ref.kind === 'agent') {
-        w.agents = { ...w.agents, [ref.node.id]: restoredAgent(ref.node) }
-        restored.push({ kind: 'agent', id: ref.node.id })
-      } else if (ref.kind === 'sandbox') {
-        w.sandboxes = { ...w.sandboxes, [ref.node.id]: restoredSandbox(ref.node, w.now) }
-        restored.push({ kind: 'sandbox', id: ref.node.id })
-      } else {
-        w.triggers = { ...w.triggers, [ref.node.id]: restoredTrigger(ref.node) }
-        restored.push({ kind: 'trigger', id: ref.node.id })
-      }
+      if (ref.kind === 'agent') w.agents = { ...w.agents, [ref.node.id]: restoredAgent(ref.node) }
+      else if (ref.kind === 'sandbox') w.sandboxes = { ...w.sandboxes, [ref.node.id]: restoredSandbox(ref.node, w.now) }
+      else w.triggers = { ...w.triggers, [ref.node.id]: restoredTrigger(ref.node) }
+      restored.push(nodeSubject(ref.kind, ref.node.id))
     }
     if (restored.length === 0) return
     this.event('graph', restored[0], restored.length === 1 ? `Restored ${this.nameOf(restored[0].id)}` : `Restored ${restored.length} nodes`)
@@ -370,13 +360,7 @@ export class MockServer {
       w.edges = { ...w.edges, [edge.id]: edge }
       edges.push(edge)
     }
-    const first = nodes[0]
-    const subject: Subject = first.kind === 'agent'
-      ? { kind: 'agent', id: first.node.id }
-      : first.kind === 'sandbox'
-        ? { kind: 'sandbox', id: first.node.id }
-        : { kind: 'trigger', id: first.node.id }
-    this.event('graph', subject, `Pasted ${nodes.length} node${nodes.length === 1 ? '' : 's'}`)
+    this.event('graph', nodeSubject(nodes[0].kind, nodes[0].node.id), `Pasted ${nodes.length} node${nodes.length === 1 ? '' : 's'}`)
     this.publish()
     return { nodes, edges }
   }

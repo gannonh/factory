@@ -256,6 +256,15 @@ export function nodeRef(world: World, id: NodeId): NodeRef | null {
   }
 }
 
+/** The subject naming a graph node, so callers stop rebuilding the kind-to-subject ternary. */
+export function nodeSubject(kind: NodeKind, id: NodeId): Subject {
+  switch (kind) {
+    case 'agent': return { kind, id: id as AgentId }
+    case 'sandbox': return { kind, id: id as SandboxId }
+    case 'trigger': return { kind, id: id as TriggerId }
+  }
+}
+
 /** Resolve a subject against the world: the subject while its record exists, otherwise null. Used by event clicks and selection cleanup. */
 export function existingSubject(world: World, subject: Subject): Subject | null {
   switch (subject.kind) {
