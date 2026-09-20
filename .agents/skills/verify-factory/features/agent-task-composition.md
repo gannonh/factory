@@ -6,7 +6,7 @@ An agent inspector lets a user enter a title, optional prompt, and priority, the
 
 - `task-open-agent` opens the same agent inspector from the canvas or roster.
 - `task-compose` accepts a title and optional prompt.
-- `task-priority` selects low, normal, or high priority.
+- `task-priority` selects low, normal, or high priority. The default is normal.
 - `task-queue` submits the task and opens the Queue dock tab.
 - `task-persist` stores the task under `factory.world.v3`.
 
@@ -16,24 +16,26 @@ An agent inspector lets a user enter a title, optional prompt, and priority, the
 - In Agents, choose the agent's table row and use the inspector that opens on the right.
 - Enter a task in `Compose task`, then choose `Queue` or press Cmd/Ctrl+Enter from the title or prompt field.
 
-## Driving it with Kata Code preview
+## Driving it with agent-browser
 
 Preconditions:
 
-- Doctor passes and the simulation is paused for a stable queue.
-- The Canvas snapshot contains a Planner group, or the Agents snapshot contains a Planner row.
+- Doctor passes and the simulation is paused for a stable queue. Pause before opening the inspector.
+- The Canvas snapshot contains a group whose name starts with `Planner`, or the Agents snapshot contains a row whose name starts with `Planner`.
 
-- **Open from Canvas.** Click the group whose accessible name starts with `Planner`. The inspector heading reads `Agent` and contains a `Compose task` section.
-- **Open from Agents.** Click `role=button[name='Agents']`, then click the row whose accessible name starts with `Planner`. The same inspector opens.
-- **Compose.** Fill `input[placeholder='Task title']` with a unique title and `textarea[placeholder^='Prompt / instructions']` with the requested work.
-- **Set priority.** Click `role=button[name='high']`, `role=button[name='normal']`, or `role=button[name='low']`.
-- **Queue through the button.** Click `role=button[name='Queue']`. The fields clear, the Queue dock tab becomes active, and the task title appears.
-- **Queue through the keyboard.** From a non-empty title or prompt field, press Enter with Control on Linux and Windows or Meta on macOS. The same Queue result appears.
-- **Prove persistence.** Read `factory.world.v3` and find one task with the entered title, selected agent ID, and selected priority.
+- **Open from Agents.** `agent-browser find role button click --name "Agents"`, take the ref of the row whose name starts with `Planner` from `agent-browser snapshot -i`, and click it. The snapshot shows `button "Close inspector"`, `heading "COMPOSE TASK"`, and `textbox "Task title"`.
+- **Open from Canvas.** `agent-browser find role button click --name "Canvas"`, then click the ref of the group whose name starts with `Planner`. The same inspector opens.
+- **Compose.** `agent-browser find placeholder "Task title" fill "vf-task-1"`. Optionally fill `agent-browser find placeholder "Prompt / instructions" fill "..."`.
+- **Set priority.** `agent-browser find role button click --name "high"`.
+- **Queue through the button.** `agent-browser find role button click --name "Queue" --exact`. The fields clear, the composer's `Queue` button is disabled, the dock tab reads `Queue 1`, and the Queue panel lists `button "vf-task-1"`.
+- **Queue through the keyboard.** Fill the title, then `agent-browser press Control+Enter`. The same Queue result appears. `Meta+Enter` is equivalent.
+- **Prove persistence.** After 1200 ms, read `tasks` in `factory.world.v3`. One task has `title: "vf-task-1"`, `agentId: "ag-planner"`, `priority: "high"`, `status: "queued"`, and `origin.kind: "manual"`.
 
 ## Gotchas
 
 - A running simulation can move a queued task into a run before the screenshot. Pause before composing when queue visibility is the proof target.
-- The title is required. `Queue` remains disabled for whitespace-only titles.
+- The title is required. `Queue` stays disabled for a whitespace-only title, and the keyboard shortcut does nothing without a title even when the prompt has text.
 - An empty prompt is stored as the trimmed task title.
-- The canvas group name contains model and load text after the agent name. Match the name prefix from the snapshot.
+- The dock tab is named `Queue` plus its count, so `--name "Queue"` without `--exact` can match the tab instead of the composer button.
+- The inspector's title `Agent` is plain text, not a heading. Detect the inspector by `button "Close inspector"` and `textbox "Task title"`.
+- The canvas group name and the roster row name contain more text after the agent name. Match the name prefix from the snapshot.

@@ -7,32 +7,33 @@ Simulation controls let a user pause or resume the scheduler, change its speed, 
 - `sim-pause` pauses the simulation and persists `sim.paused: true`.
 - `sim-resume` resumes a paused simulation and persists `sim.paused: false`.
 - `sim-speed` selects 1x, 2x, or 4x and persists the selected speed.
-- `sim-reset` clears generated work and restores the seed.
+- `sim-reset` clears generated work, restores the seed, and returns the simulation to unpaused at 1x.
 
 ## How to get to it (user POV)
 
 - Use the `Pause` or `Resume` button in the top-right simulation controls.
 - Use the `1×`, `2×`, or `4×` button beside the pause control.
 - Use `Reset` in the same top bar. Its title is `Reset to seed data`.
+- These controls have no keyboard shortcuts.
 
-## Driving it with Kata Code preview
+## Driving it with agent-browser
 
 Preconditions:
 
-- Doctor reports the current run's port and the Factory title.
-- The preview tab is at `FACTORY_BROWSER_ORIGIN` with a new origin.
-- A semantic snapshot contains `role=button[name='Pause']`.
+- Doctor passes for the current run.
+- The session is at `FACTORY_ORIGIN` on a new origin with no agent inspector open.
+- `agent-browser snapshot -i` lists `button "Pause"`.
 
-- **Capture the action state.** Save a snapshot while `Pause` is visible. Copy its screenshot to `pause-before.png`.
-- **Pause.** Click `role=button[name='Pause']`. Wait for `Resume` and save another snapshot to `pause-after.png`.
-- **Prove persistence.** Read `factory.world.v3` with the expression in `SKILL.md`. Require `present: true` and `paused: true`, then save the returned object as `storage.json`.
-- **Resume.** Click `role=button[name='Resume']`. Wait for `Pause`; the stored `sim.paused` value becomes false after the persistence throttle.
-- **Change speed.** Click `role=button[name='2×']` or `role=button[name='4×']`. The selected control changes color, and stored `sim.speed` equals the chosen number.
-- **Reset.** Click `role=button[name='Reset']`. Tasks, runs, logs, and events return to their seed state, and the persisted world contains no generated tasks or runs.
+- **Pause.** Run the `sim-pause` proof in [SKILL.md](../SKILL.md): record, screenshot, `agent-browser find role button click --name "Pause"`, wait for `Resume`, screenshot, read storage, stop recording. Require `present: true` and `paused: true`.
+- **Resume.** `agent-browser find role button click --name "Resume"`, then `agent-browser wait --text "Pause"`. The stored `sim.paused` becomes false.
+- **Change speed.** `agent-browser find role button click --name "4×"`. After 1200 ms the stored `sim.speed` equals 4.
+- **Reset.** `agent-browser find role button click --name "Reset"`. The pause control reads `Pause`, the dock tabs read `Queue 0`, `Runs 0`, `Logs 0`, and `Events 0`, and `Undo` and `Redo` are disabled. After 1500 ms the stored world has `sim` equal to `{ paused: false, speed: 1 }`, no tasks, no runs, and only the three seeded sandboxes.
 
 ## Gotchas
 
-- The browser persistence write is throttled by one second. Poll the stored value instead of assuming the visible button change has been saved.
-- Reset clears session undo history as well as simulated world changes.
-- Active cron and webhook triggers can create tasks while the simulation runs. Pause first when a stable screenshot matters.
-- Cleanup removes the storage key directly. Do not use Reset as cleanup evidence.
+- The speed buttons use the multiplication sign `×` (U+00D7), not the letter x.
+- The selected speed shows only as a color change, which a snapshot cannot see. Prove speed through the stored `sim.speed`.
+- An open agent inspector contains its own `Pause` or `Resume` button for that agent. Drive the simulation control with no agent selected, or choose `Close inspector` first.
+- Reset removes the storage key, and the app writes the seed world back about one second later. Reset also clears undo history.
+- Active cron and webhook triggers create tasks while the simulation runs. Pause first when a stable screenshot matters.
+- Do not use Reset as cleanup. `cleanup.sh` discards the run's browser profile.
