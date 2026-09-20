@@ -10,7 +10,7 @@ import { clipboard, history, useStore, type Selection } from '../../store'
 import { Button, cx } from '../ui'
 import { ContextMenu, type MenuState } from './ContextMenu'
 import { EdgeLegend, edgeTypes, type FactoryEdgeType } from './FactoryEdge'
-import { groupFrame, membersOf } from './groups'
+import { groupFrame, membersOf, sharedGroupId } from './groups'
 import { autoLayout, SIZE } from './layout'
 import { nodeTypes, type FactoryNode } from './nodes'
 
@@ -303,17 +303,7 @@ export function Canvas() {
   const selectedNodes = nodes.filter((n) => n.selected)
   const groupable = selectedNodes.filter((n) => n.type !== 'group')
   const canGroup = groupable.length >= 2 && groupable.every((n) => memberGroupId(n) === null)
-  const ungroupId = (() => {
-    const gids = new Set<GroupId>()
-    for (const n of selectedNodes) {
-      if (n.type === 'group') gids.add(n.id as GroupId)
-      else {
-        const gid = memberGroupId(n)
-        if (gid) gids.add(gid)
-      }
-    }
-    return gids.size === 1 ? [...gids][0] : null
-  })()
+  const ungroupId = sharedGroupId(selectedNodes.map((n) => n.type === 'group' ? n.id as GroupId : memberGroupId(n)))
 
   return (
     <div className="absolute inset-0">

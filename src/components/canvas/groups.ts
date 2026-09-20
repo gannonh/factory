@@ -5,6 +5,13 @@ export const GROUP_HEADER = 28
 
 export type NodeRect = { x: number; y: number; width: number; height: number }
 
+/** Ungroup is enabled only when every selected item resolves to this same group. */
+export function sharedGroupId(ids: Array<GroupId | null>): GroupId | null {
+  if (ids.length === 0) return null
+  const first = ids[0]
+  return first !== null && ids.every((id) => id === first) ? first : null
+}
+
 export function membersOf(world: World, groupId: GroupId): NodeId[] {
   const ids: NodeId[] = []
   for (const a of Object.values(world.agents)) if (a.groupId === groupId) ids.push(a.id)

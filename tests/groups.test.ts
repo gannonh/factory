@@ -1,10 +1,30 @@
 import { expect, test, vi } from 'vitest'
 import { retainWorld, STORAGE_KEY, MockServer } from '../src/api/mockServer'
-import { GROUP_HEADER, GROUP_PAD, groupFrame, membersOf } from '../src/components/canvas/groups'
+import { GROUP_HEADER, GROUP_PAD, groupFrame, membersOf, sharedGroupId } from '../src/components/canvas/groups'
 import { seedWorld } from '../src/domain/seed'
 import type { AgentId, GroupId, NodeId, SandboxId } from '../src/domain/types'
 import { createHistory } from '../src/history'
 import { makeFixture, makeStorage, RNG } from './fixture'
+
+test('a new group takes the next unused Group N name', () => {
+  const fixture = makeFixture()
+  const planner = fixture.agent('Planner')
+  const coder = fixture.agent('Coder')
+  const qa = fixture.agent('QA')
+  const reviewer = fixture.agent('Reviewer')
+
+  const first = fixture.api.graph.group([planner, coder])
+  const second = fixture.api.graph.group([qa, reviewer])
+  if (first === null || second === null) throw new Error('expected two groups')
+  expect(fixture.world().groups[first].name).toBe('Group 1')
+  expect(fixture.world().groups[second].name).toBe('Group 2')
+
+  fixture.api.graph.ungroup(first)
+  const third = fixture.api.graph.group([planner, coder])
+  if (third === null) throw new Error('expected a replacement group')
+  expect(fixture.world().groups[third].name).toBe('Group 1')
+  expect(fixture.world().groups[second].name).toBe('Group 2')
+})
 
 test('graph.group sets one shared groupId, leaves positions unchanged, and returns null for one id or an already grouped id', () => {
   const fixture = makeFixture()
@@ -90,6 +110,17 @@ test('undo and redo of group and of ungroup keep the same group id', () => {
   expect(fixture.world().groups).not.toHaveProperty(id)
   expect(fixture.world().agents[planner].groupId).toBeNull()
   expect(fixture.world().agents[coder].groupId).toBeNull()
+})
+
+test('sharedGroupId is the one group only when every selected id is that group', () => {
+  const a = 'gr-a' as GroupId
+  const b = 'gr-b' as GroupId
+  expect(sharedGroupId([])).toBeNull()
+  expect(sharedGroupId([null])).toBeNull()
+  expect(sharedGroupId([a])).toBe(a)
+  expect(sharedGroupId([a, a])).toBe(a)
+  expect(sharedGroupId([a, null])).toBeNull()
+  expect(sharedGroupId([a, b])).toBeNull()
 })
 
 test('groupFrame pads member rects and membersOf lists the group ids', () => {

@@ -415,7 +415,7 @@ export class MockServer {
     const refs = [...new Set(ids)].map((id) => nodeRef(this.world, id)).filter((ref) => ref !== null)
     if (refs.length < 2 || refs.some((ref) => ref.node.groupId !== null)) return null
     const id = this.uid('gr') as GroupId
-    const group: Group = { id, name: `Group ${Object.keys(this.world.groups).length + 1}` }
+    const group: Group = { id, name: this.nextGroupName() }
     this.world.groups = { ...this.world.groups, [id]: group }
     for (const ref of refs) this.setGroupId(ref.node.id, id)
     this.event('graph', { kind: 'group', id }, `Grouped ${refs.length} nodes`)
@@ -835,6 +835,13 @@ export class MockServer {
   private nextFreePosition(): Position {
     const n = Object.keys(this.world.sandboxes).length
     return { x: 320 + (n % 4) * 320, y: 680 }
+  }
+
+  private nextGroupName(): string {
+    const used = new Set(Object.values(this.world.groups).map((g) => g.name))
+    let n = 1
+    while (used.has(`Group ${n}`)) n++
+    return `Group ${n}`
   }
 }
 
