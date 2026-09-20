@@ -9,18 +9,22 @@ Factory is a browser-only React app backed by an in-page mock server. The app ne
 
 Read [features/README.md](features/README.md) before choosing a recipe.
 
-Requirements: macOS, `node`, `agent-browser` 0.36 or later, `ffmpeg`, and an authenticated `gh`.
+Requirements: `node`, `agent-browser` 0.36 or later, `ffmpeg`, `lsof`, and an authenticated `gh`. The helpers are tested on macOS.
+
+This skill lives at `.agents/skills/verify-factory/` and `.claude/skills/verify-factory/`. The two directories are identical. Edit one, copy it over the other with `rsync -a --delete`, and confirm with `diff -r` that they match.
 
 ## Launch
 
 Run all shell commands from the repository root of the checkout under verification. Install the lockfile-defined dependencies with `npm ci` if `node_modules` is absent.
 
 ```bash
-FACTORY_STATE_FILE="$(.agents/skills/verify-factory/scripts/launch.sh)"
+FACTORY_STATE_FILE="$(<skill-dir>/scripts/launch.sh)"
 echo "$FACTORY_STATE_FILE"
 ```
 
-`launch.sh` picks a free loopback port, starts Vite on `127.0.0.1` in the background, waits until the port serves the Factory page, and prints the path of the run's state file. The state file records the server PID, port, origin, checked-out commit, evidence directory, and `agent-browser` session name. The evidence directory is `uat-evidence/verify-factory/<run-id>/`, which is gitignored.
+`<skill-dir>` is the directory that holds this file, relative to the repository root.
+
+`launch.sh` picks a free loopback port, starts Vite on `127.0.0.1` in the background, waits until the port serves the Factory page, and prints the path of the run's state file. The state file records the absolute path of the skill's `scripts/` directory as `FACTORY_SCRIPTS`, the server PID, port, origin, checked-out commit, evidence directory, and `agent-browser` session name. The evidence directory is `uat-evidence/verify-factory/<run-id>/`, which is gitignored.
 
 Shell variables do not persist between tool calls. Start every later shell call with:
 
@@ -35,7 +39,7 @@ Sourcing the file exports `AGENT_BROWSER_SESSION`, so every `agent-browser` comm
 Doctor is read-only. Run it before driving the page, after any failed drive, and whenever browser behavior looks wrong.
 
 ```bash
-.agents/skills/verify-factory/scripts/doctor.sh "$FACTORY_STATE_FILE" | tee "$FACTORY_EVIDENCE_DIR/doctor.txt"
+"$FACTORY_SCRIPTS/doctor.sh" "$FACTORY_STATE_FILE" | tee "$FACTORY_EVIDENCE_DIR/doctor.txt"
 ```
 
 It requires the recorded PID to be alive, to own the recorded port, and to serve the HTML title `Factory`. If this run's browser session is open, it also requires the session URL to be under `FACTORY_ORIGIN`. It exits nonzero and names the failed check otherwise. Do not drive a session that fails doctor; run Cleanup and launch again.
@@ -108,7 +112,7 @@ A valid proof exercises the user-facing control and captures both the action sta
 Post the evidence to the pull request under verification:
 
 ```bash
-.agents/skills/verify-factory/scripts/post-evidence.sh "$FACTORY_STATE_FILE" <pr-number>
+"$FACTORY_SCRIPTS/post-evidence.sh" "$FACTORY_STATE_FILE" <pr-number>
 ```
 
 `post-evidence.sh` converts each `.webm` to an MP4 and a GIF, pushes the screenshots, GIFs, and MP4s to the `verification-evidence` branch under `pr-<number>/<run-id>/`, and creates one PR comment. The comment renders each GIF and screenshot inline, links each MP4, and includes the `.json` and `.txt` transcripts. It states the commit the run verified and says when the PR head differs. The evidence branch shares no history with `main`, runs no workflow, and adds nothing to the PR diff or the working tree. Running the command again for the same run updates the same comment. It writes the comment URL and evidence commit to `posted.txt`.
@@ -118,7 +122,7 @@ GitHub embeds a video player only for files uploaded through its web editor, whi
 ## Cleanup
 
 ```bash
-.agents/skills/verify-factory/scripts/cleanup.sh "$FACTORY_STATE_FILE"
+"$FACTORY_SCRIPTS/cleanup.sh" "$FACTORY_STATE_FILE"
 ```
 
 `cleanup.sh` closes this run's `agent-browser` session, which discards its temporary profile and this origin's `factory.world.v3`. It stops the recorded PID only after confirming that PID is this checkout's Vite server on the recorded port, confirms the origin no longer answers, writes `cleanup.txt`, and lists the evidence directory. It never kills by process name or port, and it leaves the evidence directory and the posted comment intact. It is safe to run again.

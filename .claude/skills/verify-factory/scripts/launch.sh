@@ -4,6 +4,7 @@
 # directory under uat-evidence/, which is gitignored.
 set -euo pipefail
 
+scripts_dir="$(cd "$(dirname "$0")" && pwd)"
 repo_root="$(git rev-parse --show-toplevel)"
 vite_bin="$repo_root/node_modules/vite/bin/vite.js"
 if [[ ! -f "$vite_bin" ]]; then
@@ -27,6 +28,7 @@ disown "$server_pid"
 state_file="$evidence_dir/state.env"
 {
   printf 'export FACTORY_STATE_FILE=%q\n' "$state_file"
+  printf 'export FACTORY_SCRIPTS=%q\n' "$scripts_dir"
   printf 'export FACTORY_REPO_ROOT=%q\n' "$repo_root"
   printf 'export FACTORY_RUN_ID=%q\n' "$run_id"
   printf 'export FACTORY_HEAD_SHA=%q\n' "$(git rev-parse HEAD)"
@@ -49,5 +51,5 @@ for _ in $(seq 1 60); do
   sleep 0.5
 done
 
-echo "vite did not serve Factory on port $port within 30 seconds; run cleanup.sh $state_file" >&2
+echo "vite did not serve Factory on port $port within 30 seconds; run $scripts_dir/cleanup.sh $state_file" >&2
 exit 1

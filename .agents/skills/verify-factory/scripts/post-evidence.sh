@@ -39,7 +39,7 @@ for video in "${videos[@]}"; do
   ffmpeg -nostdin -loglevel error -y -i "$video" \
     -vf "fps=8,scale=800:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=128[p];[b][p]paletteuse=dither=bayer" \
     "$base.gif"
-  gif_bytes="$(stat -f %z "$base.gif")"
+  gif_bytes="$(wc -c < "$base.gif" | tr -d ' ')"
   if (( gif_bytes > max_gif_bytes )); then
     echo "$base.gif is $gif_bytes bytes; GitHub will not render it inline. Record a shorter proof." >&2
     exit 1
