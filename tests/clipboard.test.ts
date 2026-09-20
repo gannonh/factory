@@ -262,3 +262,25 @@ test('api.graph.paste of an empty fragment creates nothing and publishes nothing
   expect(fixture.world()).toBe(published)
   expect(fixture.world()).toEqual(before)
 })
+
+test('paste and duplicate of grouped members yield copies with groupId null', () => {
+  const { fixture, clipboard, planner, coder } = setup()
+  const id = fixture.api.graph.group([planner, coder])
+  expect(id).toMatch(/^gr-/)
+  expect(fixture.world().agents[planner].groupId).toBe(id)
+  expect(fixture.world().agents[coder].groupId).toBe(id)
+
+  expect(clipboard.copy([planner, coder])).toBe(true)
+  const pasted = clipboard.paste() as AgentId[]
+  expect(pasted).toHaveLength(2)
+  expect(fixture.world().agents[pasted[0]].groupId).toBeNull()
+  expect(fixture.world().agents[pasted[1]].groupId).toBeNull()
+  expect(fixture.world().agents[planner].groupId).toBe(id)
+  expect(fixture.world().agents[coder].groupId).toBe(id)
+
+  const dup = clipboard.duplicate([planner, coder]) as AgentId[]
+  expect(dup).toHaveLength(2)
+  expect(fixture.world().agents[dup[0]].groupId).toBeNull()
+  expect(fixture.world().agents[dup[1]].groupId).toBeNull()
+  expect(fixture.world().agents[planner].groupId).toBe(id)
+})

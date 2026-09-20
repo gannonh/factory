@@ -3,12 +3,13 @@
  * fixture. Canvas helpers `groupFrame` and `membersOf` are checked against
  * literal rects and ids.
  */
-import { expect, test } from 'vitest'
+import { expect, test, vi } from 'vitest'
+import { retainWorld, STORAGE_KEY, MockServer } from '../src/api/mockServer'
 import { GROUP_HEADER, GROUP_PAD, groupFrame, membersOf } from '../src/components/canvas/groups'
 import { seedWorld } from '../src/domain/seed'
 import type { AgentId, GroupId, NodeId, SandboxId } from '../src/domain/types'
 import { createHistory } from '../src/history'
-import { makeFixture } from './fixture'
+import { makeFixture, makeStorage, RNG } from './fixture'
 
 test('graph.group sets one shared groupId, leaves positions unchanged, and returns null for one id or an already grouped id', () => {
   const fixture = makeFixture()
@@ -132,4 +133,88 @@ test('rename sets the group name and two consecutive renames undo in one step', 
 
   history.redo()
   expect(fixture.world().groups[id].name).toBe('Alpha team')
+})
+
+test('delete one member then undo puts it back in the group, and delete every member then undo restores the group name', () => {
+  const fixture = makeFixture()
+  const history = createHistory(fixture.api, fixture.world)
+  const planner = fixture.agent('Planner')
+  const coder = fixture.agent('Coder')
+  const id = history.group([planner, coder])
+  if (id === null) throw new Error('expected a group')
+  history.updateGroup(id, { name: 'Crew' })
+
+  history.delete({ nodeIds: [planner], edgeIds: [] })
+  expect(fixture.world().agents).not.toHaveProperty(planner)
+  expect(fixture.world().agents[coder].groupId).toBe(id)
+  expect(fixture.world().groups[id]).toEqual({ id, name: 'Crew' })
+
+  history.undo()
+  expect(fixture.world().agents[planner].groupId).toBe(id)
+  expect(fixture.world().agents[coder].groupId).toBe(id)
+  expect(fixture.world().groups[id].name).toBe('Crew')
+
+  history.delete({ nodeIds: [planner, coder], edgeIds: [] })
+  expect(fixture.world().agents).not.toHaveProperty(planner)
+  expect(fixture.world().agents).not.toHaveProperty(coder)
+  expect(fixture.world().groups[id]).toEqual({ id, name: 'Crew' })
+
+  history.undo()
+  expect(fixture.world().agents[planner].groupId).toBe(id)
+  expect(fixture.world().agents[coder].groupId).toBe(id)
+  expect(fixture.world().groups[id]).toEqual({ id, name: 'Crew' })
+})
+
+test('a group survives a reload through injected storage with its name and members', () => {
+  vi.useFakeTimers()
+  try {
+    const storage = makeStorage()
+    const first = makeFixture({ storage })
+    const planner = first.agent('Planner')
+    const coder = first.agent('Coder')
+    const id = first.api.graph.group([planner, coder])
+    if (id === null) throw new Error('expected a group')
+    first.api.groups.update(id, { name: 'Crew' })
+    first.flushSave()
+
+    const second = makeFixture({ storage, isolate: false })
+    const w = second.world()
+    expect(w.groups[id]).toEqual({ id, name: 'Crew' })
+    expect(w.agents[planner].groupId).toBe(id)
+    expect(w.agents[coder].groupId).toBe(id)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test('a group with no members is absent from the saved payload', () => {
+  vi.useFakeTimers()
+  try {
+    const storage = makeStorage()
+    const fixture = makeFixture({ storage })
+    const history = createHistory(fixture.api, fixture.world)
+    const planner = fixture.agent('Planner')
+    const coder = fixture.agent('Coder')
+    const id = history.group([planner, coder])
+    if (id === null) throw new Error('expected a group')
+    history.delete({ nodeIds: [planner, coder], edgeIds: [] })
+    expect(fixture.world().groups[id]).toEqual({ id, name: 'Group 1' })
+    fixture.flushSave()
+    const saved = JSON.parse(storage.getItem(STORAGE_KEY)!) as { groups: Record<string, unknown> }
+    expect(saved.groups).toEqual({})
+    expect(retainWorld(fixture.world()).groups).toEqual({})
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test('a save without groups seeds a fresh world', () => {
+  const storage = makeStorage()
+  storage.setItem(STORAGE_KEY, JSON.stringify({
+    now: 1, agents: {}, sandboxes: {}, triggers: {}, edges: {}, sim: { paused: false, speed: 1 },
+    tasks: {}, runs: {}, events: [],
+  }))
+  const server = new MockServer({ manual: true, rng: RNG, storage })
+  expect(Object.keys(server.snapshot().agents)).toHaveLength(4)
+  expect(server.snapshot().groups).toEqual({})
 })
