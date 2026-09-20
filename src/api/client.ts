@@ -4,7 +4,7 @@
  */
 import { mockServer, MockServer } from './mockServer'
 import type {
-  Agent, AgentId, Edge, EdgeId, EdgeKind, GraphFragment, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
+  Agent, AgentId, Edge, EdgeId, EdgeKind, GraphFragment, Group, GroupId, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
 } from '../domain/types'
 
 const buildApi = (server: MockServer) => ({
@@ -21,9 +21,12 @@ const buildApi = (server: MockServer) => ({
     restoreEdges: (edges: Edge[]) => server.restoreEdges(edges),
     /** copy a fragment under new ids at `offset`: configuration only, and only the edges between its own nodes */
     paste: (fragment: GraphFragment, offset: Position) => server.paste(fragment, offset),
+    group: (ids: NodeId[]) => server.group(ids),
+    ungroup: (id: GroupId) => server.ungroup(id),
+    restoreGroup: (group: Group, memberIds: NodeId[]) => server.restoreGroup(group, memberIds),
   },
   agents: {
-    update: (id: AgentId, patch: Partial<Omit<Agent, 'id' | 'status' | 'position'>>) => server.updateAgent(id, patch),
+    update: (id: AgentId, patch: Partial<Omit<Agent, 'id' | 'status' | 'position' | 'groupId'>>) => server.updateAgent(id, patch),
     setPaused: (id: AgentId, paused: boolean) => server.setAgentPaused(id, paused),
     enqueue: (id: AgentId, input: { title: string; prompt: string; priority: Priority }) => server.enqueueTask(id, input),
   },
@@ -36,7 +39,7 @@ const buildApi = (server: MockServer) => ({
     update: (id: SandboxId, patch: { capacity: number }) => server.updateSandbox(id, patch),
   },
   triggers: {
-    update: (id: TriggerId, patch: Partial<Omit<Trigger, 'id' | 'position'>>) => server.updateTrigger(id, patch),
+    update: (id: TriggerId, patch: Partial<Omit<Trigger, 'id' | 'position' | 'groupId'>>) => server.updateTrigger(id, patch),
     fire: (id: TriggerId) => server.fireTrigger(id),
   },
   sim: {

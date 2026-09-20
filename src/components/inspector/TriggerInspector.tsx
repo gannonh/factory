@@ -6,7 +6,7 @@ import { Button, Field, Input, Section, Select, Textarea, fmtAgo } from '../ui'
 
 export function TriggerInspector({ trigger }: { trigger: Trigger }) {
   const world = useStore((s) => s.world)
-  const update = (patch: Partial<Omit<Trigger, 'id' | 'position'>>) => history.updateTrigger(trigger.id, patch)
+  const update = (patch: Partial<Omit<Trigger, 'id' | 'position' | 'groupId'>>) => history.updateTrigger(trigger.id, patch)
   const targets = Object.values(world.edges).filter((e) => e.kind === 'triggers' && e.source === trigger.id).map((e) => world.agents[e.target as keyof typeof world.agents]?.name).filter(Boolean)
   const periodic = trigger.kind !== 'manual'
   return (

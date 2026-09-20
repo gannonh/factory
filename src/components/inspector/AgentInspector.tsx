@@ -9,7 +9,7 @@ import { Badge, Button, Dot, Field, Input, Section, Select, Textarea, cx, fmtDur
 export function AgentInspector({ agent }: { agent: Agent }) {
   const world = useStore((s) => s.world)
   const setDockTab = useStore((s) => s.setDockTab)
-  const update = (patch: Partial<Omit<Agent, 'id' | 'status' | 'position'>>) => history.updateAgent(agent.id, patch)
+  const update = (patch: Partial<Omit<Agent, 'id' | 'status' | 'position' | 'groupId'>>) => history.updateAgent(agent.id, patch)
   const runs = Object.values(world.runs).filter((r) => r.agentId === agent.id)
   const active = runs.filter((r) => r.status === 'running')
   const pending = Object.values(world.tasks).filter((t) => t.agentId === agent.id && (t.status === 'queued' || t.status === 'waiting'))

@@ -44,6 +44,11 @@ export function Inspector() {
     if (!e) return null
     title = 'Edge'
     body = <EdgeInspector edge={e} />
+  } else if (selection.kind === 'group') {
+    const g = world.groups[selection.id]
+    if (!g) return null
+    title = 'Group'
+    body = <div className="text-sm font-semibold">{g.name}</div>
   } else {
     const exhaustive: never = selection
     return exhaustive

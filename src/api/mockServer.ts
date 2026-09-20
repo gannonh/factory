@@ -6,6 +6,7 @@ import {
   attachedEdges,
   edgeKindFor,
   nodeKindOf,
+  nodeRef,
   nodeSubject,
   type Agent,
   type AgentId,
@@ -15,6 +16,8 @@ import {
   type FactoryEvent,
   type FlowId,
   type GraphFragment,
+  type Group,
+  type GroupId,
   type LogLevel,
   type NodeId,
   type NodeKind,
@@ -248,6 +251,7 @@ export class MockServer {
         id, name: `Agent ${n}`, role: 'generalist', model: 'claude-sonnet-5', temperature: 0.3, concurrency: 1,
         timeoutMs: 120_000, retry: { maxAttempts: 2, backoffMs: 1000, backoff: 'fixed' }, tools: ['read_file', 'bash'],
         systemPrompt: 'You are a helpful engineering agent.', status: 'idle', position, completed: 0, failed: 0,
+        groupId: null,
       }
       w.agents = { ...w.agents, [id]: agent }
       this.event('graph', { kind: 'agent', id }, `Agent ${agent.name} created`)
@@ -260,7 +264,7 @@ export class MockServer {
       const sb: Sandbox = {
         id, name: `sandbox-${n}`, kind: 'docker', host: 'docker.internal', image: 'ghcr.io/factory/dev:node22',
         state: 'provisioning', stateSince: w.now, progress: 0, metrics: { cpu: 0, mem: 0, disk: 4 }, history: [],
-        leases: [], capacity: 1, restartPending: false, position,
+        leases: [], capacity: 1, restartPending: false, position, groupId: null,
       }
       w.sandboxes = { ...w.sandboxes, [id]: sb }
       this.event('sandbox', { kind: 'sandbox', id }, `Provisioning ${sb.name}`)
@@ -272,7 +276,7 @@ export class MockServer {
     const id = this.uid('tr') as TriggerId
     const tr: Trigger = {
       id, name: `Trigger ${n}`, kind: 'manual', intervalMs: 30_000, enabled: true, lastFiredAt: w.now, fired: 0,
-      template: 'Do the thing', position,
+      template: 'Do the thing', position, groupId: null,
     }
     w.triggers = { ...w.triggers, [id]: tr }
     this.event('graph', { kind: 'trigger', id }, `Trigger ${tr.name} created`)
@@ -392,7 +396,54 @@ export class MockServer {
     this.publish()
   }
 
-  updateAgent(id: AgentId, patch: Partial<Omit<Agent, 'id' | 'status' | 'position'>>) {
+  private setGroupId(id: NodeId, groupId: GroupId | null) {
+    const kind = nodeKindOf(this.world, id)
+    if (kind === 'agent') this.patchAgent(id as AgentId, { groupId })
+    else if (kind === 'sandbox') this.patchSandbox(id as SandboxId, { groupId })
+    else if (kind === 'trigger') this.patchTrigger(id as TriggerId, { groupId })
+  }
+
+  private memberIds(groupId: GroupId): NodeId[] {
+    const ids: NodeId[] = []
+    for (const a of Object.values(this.world.agents)) if (a.groupId === groupId) ids.push(a.id)
+    for (const s of Object.values(this.world.sandboxes)) if (s.groupId === groupId) ids.push(s.id)
+    for (const t of Object.values(this.world.triggers)) if (t.groupId === groupId) ids.push(t.id)
+    return ids
+  }
+
+  group(ids: NodeId[]): GroupId | null {
+    const refs = [...new Set(ids)].map((id) => nodeRef(this.world, id)).filter((ref) => ref !== null)
+    if (refs.length < 2 || refs.some((ref) => ref.node.groupId !== null)) return null
+    const id = this.uid('gr') as GroupId
+    const group: Group = { id, name: `Group ${Object.keys(this.world.groups).length + 1}` }
+    this.world.groups = { ...this.world.groups, [id]: group }
+    for (const ref of refs) this.setGroupId(ref.node.id, id)
+    this.event('graph', { kind: 'group', id }, `Grouped ${refs.length} nodes`)
+    this.publish()
+    return id
+  }
+
+  ungroup(id: GroupId) {
+    const group = this.world.groups[id]
+    if (!group) return
+    for (const memberId of this.memberIds(id)) this.setGroupId(memberId, null)
+    this.world.groups = Object.fromEntries(Object.entries(this.world.groups).filter(([gid]) => gid !== id)) as World['groups']
+    this.event('graph', { kind: 'group', id }, `Ungrouped ${group.name}`)
+    this.publish()
+  }
+
+  restoreGroup(group: Group, memberIds: NodeId[]) {
+    if (this.world.groups[group.id]) return
+    this.world.groups = { ...this.world.groups, [group.id]: group }
+    for (const id of memberIds) {
+      const ref = nodeRef(this.world, id)
+      if (!ref || ref.node.groupId !== null) continue
+      this.setGroupId(id, group.id)
+    }
+    this.publish()
+  }
+
+  updateAgent(id: AgentId, patch: Partial<Omit<Agent, 'id' | 'status' | 'position' | 'groupId'>>) {
     this.patchAgent(id, patch)
     this.publish()
   }
@@ -443,7 +494,8 @@ export class MockServer {
     const capacity = input.capacity !== undefined && isCapacity(input.capacity) ? input.capacity : 1
     const sb: Sandbox = {
       id, ...input, capacity, state: 'provisioning', stateSince: this.world.now, progress: 0,
-      metrics: { cpu: 0, mem: 0, disk: 4 }, history: [], leases: [], restartPending: false, position: position ?? this.nextFreePosition(),
+      metrics: { cpu: 0, mem: 0, disk: 4 }, history: [], leases: [], restartPending: false,
+      position: position ?? this.nextFreePosition(), groupId: null,
     }
     this.world.sandboxes = { ...this.world.sandboxes, [id]: sb }
     this.event('sandbox', { kind: 'sandbox', id }, `Provisioning ${sb.name}`)
@@ -459,7 +511,7 @@ export class MockServer {
     this.publish()
   }
 
-  updateTrigger(id: TriggerId, patch: Partial<Omit<Trigger, 'id' | 'position'>>) {
+  updateTrigger(id: TriggerId, patch: Partial<Omit<Trigger, 'id' | 'position' | 'groupId'>>) {
     this.patchTrigger(id, patch)
     this.publish()
   }
@@ -770,7 +822,7 @@ export class MockServer {
 
   private nameOf(id: string): string {
     const w = this.world
-    return w.agents[id as AgentId]?.name ?? w.sandboxes[id as SandboxId]?.name ?? w.triggers[id as TriggerId]?.name ?? id
+    return w.agents[id as AgentId]?.name ?? w.sandboxes[id as SandboxId]?.name ?? w.triggers[id as TriggerId]?.name ?? w.groups[id as GroupId]?.name ?? id
   }
 
   private nextFreePosition(): Position {
@@ -779,7 +831,7 @@ export class MockServer {
   }
 }
 
-type Persisted = Pick<World, 'now' | 'agents' | 'sandboxes' | 'triggers' | 'edges' | 'sim' | 'tasks' | 'runs' | 'events'>
+type Persisted = Pick<World, 'now' | 'agents' | 'sandboxes' | 'triggers' | 'edges' | 'groups' | 'sim' | 'tasks' | 'runs' | 'events'>
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -799,7 +851,7 @@ function isPersisted(value: unknown): value is Persisted {
   return isRecord(value)
     && typeof value.now === 'number' && Number.isFinite(value.now)
     && isRecordMap(value.agents) && isRecordMap(value.sandboxes) && isRecordMap(value.triggers)
-    && isRecordMap(value.edges) && isRecordMap(value.tasks) && isRecordMap(value.runs)
+    && isRecordMap(value.edges) && isRecordMap(value.groups) && isRecordMap(value.tasks) && isRecordMap(value.runs)
     && isRecord(value.sim) && typeof value.sim.paused === 'boolean'
     && (value.sim.speed === 1 || value.sim.speed === 2 || value.sim.speed === 4)
     && Array.isArray(value.events) && value.events.every((e) => isRecord(e) && typeof e.id === 'number' && Number.isFinite(e.id))
@@ -832,12 +884,19 @@ export function retainWorld(w: World): Persisted {
     if (task.status === 'running' || pending || runTaskIds.has(task.id) || pendingFlowIds.has(task.flowId)) tasks[task.id] = task
   }
 
+  const membered = new Set<string>()
+  for (const a of Object.values(w.agents)) if (a.groupId) membered.add(a.groupId)
+  for (const s of Object.values(w.sandboxes)) if (s.groupId) membered.add(s.groupId)
+  for (const t of Object.values(w.triggers)) if (t.groupId) membered.add(t.groupId)
+  const groups = Object.fromEntries(Object.entries(w.groups).filter(([id]) => membered.has(id))) as World['groups']
+
   return {
     now: w.now,
     agents: w.agents,
     sandboxes: w.sandboxes,
     triggers: w.triggers,
     edges: w.edges,
+    groups,
     sim: w.sim,
     tasks,
     runs,
@@ -861,15 +920,15 @@ function save(w: World, storage: StorageLike | null) {
  * everything else returns as captured.
  */
 function restoredAgent(a: Agent): Agent {
-  return { ...a, status: a.status === 'paused' ? 'paused' : 'idle' }
+  return { ...a, status: a.status === 'paused' ? 'paused' : 'idle', groupId: a.groupId ?? null }
 }
 
 function restoredSandbox(s: Sandbox, now: number): Sandbox {
-  return { ...s, capacity: isCapacity(s.capacity) ? s.capacity : 1, leases: [], history: [], stateSince: now }
+  return { ...s, capacity: isCapacity(s.capacity) ? s.capacity : 1, leases: [], history: [], stateSince: now, groupId: s.groupId ?? null }
 }
 
 function restoredTrigger(t: Trigger): Trigger {
-  return { ...t, lastFiredAt: null }
+  return { ...t, lastFiredAt: null, groupId: t.groupId ?? null }
 }
 
 /** A stored record readied for the live world again: the reload normalization, under its own id. */
@@ -891,7 +950,7 @@ function pastedNode(ref: NodeRef, id: string, offset: Position, now: number): No
         kind: 'agent',
         node: {
           id: id as AgentId, name, role, model, temperature, concurrency, timeoutMs, retry: { ...retry }, tools: [...tools], systemPrompt,
-          status: status === 'paused' ? 'paused' : 'idle', position, completed: 0, failed: 0,
+          status: status === 'paused' ? 'paused' : 'idle', position, completed: 0, failed: 0, groupId: null,
         },
       }
     }
@@ -901,13 +960,13 @@ function pastedNode(ref: NodeRef, id: string, offset: Position, now: number): No
         kind: 'sandbox',
         node: {
           id: id as SandboxId, name, kind, host, image, capacity: isCapacity(capacity) ? capacity : 1, state: 'provisioning', stateSince: now, progress: 0,
-          metrics: { cpu: 0, mem: 0, disk: 4 }, history: [], leases: [], restartPending: false, position,
+          metrics: { cpu: 0, mem: 0, disk: 4 }, history: [], leases: [], restartPending: false, position, groupId: null,
         },
       }
     }
     case 'trigger': {
       const { name, kind, intervalMs, enabled, template } = ref.node
-      return { kind: 'trigger', node: { id: id as TriggerId, name, kind, intervalMs, enabled, template, lastFiredAt: null, fired: 0, position } }
+      return { kind: 'trigger', node: { id: id as TriggerId, name, kind, intervalMs, enabled, template, lastFiredAt: null, fired: 0, position, groupId: null } }
     }
   }
 }
@@ -930,6 +989,7 @@ function load(storage: StorageLike | null): World | null {
       sandboxes,
       triggers,
       edges: p.edges,
+      groups: p.groups,
       tasks: p.tasks,
       runs: p.runs,
       logs: [],

@@ -5,6 +5,7 @@ export type EdgeId = string & { readonly __brand: 'EdgeId' }
 export type TaskId = string & { readonly __brand: 'TaskId' }
 export type RunId = string & { readonly __brand: 'RunId' }
 export type FlowId = string & { readonly __brand: 'FlowId' }
+export type GroupId = string & { readonly __brand: 'GroupId' }
 
 export type NodeId = AgentId | SandboxId | TriggerId
 export type Position = { x: number; y: number }
@@ -41,6 +42,7 @@ export type Agent = {
   position: Position
   completed: number
   failed: number
+  groupId: GroupId | null
 }
 
 export type SandboxKind = 'local' | 'docker' | 'vps' | 'remote'
@@ -98,6 +100,7 @@ export type Sandbox = {
   /** set when a restart was requested; stopping -> stopped -> provisioning */
   restartPending: boolean
   position: Position
+  groupId: GroupId | null
 }
 
 export type TriggerKind = 'cron' | 'webhook' | 'manual' | 'event'
@@ -113,7 +116,10 @@ export type Trigger = {
   fired: number
   template: string
   position: Position
+  groupId: GroupId | null
 }
+
+export type Group = { id: GroupId; name: string }
 
 export type NodeKind = 'agent' | 'sandbox' | 'trigger'
 
@@ -214,6 +220,7 @@ export type Subject =
   | { kind: 'run'; id: RunId }
   | { kind: 'task'; id: TaskId }
   | { kind: 'edge'; id: EdgeId }
+  | { kind: 'group'; id: GroupId }
 
 export type EventKind = 'agent' | 'sandbox' | 'trigger' | 'run' | 'graph' | 'task'
 
@@ -231,6 +238,7 @@ export type World = {
   sandboxes: Record<SandboxId, Sandbox>
   triggers: Record<TriggerId, Trigger>
   edges: Record<EdgeId, Edge>
+  groups: Record<GroupId, Group>
   tasks: Record<TaskId, Task>
   runs: Record<RunId, Run>
   logs: LogLine[]
@@ -274,6 +282,7 @@ export function existingSubject(world: World, subject: Subject): Subject | null 
     case 'run': return world.runs[subject.id] ? subject : null
     case 'task': return world.tasks[subject.id] ? subject : null
     case 'edge': return world.edges[subject.id] ? subject : null
+    case 'group': return world.groups[subject.id] ? subject : null
   }
 }
 

@@ -1,12 +1,14 @@
 import { Handle, Position, useConnection, type NodeProps, type Node } from '@xyflow/react'
 import { Bot, Boxes, Clock, Hand, Webhook, Zap } from 'lucide-react'
-import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, type Agent, type Sandbox, type Trigger, type TriggerKind } from '../../domain/types'
+import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, type Agent, type Group, type Sandbox, type Trigger, type TriggerKind } from '../../domain/types'
 import { Dot, cx } from '../ui'
+import { GROUP_HEADER } from './groups'
 
 export type AgentNodeType = Node<{ agent: Agent; running: number; queued: number }, 'agent'>
 export type SandboxNodeType = Node<{ sandbox: Sandbox; holders: string[] }, 'sandbox'>
 export type TriggerNodeType = Node<{ trigger: Trigger; nextIn: number | null }, 'trigger'>
-export type FactoryNode = AgentNodeType | SandboxNodeType | TriggerNodeType
+export type GroupNodeType = Node<{ group: Group }, 'group'>
+export type FactoryNode = AgentNodeType | SandboxNodeType | TriggerNodeType | GroupNodeType
 
 const shell = 'relative rounded-xl border bg-ink-850 shadow-[0_8px_24px_-12px_rgba(0,0,0,0.8)] w-[220px] transition-colors'
 
@@ -104,4 +106,20 @@ export function TriggerNode({ data, selected }: NodeProps<TriggerNodeType>) {
   )
 }
 
-export const nodeTypes = { agent: AgentNode, sandbox: SandboxNode, trigger: TriggerNode }
+export function GroupNode({ data, selected }: NodeProps<GroupNodeType>) {
+  return (
+    <div
+      className={cx('h-full w-full rounded-xl border bg-cyan-400/[0.04]', selected ? 'border-cyan-400/50' : 'border-ink-600')}
+    >
+      <div
+        className="flex items-center px-3 text-[11px] font-semibold text-ink-200 truncate pointer-events-auto"
+        style={{ height: GROUP_HEADER }}
+      >
+        {data.group.name}
+      </div>
+      <div className="absolute inset-0 pointer-events-none" style={{ top: GROUP_HEADER }} />
+    </div>
+  )
+}
+
+export const nodeTypes = { agent: AgentNode, sandbox: SandboxNode, trigger: TriggerNode, group: GroupNode }
