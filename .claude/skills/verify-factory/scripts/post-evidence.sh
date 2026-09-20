@@ -46,6 +46,16 @@ for video in "${videos[@]}"; do
   fi
 done
 
+# glob order puts X-after.png ahead of X-before.png; show each pair in time order
+ordered=()
+for shot in "${screenshots[@]}"; do
+  [[ "$shot" == *-after.png && -f "${shot%-after.png}-before.png" ]] && continue
+  ordered+=("$shot")
+  if [[ "$shot" == *-before.png && -f "${shot%-before.png}-after.png" ]]; then
+    ordered+=("${shot%-before.png}-after.png")
+  fi
+done
+
 repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
 pr_head="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)"
 dest="pr-$pr/$FACTORY_RUN_ID"
@@ -65,9 +75,14 @@ for file in "${screenshots[@]}" "${videos[@]/%.webm/.gif}" "${videos[@]/%.webm/.
   git update-index --add --cacheinfo "100644,$blob,$dest/$file"
 done
 tree="$(git write-tree)"
-commit="$(git commit-tree "$tree" ${parent:+-p "$parent"} -m "Evidence for PR #$pr, run $FACTORY_RUN_ID")"
 unset GIT_INDEX_FILE
-git push --quiet origin "$commit:refs/heads/$branch"
+if [[ -n "$parent" && "$(git rev-parse "$parent^{tree}")" == "$tree" ]]; then
+  # a repeat post of unchanged files reuses the commit that already holds them
+  commit="$parent"
+else
+  commit="$(git commit-tree "$tree" ${parent:+-p "$parent"} -m "Evidence for PR #$pr, run $FACTORY_RUN_ID")"
+  git push --quiet origin "$commit:refs/heads/$branch"
+fi
 
 raw="https://raw.githubusercontent.com/$repo/$commit/$dest"
 blob_page="https://github.com/$repo/blob/$commit/$dest"
@@ -88,7 +103,7 @@ body_file="$FACTORY_EVIDENCE_DIR/comment.md"
     printf '[Full-quality MP4](%s/%s.mp4)\n\n' "$blob_page" "$base"
   done
   printf '#### Screenshots\n\n'
-  for shot in "${screenshots[@]}"; do
+  for shot in "${ordered[@]}"; do
     printf '**%s**\n\n![%s](%s/%s)\n\n' "$shot" "$shot" "$raw" "$shot"
   done
   if [[ ${#transcripts[@]} -gt 0 ]]; then

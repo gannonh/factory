@@ -23,7 +23,7 @@ This directory is the maintained source for verifying Factory's user-facing web 
 
 ## Proof and skip reporting
 
-- Record a video of the action and capture a screenshot before and after it.
+- Record a video of the action and capture a screenshot before and after it. `record start` resets the page to the seed world, so meet each recipe's preconditions after starting the recording.
 - For a mutation, read the stored value through `factory.world.v3` after the UI changes.
 - Name evidence files after the sub-feature ID, for example `sim-pause.webm`, `sim-pause-before.png`, `sim-pause-after.png`, and `sim-pause-storage.json`.
 - Post the evidence to the pull request with `post-evidence.sh`.

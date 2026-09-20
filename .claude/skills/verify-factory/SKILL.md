@@ -99,6 +99,8 @@ agent-browser screenshot "$FACTORY_EVIDENCE_DIR/sim-pause-after.png"
 agent-browser record stop
 ```
 
+`record start` reopens the page in a fresh browser context. The stored world returns to the seed, the simulation is running again, the view is Canvas, and nothing is selected; the viewport size is kept. Start the recording first, then do the proof's setup, such as pausing or opening a workspace, inside the recording.
+
 Keep each recording to the action under proof. Short waits before and after the click make the change visible to a viewer. Stop the recording before starting the next proof.
 
 A valid proof exercises the user-facing control and captures both the action state and the result. Internal setters and test-only endpoints do not count. Mocks are acceptable only at Factory's existing in-browser mock-server boundary.
