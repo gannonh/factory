@@ -7,17 +7,57 @@
  */
 import { useEffect, useRef } from 'react'
 
-export type ShortcutAction = 'undo' | 'redo' | 'copy' | 'paste' | 'duplicate'
+export type ShortcutAction = 'undo' | 'redo' | 'copy' | 'paste' | 'duplicate' | 'group' | 'ungroup'
+export type ListedAction = ShortcutAction | 'delete'
+export type HelpCommand = 'toggle' | 'close'
 
 type ShortcutEvent = Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>
 type ShortcutTarget = { tagName?: string; type?: string; isContentEditable?: boolean }
 
-const KEYMAP: Record<string, { plain?: ShortcutAction; shift?: ShortcutAction }> = {
-  z: { plain: 'undo', shift: 'redo' },
-  y: { plain: 'redo' },
-  c: { plain: 'copy' },
-  v: { plain: 'paste' },
-  d: { plain: 'duplicate' },
+export const CATALOG = [
+  { id: 'undo', label: 'Undo', bindings: [{ letter: 'z' }] },
+  { id: 'redo', label: 'Redo', bindings: [{ letter: 'z', shift: true }, { letter: 'y' }] },
+  { id: 'copy', label: 'Copy', bindings: [{ letter: 'c' }] },
+  { id: 'paste', label: 'Paste', bindings: [{ letter: 'v' }] },
+  { id: 'duplicate', label: 'Duplicate', bindings: [{ letter: 'd' }] },
+  { id: 'group', label: 'Group', bindings: [{ letter: 'g' }] },
+  { id: 'ungroup', label: 'Ungroup', bindings: [{ letter: 'g', shift: true }] },
+  { id: 'delete', label: 'Delete', keys: ['Backspace', 'Delete'] },
+] as const
+
+export const FOOTER_SHORTCUTS = '⌫ deletes · ⌘/Ctrl+C, V, D copy, paste, duplicate · ? shortcuts'
+
+export type HelpRow = { id: ListedAction; label: string; chord: string }
+
+function chordOfEntry(entry: (typeof CATALOG)[number]): string {
+  if ('keys' in entry) {
+    return entry.keys.map((key) => key === 'Backspace' ? '⌫' : key).join(' / ')
+  }
+  return entry.bindings.map((binding) => {
+    const key = binding.letter.toUpperCase()
+    return ('shift' in binding && binding.shift) ? `⇧⌘/Ctrl+${key}` : `⌘/Ctrl+${key}`
+  }).join(' / ')
+}
+
+export const HELP_ROWS: readonly HelpRow[] = CATALOG.map((entry) => ({
+  id: entry.id,
+  label: entry.label,
+  chord: chordOfEntry(entry),
+}))
+
+export function chordOf(id: ListedAction): string {
+  const row = HELP_ROWS.find((entry) => entry.id === id)
+  if (!row) throw new Error(`missing catalog row: ${id}`)
+  return row.chord
+}
+
+const KEYMAP: Record<string, { plain?: ShortcutAction; shift?: ShortcutAction }> = {}
+for (const entry of CATALOG) {
+  if (!('bindings' in entry)) continue
+  for (const binding of entry.bindings) {
+    const slot = KEYMAP[binding.letter] ?? (KEYMAP[binding.letter] = {})
+    slot[('shift' in binding && binding.shift) ? 'shift' : 'plain'] = entry.id
+  }
 }
 const CODE_LETTER = new Map(Object.keys(KEYMAP).map((letter) => [`Key${letter.toUpperCase()}`, letter]))
 const NON_TEXT_INPUTS = new Set(['checkbox', 'radio', 'range', 'color', 'button', 'submit', 'reset', 'file', 'image'])
@@ -35,18 +75,60 @@ export function shortcut(event: ShortcutEvent, target: ShortcutTarget | null): S
   return (event.shiftKey ? binding?.shift : binding?.plain) ?? null
 }
 
+export function helpCommand(
+  event: ShortcutEvent,
+  target: ShortcutTarget | null,
+  overlayOpen: boolean,
+): HelpCommand | null {
+  if (isTextEntry(target)) return null
+  if (event.key === 'Escape' && overlayOpen) return 'close'
+  if (event.key === '?' && !event.metaKey && !event.ctrlKey && !event.altKey) return 'toggle'
+  return null
+}
+
 /** A handler reports whether it handled the key. False leaves the browser default in place. */
 export type ShortcutHandlers = Partial<Record<ShortcutAction, () => boolean>>
 
+export type HelpControls = {
+  overlayOpen: boolean
+  onToggle: () => void
+  onClose: () => void
+}
+
+/** Shared across every `useShortcuts` listener so App undo/redo stop while Canvas has help open. */
+const overlayBlocksShortcuts = { current: false }
+
 /** An action without a handler is left alone, so components can each bind their own actions. Handlers need no memoization. */
-export function useShortcuts(handlers: ShortcutHandlers) {
+export function useShortcuts(handlers: ShortcutHandlers, help?: HelpControls) {
   const latest = useRef(handlers)
+  const helpRef = useRef(help)
   useEffect(() => {
     latest.current = handlers
+    helpRef.current = help
+    if (help) overlayBlocksShortcuts.current = help.overlayOpen
+    return () => {
+      if (help) overlayBlocksShortcuts.current = false
+    }
   })
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      const action = shortcut(e, e.target instanceof HTMLElement ? e.target : null)
+      const target = e.target instanceof HTMLElement ? e.target : null
+      const helpNow = helpRef.current
+      if (helpNow) {
+        const command = helpCommand(e, target, helpNow.overlayOpen)
+        if (command === 'toggle') {
+          helpNow.onToggle()
+          e.preventDefault()
+          return
+        }
+        if (command === 'close') {
+          helpNow.onClose()
+          e.preventDefault()
+          return
+        }
+      }
+      if (overlayBlocksShortcuts.current) return
+      const action = shortcut(e, target)
       const handler = action && latest.current[action]
       if (handler?.()) e.preventDefault()
     }
