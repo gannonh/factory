@@ -17,6 +17,7 @@ function agent(p: Partial<Agent> & Pick<Agent, 'id' | 'name' | 'role' | 'positio
     status: 'idle',
     completed: 0,
     failed: 0,
+    groupId: null,
     ...p,
   }
 }
@@ -32,6 +33,7 @@ function sandbox(p: Partial<Sandbox> & Pick<Sandbox, 'id' | 'name' | 'kind' | 'h
     leases: [],
     capacity: 1,
     restartPending: false,
+    groupId: null,
     ...p,
   }
 }
@@ -49,8 +51,8 @@ export function seedWorld(now: number): World {
     sandbox({ id: s('sb-vps-1'), name: 'hetzner-cx32', kind: 'vps', host: '65.21.14.7', image: 'ubuntu-24.04', capacity: 4, position: { x: 960, y: 470 }, state: 'stopped', progress: 0 }),
   ]
   const triggers: Trigger[] = [
-    { id: t('tr-cron'), name: 'Nightly sweep', kind: 'cron', intervalMs: 18_000, enabled: true, lastFiredAt: null, fired: 0, template: 'Sweep open issues and plan the next batch', position: { x: 40, y: 60 } },
-    { id: t('tr-webhook'), name: 'GitHub PR opened', kind: 'webhook', intervalMs: 26_000, enabled: true, lastFiredAt: null, fired: 0, template: 'Review the newly opened pull request', position: { x: 40, y: 260 } },
+    { id: t('tr-cron'), name: 'Nightly sweep', kind: 'cron', intervalMs: 18_000, enabled: true, lastFiredAt: null, fired: 0, template: 'Sweep open issues and plan the next batch', position: { x: 40, y: 60 }, groupId: null },
+    { id: t('tr-webhook'), name: 'GitHub PR opened', kind: 'webhook', intervalMs: 26_000, enabled: true, lastFiredAt: null, fired: 0, template: 'Review the newly opened pull request', position: { x: 40, y: 260 }, groupId: null },
   ]
   const edges: Edge[] = [
     { id: e('ed-1'), kind: 'triggers', source: t('tr-cron'), target: a('ag-planner') },
@@ -71,6 +73,7 @@ export function seedWorld(now: number): World {
     sandboxes: byId(sandboxes.map((sb) => ({ ...sb, stateSince: now }))),
     triggers: byId(triggers),
     edges: byId(edges),
+    groups: {},
     tasks: {},
     runs: {},
     logs: [],

@@ -34,6 +34,7 @@ This directory is the maintained source for verifying Factory's user-facing web 
 - [Simulation controls](simulation-controls.md) covers pause, resume, speed selection, reset, and persisted simulation state.
 - [Workspace navigation](workspace-navigation.md) covers the Canvas, Agents, and Sandboxes rail destinations.
 - [Canvas editing](canvas-editing.md) covers duplicate, copy and paste, delete, undo, redo, layout, and fit on the graph canvas.
+- [Node groups](node-groups.md) covers grouping a selection, naming the group, moving members together, and ungrouping, driven by the `Group` and `Ungroup` toolbar buttons.
 - [Agent task composition](agent-task-composition.md) covers opening an agent, composing a task, priority, queue visibility, and persisted task state.
 - [Sandbox creation](sandbox-creation.md) covers the sandbox form, cancellation, provisioning, and persisted sandbox state.
 - [Operational dock](operational-dock.md) covers Queue, Runs, Logs, Events, collapse, expand, run history after a reload, and the agent inspector's runs shortcut.

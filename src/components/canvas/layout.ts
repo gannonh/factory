@@ -1,7 +1,7 @@
 import dagre from '@dagrejs/dagre'
 import type { Edge, NodeId, Position, World } from '../../domain/types'
 
-const SIZE = { agent: { w: 220, h: 84 }, sandbox: { w: 220, h: 84 }, trigger: { w: 200, h: 52 } }
+export const SIZE = { agent: { w: 220, h: 84 }, sandbox: { w: 220, h: 84 }, trigger: { w: 200, h: 52 } }
 
 /** Left-to-right flow for triggers/agents; sandboxes hang under the agents that run in them. */
 export function autoLayout(world: World): Array<{ id: NodeId; position: Position }> {

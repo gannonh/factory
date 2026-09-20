@@ -4,13 +4,14 @@ import {
 } from '@xyflow/react'
 import { LayoutGrid, Maximize2, Redo2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, edgeKindFor, nodeKindOf, nodeSubject, type EdgeId, type NodeId, type NodeKind, type Subject, type World } from '../../domain/types'
+import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, edgeKindFor, nodeKindOf, nodeSubject, type EdgeId, type GroupId, type NodeId, type NodeKind, type Subject, type World } from '../../domain/types'
 import { useShortcuts } from '../../shortcuts'
 import { clipboard, history, useStore, type Selection } from '../../store'
 import { Button, cx } from '../ui'
 import { ContextMenu, type MenuState } from './ContextMenu'
 import { EdgeLegend, edgeTypes, type FactoryEdgeType } from './FactoryEdge'
-import { autoLayout } from './layout'
+import { groupFrame, membersOf, sharedGroupId } from './groups'
+import { autoLayout, SIZE } from './layout'
 import { nodeTypes, type FactoryNode } from './nodes'
 
 function buildNodes(world: World): FactoryNode[] {
@@ -38,6 +39,57 @@ function buildNodes(world: World): FactoryNode[] {
   return out
 }
 
+function memberGroupId(n: FactoryNode): GroupId | null {
+  if (n.type === 'agent') return n.data.agent.groupId
+  if (n.type === 'sandbox') return n.data.sandbox.groupId
+  if (n.type === 'trigger') return n.data.trigger.groupId
+  return null
+}
+
+function applyGroupFrames(world: World, nodes: FactoryNode[], prevById: Map<string, FactoryNode>): FactoryNode[] {
+  const grouped = new Map<GroupId, FactoryNode[]>()
+  for (const n of nodes) {
+    const gid = memberGroupId(n)
+    if (gid === null) continue
+    const list = grouped.get(gid)
+    if (list) list.push(n)
+    else grouped.set(gid, [n])
+  }
+  const origins = new Map<GroupId, { x: number; y: number }>()
+  const frames: FactoryNode[] = []
+  for (const [gid, members] of grouped) {
+    const group = world.groups[gid]
+    if (!group) continue
+    const rects = members.map((n) => {
+      const prev = prevById.get(n.id)
+      const fb = n.type === 'group' ? { w: 0, h: 0 } : SIZE[n.type]
+      return { x: n.position.x, y: n.position.y, width: prev?.measured?.width ?? fb.w, height: prev?.measured?.height ?? fb.h }
+    })
+    const frame = groupFrame(rects)
+    origins.set(gid, frame.position)
+    frames.push({
+      id: gid,
+      type: 'group',
+      position: frame.position,
+      width: frame.width,
+      height: frame.height,
+      style: { width: frame.width, height: frame.height },
+      className: 'pointer-events-none',
+      dragHandle: '.group-drag-handle',
+      data: { group },
+      deletable: false,
+      connectable: false,
+    })
+  }
+  const children = nodes.map((n) => {
+    const gid = memberGroupId(n)
+    const origin = gid ? origins.get(gid) : undefined
+    if (!gid || !origin) return n
+    return { ...n, parentId: gid, position: { x: n.position.x - origin.x, y: n.position.y - origin.y } }
+  })
+  return [...frames, ...children]
+}
+
 function buildEdges(world: World): FactoryEdgeType[] {
   return Object.values(world.edges).map((e) => {
     let active = false
@@ -54,14 +106,15 @@ function buildEdges(world: World): FactoryEdgeType[] {
   })
 }
 
-type CanvasSelection = Extract<Subject, { kind: 'agent' | 'sandbox' | 'trigger' | 'edge' }>
+type CanvasSelection = Extract<Subject, { kind: 'agent' | 'sandbox' | 'trigger' | 'edge' | 'group' }>
 
 function isCanvasSelection(selection: Selection): selection is CanvasSelection {
   return selection !== null && (
     selection.kind === 'agent' ||
     selection.kind === 'sandbox' ||
     selection.kind === 'trigger' ||
-    selection.kind === 'edge'
+    selection.kind === 'edge' ||
+    selection.kind === 'group'
   )
 }
 
@@ -75,7 +128,7 @@ export function Canvas() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<FactoryEdgeType>([])
   const [menu, setMenu] = useState<MenuState>(null)
   const [toast, setToast] = useState<string | null>(null)
-  const { screenToFlowPosition, fitView, getNodes } = useReactFlow()
+  const { screenToFlowPosition, fitView, getNodes, getInternalNode } = useReactFlow()
   const fitted = useRef(false)
   const graphSelectionPending = useRef(false)
   /** ids the next world sync should select, set by paste and duplicate; the world they landed in triggers that sync */
@@ -91,7 +144,7 @@ export function Canvas() {
     const selectedId = isCanvasSelection(currentSelection) ? currentSelection.id : null
     setNodes((prev) => {
       const prevById = new Map(prev.map((n) => [n.id, n]))
-      return buildNodes(world).map((n) => {
+      return applyGroupFrames(world, buildNodes(world), prevById).map((n) => {
         const p = prevById.get(n.id)
         const dragging = p?.dragging ?? false
         const selected = fresh ? fresh.has(n.id) : p ? p.selected ?? false : selectedId === n.id
@@ -153,6 +206,7 @@ export function Canvas() {
       if (cur?.id === n.id) return
       const kind = nodeKindOf(w, n.id)
       if (kind) push(nodeSubject(kind, n.id as NodeId))
+      else if (w.groups[n.id as GroupId]) push({ kind: 'group', id: n.id as GroupId })
       return
     }
     const e = edges.find((x) => x.selected)
@@ -184,9 +238,21 @@ export function Canvas() {
 
   const onNodeDragStop = useCallback(
     (_: unknown, __: FactoryNode, dragged: FactoryNode[]) => {
-      history.move(dragged.map((n) => ({ id: n.id as NodeId, position: n.position })))
+      const ids = new Set<NodeId>()
+      for (const n of dragged) {
+        if (n.type === 'group') {
+          for (const id of membersOf(world, n.id as GroupId)) ids.add(id)
+        } else {
+          ids.add(n.id as NodeId)
+        }
+      }
+      const moves = [...ids].flatMap((id) => {
+        const abs = getInternalNode(id)?.internals.positionAbsolute
+        return abs ? [{ id, position: { x: abs.x, y: abs.y } }] : []
+      })
+      history.move(moves)
     },
-    [],
+    [getInternalNode, world],
   )
 
   const onPaneContextMenu = useCallback(
@@ -206,7 +272,7 @@ export function Canvas() {
     [menu, select],
   )
 
-  const selectedNodeIds = () => getNodes().filter((n) => n.selected).map((n) => n.id as NodeId)
+  const selectedNodeIds = () => getNodes().filter((n) => n.selected && n.type !== 'group').map((n) => n.id as NodeId)
   // the canvas keeps Cmd/Ctrl+V and Cmd/Ctrl+D even when nothing lands, so Cmd+D never opens the bookmark dialog
   const applyPaste = (ids: NodeId[]) => {
     // the copies already reached the store, so the next world to render is the one holding them
@@ -227,9 +293,17 @@ export function Canvas() {
 
   const minimapColor = useMemo(
     () => (n: FactoryNode) =>
-      n.type === 'agent' ? AGENT_STATUS_COLOR[n.data.agent.status] : n.type === 'sandbox' ? SANDBOX_STATE_COLOR[n.data.sandbox.state] : '#34d399',
+      n.type === 'agent' ? AGENT_STATUS_COLOR[n.data.agent.status]
+        : n.type === 'sandbox' ? SANDBOX_STATE_COLOR[n.data.sandbox.state]
+          : n.type === 'group' ? '#64748b'
+            : '#34d399',
     [],
   )
+
+  const selectedNodes = nodes.filter((n) => n.selected)
+  const groupable = selectedNodes.filter((n) => n.type !== 'group')
+  const canGroup = groupable.length >= 2 && groupable.every((n) => memberGroupId(n) === null)
+  const ungroupId = sharedGroupId(selectedNodes.map((n) => n.type === 'group' ? n.id as GroupId : memberGroupId(n)))
 
   return (
     <div className="absolute inset-0">
@@ -243,7 +317,10 @@ export function Canvas() {
         onConnect={onConnect}
         isValidConnection={isValidConnection}
         onNodeDragStop={onNodeDragStop}
-        onDelete={({ nodes: ns, edges: es }) => history.delete({ nodeIds: ns.map((n) => n.id as NodeId), edgeIds: es.map((e) => e.id as EdgeId) })}
+        onDelete={({ nodes: ns, edges: es }) => history.delete({
+          nodeIds: ns.filter((n) => n.type !== 'group').map((n) => n.id as NodeId),
+          edgeIds: es.map((e) => e.id as EdgeId),
+        })}
         onPaneContextMenu={onPaneContextMenu}
         onPaneClick={() => setMenu(null)}
         selectionOnDrag
@@ -267,6 +344,25 @@ export function Canvas() {
           </Button>
           <Button variant="ghost" size="xs" onClick={() => history.redo()} disabled={!canRedo} title="Redo (⇧⌘/Ctrl+Z or ⌘/Ctrl+Y)">
             <Redo2 size={13} /> Redo <span className="text-ink-500">⇧⌘/Ctrl+Z</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={!canGroup}
+            onClick={() => {
+              const id = history.group(groupable.map((n) => n.id as NodeId))
+              if (id) select({ kind: 'group', id })
+            }}
+          >
+            Group
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={!ungroupId}
+            onClick={() => { if (ungroupId) history.ungroup(ungroupId) }}
+          >
+            Ungroup
           </Button>
           <Button variant="ghost" size="xs" onClick={runLayout} title="Auto-layout (dagre)"><LayoutGrid size={13} /> Layout</Button>
           <Button variant="ghost" size="xs" onClick={() => fitView({ padding: 0.15, duration: 300 })} title="Fit view"><Maximize2 size={13} /> Fit</Button>

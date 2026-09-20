@@ -7,7 +7,7 @@
  * click decision is verified through `existingSubject` instead of rendering.
  */
 import { expect, test } from 'vitest'
-import { existingSubject, type AgentId, type EdgeId, type NodeId, type NodeKind, type RunId, type SandboxId, type Subject, type TaskId, type TriggerId } from '../src/domain/types'
+import { existingSubject, type AgentId, type EdgeId, type GroupId, type NodeId, type NodeKind, type RunId, type SandboxId, type Subject, type TaskId, type TriggerId } from '../src/domain/types'
 import { makeFixture, sb, type Fixture } from './fixture'
 
 /** Manual trigger wired to the given agents, for counted firings. */
@@ -102,6 +102,10 @@ test('existingSubject resolves every kind only while its record exists and never
   ]
   for (const subject of present) expect(existingSubject(w, subject)).toEqual(subject)
 
+  const grouped = fixture.api.graph.group([planner, fixture.agent('Coder')])
+  if (grouped === null) throw new Error('expected a group')
+  expect(existingSubject(fixture.world(), { kind: 'group', id: grouped })).toEqual({ kind: 'group', id: grouped })
+
   const absent: Subject[] = [
     { kind: 'agent', id: 'missing' as AgentId },
     { kind: 'sandbox', id: 'missing' as SandboxId },
@@ -109,6 +113,7 @@ test('existingSubject resolves every kind only while its record exists and never
     { kind: 'run', id: 'missing' as RunId },
     { kind: 'task', id: 'missing' as TaskId },
     { kind: 'edge', id: 'missing' as EdgeId },
+    { kind: 'group', id: 'missing' as GroupId },
   ]
   for (const subject of absent) expect(existingSubject(w, subject)).toBeNull()
 })

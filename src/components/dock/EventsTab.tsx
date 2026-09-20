@@ -19,7 +19,7 @@ export function EventsTab() {
     const selection = existingSubject(world, ev.subject)
     if (ev.subject.kind === 'run') setDockTab('runs')
     if (!selection) return
-    if (selection.kind === 'edge') setView('canvas')
+    if (selection.kind === 'edge' || selection.kind === 'group') setView('canvas')
     select(selection)
   }
 

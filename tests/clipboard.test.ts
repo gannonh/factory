@@ -57,13 +57,13 @@ test('paste creates offset copies of two agents and the handoff between them, le
     id: newPlanner, name: 'Planner', role: 'tech lead', model: 'claude-opus-5', temperature: 0.2, concurrency: 1, timeoutMs: 120_000,
     retry: { maxAttempts: 3, backoffMs: 2000, backoff: 'exponential' }, tools: ['read_file', 'search', 'linear'],
     systemPrompt: 'You are Planner, the tech lead for this team. Work in the assigned sandbox and hand off when done.',
-    status: 'idle', position: { x: 360, y: 100 }, completed: 0, failed: 0,
+    status: 'idle', position: { x: 360, y: 100 }, completed: 0, failed: 0, groupId: null,
   })
   expect(w.agents[newCoder]).toEqual({
     id: newCoder, name: 'Coder', role: 'implementer', model: 'claude-sonnet-5', temperature: 0.2, concurrency: 2, timeoutMs: 120_000,
     retry: { maxAttempts: 3, backoffMs: 2000, backoff: 'exponential' }, tools: ['read_file', 'write_file', 'bash'],
     systemPrompt: 'You are Coder, the implementer for this team. Work in the assigned sandbox and hand off when done.',
-    status: 'idle', position: { x: 360, y: 300 }, completed: 0, failed: 0,
+    status: 'idle', position: { x: 360, y: 300 }, completed: 0, failed: 0, groupId: null,
   })
   expect(newPlanner).toMatch(/^ag-/)
   expect(newCoder).toMatch(/^ag-/)
@@ -160,11 +160,11 @@ test('a leased sandbox and a fired trigger paste idle', () => {
   expect(w.sandboxes[sb(newSandbox)]).toEqual({
     id: newSandbox, name: 'mac-studio', kind: 'local', host: 'localhost', image: 'ghcr.io/factory/dev:node22', capacity: 1,
     state: 'provisioning', stateSince: w.now, progress: 0, metrics: { cpu: 0, mem: 0, disk: 4 }, history: [], leases: [],
-    restartPending: false, position: { x: 360, y: 510 },
+    restartPending: false, position: { x: 360, y: 510 }, groupId: null,
   })
   expect(w.triggers[tr(newTrigger)]).toEqual({
     id: newTrigger, name: 'Nightly sweep', kind: 'cron', intervalMs: 18_000, enabled: false, lastFiredAt: null, fired: 0,
-    template: 'Sweep open issues and plan the next batch', position: { x: 80, y: 100 },
+    template: 'Sweep open issues and plan the next batch', position: { x: 80, y: 100 }, groupId: null,
   })
   expect(newSandbox).toMatch(/^sb-/)
   expect(newTrigger).toMatch(/^tr-/)
@@ -261,4 +261,26 @@ test('api.graph.paste of an empty fragment creates nothing and publishes nothing
   expect(fixture.api.graph.paste({ nodes: [], edges: [] }, { x: 40, y: 40 })).toEqual({ nodes: [], edges: [] })
   expect(fixture.world()).toBe(published)
   expect(fixture.world()).toEqual(before)
+})
+
+test('paste and duplicate of grouped members yield copies with groupId null', () => {
+  const { fixture, clipboard, planner, coder } = setup()
+  const id = fixture.api.graph.group([planner, coder])
+  expect(id).toMatch(/^gr-/)
+  expect(fixture.world().agents[planner].groupId).toBe(id)
+  expect(fixture.world().agents[coder].groupId).toBe(id)
+
+  expect(clipboard.copy([planner, coder])).toBe(true)
+  const pasted = clipboard.paste() as AgentId[]
+  expect(pasted).toHaveLength(2)
+  expect(fixture.world().agents[pasted[0]].groupId).toBeNull()
+  expect(fixture.world().agents[pasted[1]].groupId).toBeNull()
+  expect(fixture.world().agents[planner].groupId).toBe(id)
+  expect(fixture.world().agents[coder].groupId).toBe(id)
+
+  const dup = clipboard.duplicate([planner, coder]) as AgentId[]
+  expect(dup).toHaveLength(2)
+  expect(fixture.world().agents[dup[0]].groupId).toBeNull()
+  expect(fixture.world().agents[dup[1]].groupId).toBeNull()
+  expect(fixture.world().agents[planner].groupId).toBe(id)
 })

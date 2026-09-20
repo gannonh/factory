@@ -13,6 +13,8 @@ import {
   type EdgeId,
   type EdgeKind,
   type GraphFragment,
+  type Group,
+  type GroupId,
   type NodeId,
   type NodeKind,
   type NodeRef,
@@ -35,6 +37,7 @@ type PatchWrite =
   | { target: 'agent'; id: AgentId; values: Parameters<Api['agents']['update']>[1] }
   | { target: 'sandbox'; id: SandboxId; values: Parameters<Api['sandboxes']['update']>[1] }
   | { target: 'trigger'; id: TriggerId; values: Parameters<Api['triggers']['update']>[1] }
+  | { target: 'group'; id: GroupId; values: Parameters<Api['groups']['update']>[1] }
 
 type PatchEntry = { kind: 'patch'; key: string; before: PatchWrite; after: PatchWrite }
 
@@ -48,6 +51,8 @@ type HistoryEntry =
   | { kind: 'remove-edges'; edges: Edge[] }
   | { kind: 'edge-kind'; id: EdgeId; before: EdgeKind; after: EdgeKind }
   | { kind: 'move'; before: Move[]; after: Move[] }
+  | { kind: 'group'; group: Group; memberIds: NodeId[] }
+  | { kind: 'ungroup'; group: Group; memberIds: NodeId[] }
   | PatchEntry
 
 /** Structural equality for JSON-like values: primitives, arrays and plain objects. */
@@ -109,6 +114,10 @@ export function createHistory(api: Api, getWorld: () => World) {
         const capacity = w.sandboxes[write.id]?.capacity
         return capacity === undefined ? null : { target: 'sandbox', id: write.id, values: { capacity } }
       }
+      case 'group': {
+        const name = w.groups[write.id]?.name
+        return name === undefined ? null : { target: 'group', id: write.id, values: { name } }
+      }
     }
   }
 
@@ -117,6 +126,7 @@ export function createHistory(api: Api, getWorld: () => World) {
       case 'agent': return api.agents.update(write.id, write.values)
       case 'sandbox': return api.sandboxes.update(write.id, write.values)
       case 'trigger': return api.triggers.update(write.id, write.values)
+      case 'group': return api.groups.update(write.id, write.values)
     }
   }
 
@@ -181,6 +191,10 @@ export function createHistory(api: Api, getWorld: () => World) {
       case 'edge-kind': return api.graph.setEdgeKind(entry.id, entry.before)
       case 'move': return api.graph.updatePositions(entry.before)
       case 'patch': return writePatch(entry.before)
+      case 'group':
+        if (getWorld().groups[entry.group.id]) api.graph.ungroup(entry.group.id)
+        return
+      case 'ungroup': return api.graph.restoreGroup(entry.group, entry.memberIds)
     }
   }
 
@@ -193,6 +207,10 @@ export function createHistory(api: Api, getWorld: () => World) {
       case 'edge-kind': return api.graph.setEdgeKind(entry.id, entry.after)
       case 'move': return api.graph.updatePositions(entry.after)
       case 'patch': return writePatch(entry.after)
+      case 'group': return api.graph.restoreGroup(entry.group, entry.memberIds)
+      case 'ungroup':
+        if (getWorld().groups[entry.group.id]) api.graph.ungroup(entry.group.id)
+        return
     }
   }
 
@@ -282,5 +300,30 @@ export function createHistory(api: Api, getWorld: () => World) {
     updateAgent: (id: AgentId, patch: Parameters<Api['agents']['update']>[1]) => recordPatch({ target: 'agent', id, values: patch }),
     updateTrigger: (id: TriggerId, patch: Parameters<Api['triggers']['update']>[1]) => recordPatch({ target: 'trigger', id, values: patch }),
     updateSandbox: (id: SandboxId, patch: Parameters<Api['sandboxes']['update']>[1]) => recordPatch({ target: 'sandbox', id, values: patch }),
+    updateGroup: (id: GroupId, patch: Parameters<Api['groups']['update']>[1]) => recordPatch({ target: 'group', id, values: patch }),
+    group: (ids: NodeId[]): GroupId | null => {
+      const id = api.graph.group(ids)
+      if (id === null) return null
+      const group = getWorld().groups[id]
+      if (!group) return id
+      const memberIds: NodeId[] = []
+      const w = getWorld()
+      for (const a of Object.values(w.agents)) if (a.groupId === id) memberIds.push(a.id)
+      for (const s of Object.values(w.sandboxes)) if (s.groupId === id) memberIds.push(s.id)
+      for (const t of Object.values(w.triggers)) if (t.groupId === id) memberIds.push(t.id)
+      push({ kind: 'group', group, memberIds })
+      return id
+    },
+    ungroup: (id: GroupId) => {
+      const w = getWorld()
+      const group = w.groups[id]
+      if (!group) return
+      const memberIds: NodeId[] = []
+      for (const a of Object.values(w.agents)) if (a.groupId === id) memberIds.push(a.id)
+      for (const s of Object.values(w.sandboxes)) if (s.groupId === id) memberIds.push(s.id)
+      for (const t of Object.values(w.triggers)) if (t.groupId === id) memberIds.push(t.id)
+      api.graph.ungroup(id)
+      push({ kind: 'ungroup', group, memberIds })
+    },
   }
 }

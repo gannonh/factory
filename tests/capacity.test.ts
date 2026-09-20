@@ -266,7 +266,7 @@ test('pre-slice saves are discarded and a v3 save restores capacity without leas
   expect(Object.keys(discarded.snapshot().sandboxes)).toHaveLength(3) // key bumped: the v2 save is ignored
 
   storage.setItem('factory.world.v3', JSON.stringify({
-    now: 1, agents: {}, triggers: {}, edges: {}, sim: { paused: false, speed: 1 },
+    now: 1, agents: {}, triggers: {}, edges: {}, groups: {}, sim: { paused: false, speed: 1 },
     tasks: {}, runs: {}, events: [],
     sandboxes: {
       'sb-keep': {
@@ -292,7 +292,7 @@ test('a persisted sandbox with an invalid capacity loads with capacity 1', () =>
     capacity, restartPending: false, position: { x: 0, y: 0 },
   })
   storage.setItem('factory.world.v3', JSON.stringify({
-    now: 1, agents: {}, triggers: {}, edges: {}, sim: { paused: false, speed: 1 },
+    now: 1, agents: {}, triggers: {}, edges: {}, groups: {}, sim: { paused: false, speed: 1 },
     tasks: {}, runs: {}, events: [],
     sandboxes: {
       'sb-zero': box('sb-zero', 0),
