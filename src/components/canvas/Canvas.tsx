@@ -10,7 +10,7 @@ import { clipboard, history, useStore, type Selection } from '../../store'
 import { Button, cx } from '../ui'
 import { ContextMenu, type MenuState } from './ContextMenu'
 import { EdgeLegend, edgeTypes, type FactoryEdgeType } from './FactoryEdge'
-import { groupFrame } from './groups'
+import { groupFrame, membersOf } from './groups'
 import { autoLayout, SIZE } from './layout'
 import { nodeTypes, type FactoryNode } from './nodes'
 
@@ -75,6 +75,7 @@ function applyGroupFrames(world: World, nodes: FactoryNode[], prevById: Map<stri
       height: frame.height,
       style: { width: frame.width, height: frame.height },
       className: 'pointer-events-none',
+      dragHandle: '.group-drag-handle',
       data: { group },
       deletable: false,
       connectable: false,
@@ -126,7 +127,7 @@ export function Canvas() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<FactoryEdgeType>([])
   const [menu, setMenu] = useState<MenuState>(null)
   const [toast, setToast] = useState<string | null>(null)
-  const { screenToFlowPosition, fitView, getNodes } = useReactFlow()
+  const { screenToFlowPosition, fitView, getNodes, getInternalNode } = useReactFlow()
   const fitted = useRef(false)
   const graphSelectionPending = useRef(false)
   /** ids the next world sync should select, set by paste and duplicate; the world they landed in triggers that sync */
@@ -235,9 +236,21 @@ export function Canvas() {
 
   const onNodeDragStop = useCallback(
     (_: unknown, __: FactoryNode, dragged: FactoryNode[]) => {
-      history.move(dragged.map((n) => ({ id: n.id as NodeId, position: n.position })))
+      const ids = new Set<NodeId>()
+      for (const n of dragged) {
+        if (n.type === 'group') {
+          for (const id of membersOf(world, n.id as GroupId)) ids.add(id)
+        } else {
+          ids.add(n.id as NodeId)
+        }
+      }
+      const moves = [...ids].flatMap((id) => {
+        const abs = getInternalNode(id)?.internals.positionAbsolute
+        return abs ? [{ id, position: { x: abs.x, y: abs.y } }] : []
+      })
+      history.move(moves)
     },
-    [],
+    [getInternalNode, world],
   )
 
   const onPaneContextMenu = useCallback(

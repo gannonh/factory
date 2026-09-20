@@ -112,7 +112,7 @@ export function GroupNode({ data, selected }: NodeProps<GroupNodeType>) {
       className={cx('h-full w-full rounded-xl border bg-cyan-400/[0.04]', selected ? 'border-cyan-400/50' : 'border-ink-600')}
     >
       <div
-        className="flex items-center px-3 text-[11px] font-semibold text-ink-200 truncate pointer-events-auto"
+        className="group-drag-handle flex items-center px-3 text-[11px] font-semibold text-ink-200 truncate pointer-events-auto"
         style={{ height: GROUP_HEADER }}
       >
         {data.group.name}
