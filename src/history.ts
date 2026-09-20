@@ -37,6 +37,7 @@ type PatchWrite =
   | { target: 'agent'; id: AgentId; values: Parameters<Api['agents']['update']>[1] }
   | { target: 'sandbox'; id: SandboxId; values: Parameters<Api['sandboxes']['update']>[1] }
   | { target: 'trigger'; id: TriggerId; values: Parameters<Api['triggers']['update']>[1] }
+  | { target: 'group'; id: GroupId; values: Parameters<Api['groups']['update']>[1] }
 
 type PatchEntry = { kind: 'patch'; key: string; before: PatchWrite; after: PatchWrite }
 
@@ -113,6 +114,10 @@ export function createHistory(api: Api, getWorld: () => World) {
         const capacity = w.sandboxes[write.id]?.capacity
         return capacity === undefined ? null : { target: 'sandbox', id: write.id, values: { capacity } }
       }
+      case 'group': {
+        const name = w.groups[write.id]?.name
+        return name === undefined ? null : { target: 'group', id: write.id, values: { name } }
+      }
     }
   }
 
@@ -121,6 +126,7 @@ export function createHistory(api: Api, getWorld: () => World) {
       case 'agent': return api.agents.update(write.id, write.values)
       case 'sandbox': return api.sandboxes.update(write.id, write.values)
       case 'trigger': return api.triggers.update(write.id, write.values)
+      case 'group': return api.groups.update(write.id, write.values)
     }
   }
 
@@ -294,6 +300,7 @@ export function createHistory(api: Api, getWorld: () => World) {
     updateAgent: (id: AgentId, patch: Parameters<Api['agents']['update']>[1]) => recordPatch({ target: 'agent', id, values: patch }),
     updateTrigger: (id: TriggerId, patch: Parameters<Api['triggers']['update']>[1]) => recordPatch({ target: 'trigger', id, values: patch }),
     updateSandbox: (id: SandboxId, patch: Parameters<Api['sandboxes']['update']>[1]) => recordPatch({ target: 'sandbox', id, values: patch }),
+    updateGroup: (id: GroupId, patch: Parameters<Api['groups']['update']>[1]) => recordPatch({ target: 'group', id, values: patch }),
     group: (ids: NodeId[]): GroupId | null => {
       const id = api.graph.group(ids)
       if (id === null) return null

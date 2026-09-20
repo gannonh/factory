@@ -115,3 +115,21 @@ test('groupFrame pads member rects and membersOf lists the group ids', () => {
   expect(membersOf(world, gid)).toEqual(['ag-planner', 'ag-coder', 'sb-local-1'] as NodeId[])
   expect(membersOf(world, 'gr-missing' as GroupId)).toEqual([])
 })
+
+test('rename sets the group name and two consecutive renames undo in one step', () => {
+  const fixture = makeFixture()
+  const history = createHistory(fixture.api, fixture.world)
+  const id = history.group([fixture.agent('Planner'), fixture.agent('Coder')])
+  if (id === null) throw new Error('expected a group')
+
+  history.updateGroup(id, { name: 'Alpha' })
+  history.updateGroup(id, { name: 'Alpha team' })
+  expect(fixture.world().groups[id].name).toBe('Alpha team')
+
+  history.undo()
+  expect(fixture.world().groups[id].name).toBe('Group 1')
+  expect(history.canUndo()).toBe(true)
+
+  history.redo()
+  expect(fixture.world().groups[id].name).toBe('Alpha team')
+})

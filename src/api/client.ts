@@ -25,6 +25,9 @@ const buildApi = (server: MockServer) => ({
     ungroup: (id: GroupId) => server.ungroup(id),
     restoreGroup: (group: Group, memberIds: NodeId[]) => server.restoreGroup(group, memberIds),
   },
+  groups: {
+    update: (id: GroupId, patch: { name: string }) => server.updateGroup(id, patch),
+  },
   agents: {
     update: (id: AgentId, patch: Partial<Omit<Agent, 'id' | 'status' | 'position' | 'groupId'>>) => server.updateAgent(id, patch),
     setPaused: (id: AgentId, paused: boolean) => server.setAgentPaused(id, paused),

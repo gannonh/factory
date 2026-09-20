@@ -2,6 +2,7 @@ import { X } from 'lucide-react'
 import { useStore } from '../../store'
 import { AgentInspector } from './AgentInspector'
 import { EdgeInspector } from './EdgeInspector'
+import { GroupInspector } from './GroupInspector'
 import { RunInspector } from './RunInspector'
 import { SandboxInspector } from './SandboxInspector'
 import { TaskInspector } from './TaskInspector'
@@ -48,7 +49,7 @@ export function Inspector() {
     const g = world.groups[selection.id]
     if (!g) return null
     title = 'Group'
-    body = <div className="text-sm font-semibold">{g.name}</div>
+    body = <GroupInspector group={g} />
   } else {
     const exhaustive: never = selection
     return exhaustive

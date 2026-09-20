@@ -106,14 +106,15 @@ function buildEdges(world: World): FactoryEdgeType[] {
   })
 }
 
-type CanvasSelection = Extract<Subject, { kind: 'agent' | 'sandbox' | 'trigger' | 'edge' }>
+type CanvasSelection = Extract<Subject, { kind: 'agent' | 'sandbox' | 'trigger' | 'edge' | 'group' }>
 
 function isCanvasSelection(selection: Selection): selection is CanvasSelection {
   return selection !== null && (
     selection.kind === 'agent' ||
     selection.kind === 'sandbox' ||
     selection.kind === 'trigger' ||
-    selection.kind === 'edge'
+    selection.kind === 'edge' ||
+    selection.kind === 'group'
   )
 }
 
@@ -205,6 +206,7 @@ export function Canvas() {
       if (cur?.id === n.id) return
       const kind = nodeKindOf(w, n.id)
       if (kind) push(nodeSubject(kind, n.id as NodeId))
+      else if (w.groups[n.id as GroupId]) push({ kind: 'group', id: n.id as GroupId })
       return
     }
     const e = edges.find((x) => x.selected)
@@ -357,7 +359,10 @@ export function Canvas() {
             variant="ghost"
             size="xs"
             disabled={!canGroup}
-            onClick={() => history.group(groupable.map((n) => n.id as NodeId))}
+            onClick={() => {
+              const id = history.group(groupable.map((n) => n.id as NodeId))
+              if (id) select({ kind: 'group', id })
+            }}
           >
             Group
           </Button>

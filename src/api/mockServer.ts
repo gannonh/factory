@@ -443,6 +443,13 @@ export class MockServer {
     this.publish()
   }
 
+  updateGroup(id: GroupId, patch: { name: string }) {
+    const cur = this.world.groups[id]
+    if (!cur) return
+    this.world.groups = { ...this.world.groups, [id]: { ...cur, ...patch } }
+    this.publish()
+  }
+
   updateAgent(id: AgentId, patch: Partial<Omit<Agent, 'id' | 'status' | 'position' | 'groupId'>>) {
     this.patchAgent(id, patch)
     this.publish()
