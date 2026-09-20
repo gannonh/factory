@@ -142,6 +142,7 @@ test('HELP_ROWS follow catalog order and chord labels match the toolbar voice', 
   expect(HELP_ROWS.map((row) => row.id)).toEqual([
     'undo', 'redo', 'copy', 'paste', 'duplicate', 'group', 'ungroup', 'delete',
   ])
+  expect(chordOf('redo')).toBe('⇧⌘/Ctrl+Z / ⌘/Ctrl+Y')
   expect(chordOf('group')).toBe('⌘/Ctrl+G')
   expect(chordOf('delete')).toContain('Delete')
 })

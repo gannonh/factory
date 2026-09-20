@@ -33,9 +33,10 @@ function chordOfEntry(entry: (typeof CATALOG)[number]): string {
   if ('keys' in entry) {
     return entry.keys.map((key) => key === 'Backspace' ? '⌫' : key).join(' / ')
   }
-  const [first] = entry.bindings
-  const key = first.letter.toUpperCase()
-  return ('shift' in first && first.shift) ? `⇧⌘/Ctrl+${key}` : `⌘/Ctrl+${key}`
+  return entry.bindings.map((binding) => {
+    const key = binding.letter.toUpperCase()
+    return ('shift' in binding && binding.shift) ? `⇧⌘/Ctrl+${key}` : `⌘/Ctrl+${key}`
+  }).join(' / ')
 }
 
 export const HELP_ROWS: readonly HelpRow[] = CATALOG.map((entry) => ({
@@ -94,6 +95,9 @@ export type HelpControls = {
   onClose: () => void
 }
 
+/** Shared across every `useShortcuts` listener so App undo/redo stop while Canvas has help open. */
+const overlayBlocksShortcuts = { current: false }
+
 /** An action without a handler is left alone, so components can each bind their own actions. Handlers need no memoization. */
 export function useShortcuts(handlers: ShortcutHandlers, help?: HelpControls) {
   const latest = useRef(handlers)
@@ -101,6 +105,10 @@ export function useShortcuts(handlers: ShortcutHandlers, help?: HelpControls) {
   useEffect(() => {
     latest.current = handlers
     helpRef.current = help
+    if (help) overlayBlocksShortcuts.current = help.overlayOpen
+    return () => {
+      if (help) overlayBlocksShortcuts.current = false
+    }
   })
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -119,6 +127,7 @@ export function useShortcuts(handlers: ShortcutHandlers, help?: HelpControls) {
           return
         }
       }
+      if (overlayBlocksShortcuts.current) return
       const action = shortcut(e, target)
       const handler = action && latest.current[action]
       if (handler?.()) e.preventDefault()
