@@ -5,10 +5,11 @@ import {
 import { LayoutGrid, Maximize2, Redo2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, edgeKindFor, nodeKindOf, nodeSubject, type EdgeId, type GroupId, type NodeId, type NodeKind, type Subject, type World } from '../../domain/types'
-import { useShortcuts } from '../../shortcuts'
+import { chordOf, FOOTER_SHORTCUTS, useShortcuts } from '../../shortcuts'
 import { clipboard, history, useStore, type Selection } from '../../store'
 import { Button, cx } from '../ui'
 import { ContextMenu, type MenuState } from './ContextMenu'
+import { ShortcutHelpButton, ShortcutsOverlay } from './ShortcutsOverlay'
 import { EdgeLegend, edgeTypes, type FactoryEdgeType } from './FactoryEdge'
 import { groupFrame, membersOf, sharedGroupId } from './groups'
 import { autoLayout, SIZE } from './layout'
@@ -128,6 +129,8 @@ export function Canvas() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<FactoryEdgeType>([])
   const [menu, setMenu] = useState<MenuState>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [helpOpen, setHelpOpen] = useState(false)
+  const pane = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition, fitView, getNodes, getInternalNode } = useReactFlow()
   const fitted = useRef(false)
   const graphSelectionPending = useRef(false)
@@ -273,18 +276,21 @@ export function Canvas() {
   )
 
   const selectedNodeIds = () => getNodes().filter((n) => n.selected && n.type !== 'group').map((n) => n.id as NodeId)
-  // the canvas keeps Cmd/Ctrl+V and Cmd/Ctrl+D even when nothing lands, so Cmd+D never opens the bookmark dialog
+  // the canvas keeps V, D and G even when nothing lands, so Cmd+D never bookmarks and Cmd+G never opens Find
   const applyPaste = (ids: NodeId[]) => {
     // the copies already reached the store, so the next world to render is the one holding them
     if (ids.length > 0) pasted.current = new Set(ids)
     return true
   }
-  useShortcuts({
-    // selected text, in the dock logs for example, keeps the native copy
-    copy: () => !window.getSelection()?.toString() && clipboard.copy(selectedNodeIds()),
-    paste: () => applyPaste(clipboard.paste()),
-    duplicate: () => applyPaste(clipboard.duplicate(selectedNodeIds())),
-  })
+
+  const closeHelp = () => {
+    setHelpOpen(false)
+    pane.current?.focus()
+  }
+  const toggleHelp = () => {
+    if (helpOpen) closeHelp()
+    else setHelpOpen(true)
+  }
 
   const runLayout = useCallback(() => {
     history.move(autoLayout(world))
@@ -305,8 +311,30 @@ export function Canvas() {
   const canGroup = groupable.length >= 2 && groupable.every((n) => memberGroupId(n) === null)
   const ungroupId = sharedGroupId(selectedNodes.map((n) => n.type === 'group' ? n.id as GroupId : memberGroupId(n)))
 
+  useShortcuts({
+    // selected text, in the dock logs for example, keeps the native copy
+    copy: () => !window.getSelection()?.toString() && clipboard.copy(selectedNodeIds()),
+    paste: () => applyPaste(clipboard.paste()),
+    duplicate: () => applyPaste(clipboard.duplicate(selectedNodeIds())),
+    group: () => {
+      if (canGroup) {
+        const id = history.group(groupable.map((n) => n.id as NodeId))
+        if (id) select({ kind: 'group', id })
+      }
+      return true
+    },
+    ungroup: () => {
+      if (ungroupId) history.ungroup(ungroupId)
+      return true
+    },
+  }, {
+    overlayOpen: helpOpen,
+    onToggle: toggleHelp,
+    onClose: closeHelp,
+  })
+
   return (
-    <div className="absolute inset-0">
+    <div ref={pane} tabIndex={-1} className="absolute inset-0 outline-none">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -337,7 +365,7 @@ export function Canvas() {
         <MiniMap position="bottom-right" pannable zoomable nodeColor={minimapColor} maskColor="rgba(7,9,15,0.7)" nodeStrokeWidth={0} style={{ width: 160, height: 100 }} />
       </ReactFlow>
 
-      <div className="absolute top-3 left-3 flex items-center gap-2">
+      <div className="absolute top-3 left-3 z-50 flex items-center gap-2">
         <div className="flex items-center gap-1 rounded-lg border border-ink-700 bg-ink-900/90 backdrop-blur p-1">
           <Button variant="ghost" size="xs" onClick={() => history.undo()} disabled={!canUndo} title="Undo (⌘/Ctrl+Z)">
             <Undo2 size={13} /> Undo <span className="text-ink-500">⌘/Ctrl+Z</span>
@@ -349,6 +377,7 @@ export function Canvas() {
             variant="ghost"
             size="xs"
             disabled={!canGroup}
+            title={chordOf('group')}
             onClick={() => {
               const id = history.group(groupable.map((n) => n.id as NodeId))
               if (id) select({ kind: 'group', id })
@@ -360,12 +389,14 @@ export function Canvas() {
             variant="ghost"
             size="xs"
             disabled={!ungroupId}
+            title={chordOf('ungroup')}
             onClick={() => { if (ungroupId) history.ungroup(ungroupId) }}
           >
             Ungroup
           </Button>
           <Button variant="ghost" size="xs" onClick={runLayout} title="Auto-layout (dagre)"><LayoutGrid size={13} /> Layout</Button>
           <Button variant="ghost" size="xs" onClick={() => fitView({ padding: 0.15, duration: 300 })} title="Fit view"><Maximize2 size={13} /> Fit</Button>
+          <ShortcutHelpButton open={helpOpen} onClick={toggleHelp} />
         </div>
         <div className="flex items-center gap-1 rounded-lg border border-ink-700 bg-ink-900/90 backdrop-blur p-1 text-[10px]">
           <span className="text-ink-400 px-1">agent → agent draws</span>
@@ -382,13 +413,14 @@ export function Canvas() {
       </div>
       <div className="absolute top-3 right-3"><EdgeLegend /></div>
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-[10px] text-ink-500 pointer-events-none">
-        drag to marquee-select · space/middle-drag to pan · right-click to spawn · ⌫ deletes · ⌘/Ctrl+C, V, D copy, paste, duplicate
+        drag to marquee-select · space/middle-drag to pan · right-click to spawn · {FOOTER_SHORTCUTS}
       </div>
       {toast && (
         <div className="absolute top-14 left-1/2 -translate-x-1/2 rounded-md border border-red-400/40 bg-red-500/15 text-red-200 px-3 py-1.5 text-xs shadow-lg">
           {toast}
         </div>
       )}
+      <ShortcutsOverlay open={helpOpen} onClose={closeHelp} />
       <ContextMenu menu={menu} onPick={spawn} onClose={() => setMenu(null)} />
     </div>
   )

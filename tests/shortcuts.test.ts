@@ -1,10 +1,10 @@
 /**
- * Key matching for undo, redo, copy, paste and duplicate, exercised through
- * `shortcut` with plain event objects and duck-typed targets, since the suite
- * runs without a DOM.
+ * Key matching for undo, redo, copy, paste, duplicate, group and ungroup, plus
+ * overlay help commands, exercised through `shortcut` and `helpCommand` with
+ * plain event objects and duck-typed targets, since the suite runs without a DOM.
  */
 import { expect, test } from 'vitest'
-import { shortcut } from '../src/shortcuts'
+import { chordOf, HELP_ROWS, helpCommand, shortcut } from '../src/shortcuts'
 
 const keys = { metaKey: false, ctrlKey: false, shiftKey: false, altKey: false }
 const body = { tagName: 'BODY', isContentEditable: false }
@@ -109,4 +109,39 @@ test('every bound letter matches by key position too, whatever the layout prints
       expect([letter, shiftKey, byPosition]).toEqual([letter, shiftKey, byLetter])
     }
   }
+})
+
+const g = { ...keys, key: 'g', code: 'KeyG' }
+const question = { ...keys, key: '?', code: 'Slash', shiftKey: true }
+const esc = { ...keys, key: 'Escape', code: 'Escape' }
+const input = { tagName: 'INPUT', type: 'text', isContentEditable: false }
+
+test('Cmd or Ctrl with G groups, and Shift with G ungroups', () => {
+  expect(shortcut({ ...g, ctrlKey: true }, body)).toBe('group')
+  expect(shortcut({ ...g, metaKey: true }, null)).toBe('group')
+  expect(shortcut({ ...g, ctrlKey: true, shiftKey: true }, body)).toBe('ungroup')
+  expect(shortcut({ ...g, metaKey: true, shiftKey: true, key: 'G' }, body)).toBe('ungroup')
+})
+
+test('text entry targets keep native typing for group, and ? is not a shortcut action', () => {
+  expect(shortcut({ ...g, ctrlKey: true }, input)).toBeNull()
+  expect(shortcut({ ...g, metaKey: true, shiftKey: true }, input)).toBeNull()
+  expect(shortcut(question, body)).toBeNull()
+})
+
+test('helpCommand toggles on ? and closes on Escape only while the overlay is open', () => {
+  expect(helpCommand(question, body, false)).toBe('toggle')
+  expect(helpCommand(question, body, true)).toBe('toggle')
+  expect(helpCommand(esc, body, true)).toBe('close')
+  expect(helpCommand(esc, body, false)).toBeNull()
+  expect(helpCommand(question, input, false)).toBeNull()
+  expect(helpCommand(esc, input, true)).toBeNull()
+})
+
+test('HELP_ROWS follow catalog order and chord labels match the toolbar voice', () => {
+  expect(HELP_ROWS.map((row) => row.id)).toEqual([
+    'undo', 'redo', 'copy', 'paste', 'duplicate', 'group', 'ungroup', 'delete',
+  ])
+  expect(chordOf('group')).toBe('⌘/Ctrl+G')
+  expect(chordOf('delete')).toContain('Delete')
 })
