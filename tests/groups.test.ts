@@ -1,8 +1,3 @@
-/**
- * Group and ungroup, exercised through `createApi` and `createHistory` on a
- * fixture. Canvas helpers `groupFrame` and `membersOf` are checked against
- * literal rects and ids.
- */
 import { expect, test, vi } from 'vitest'
 import { retainWorld, STORAGE_KEY, MockServer } from '../src/api/mockServer'
 import { GROUP_HEADER, GROUP_PAD, groupFrame, membersOf } from '../src/components/canvas/groups'
