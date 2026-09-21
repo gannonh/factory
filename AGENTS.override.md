@@ -88,7 +88,7 @@ If the Linear issue has `runtime` / `model` / `model-effort` labels, treat them 
 | `astra` | `gpt-6-astra` |
 | `fable` | `claude-fable-5-1` |
 | `composer` | `composer-2.5` |
-| `grok` | `grok-4.6` |
+| `grok` | `grok-4.7` |
 | `opus` | `claude-opus-5` |
 | `luna` | `gpt-5.6-luna` |
 | `terra` | `gpt-5.6-terra` |
@@ -166,21 +166,21 @@ This section overrides any skill, rule, AGENTS.md, CLAUDE.md, or other instructi
 
 Provider-qualified per-role choices. Read the installed pstack provider-dispatch reference before dispatching a configured role. Every documented role remains present. `inherit-parent` and `auto` use the parent model natively and still count as one panel lane.
 
-feature, refactoring: codex:gpt-5.6-sol@xhigh
-bug-fix: codex:gpt-5.6-sol@xhigh
-perf-issue: codex:gpt-5.6-sol@xhigh
-hillclimb: codex:gpt-5.6-sol@high
-judgment and prose: codex:gpt-5.6-sol@xhigh
-hardest tasks: codex:gpt-6-astra@xhigh
+feature, refactoring: codex:gpt-5.6-sol@medium
+bug-fix: codex:gpt-5.6-sol@medium
+perf-issue: codex:gpt-5.6-sol@medium
+hillclimb: codex:gpt-5.6-luna@max
+judgment and prose: codex:gpt-5.6-sol@medium
+hardest tasks: codex:gpt-5.6-sol@high
 how explorer: codex:gpt-5.6-luna@max
-how explainer: codex:gpt-5.6-sol@xhigh
+how explainer: codex:gpt-5.6-sol@medium
 why investigators: inherit-parent
 why synthesizer: inherit-parent
 reflect tooling: inherit-parent
 reflect judgment, divergent, synthesizer: inherit-parent
-arena runners: codex:gpt-5.6-sol@xhigh, codex:gpt-5.6-luna@max, claude:opus@xhigh, cursor:cursor-grok-4.6@xhigh
-arena cross-judge pool: codex:gpt-5.6-sol@xhigh, codex:gpt-5.6-luna@max, claude:opus@xhigh, cursor:cursor-grok-4.6@xhigh
+arena runners: codex:gpt-6-sol@xhigh, codex:gpt-5.6-luna@max, claude:opus@high, cursor:cursor-grok-4.7@xhigh
+arena cross-judge pool: codex:gpt-6-sol@xhigh, codex:gpt-5.6-luna@max, claude:opus@high, cursor:cursor-grok-4.7@xhigh
 swarm workers: codex:gpt-5.6-luna@max
-architect runners: codex:gpt-5.6-sol@xhigh, codex:gpt-5.6-luna@max, claude:opus@xhigh, cursor:cursor-grok-4.6@xhigh
-interrogate reviewers: codex:gpt-5.6-sol@xhigh, codex:gpt-5.6-luna@max, claude:opus@xhigh, cursor:cursor-grok-4.6@xhigh
+architect runners: codex:gpt-6-sol@xhigh, codex:gpt-5.6-luna@max, claude:opus@high, cursor:cursor-grok-4.7@xhigh
+interrogate reviewers: codex:gpt-6-sol@xhigh, codex:gpt-5.6-luna@max, claude:opus@high, cursor:cursor-grok-4.7@xhigh
 <!-- pstack:models:end -->
