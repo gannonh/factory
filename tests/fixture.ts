@@ -1,45 +1,32 @@
 /**
- * Shared fixture for the API-level vitest suites: a manual-mode MockServer on
- * an injected storage, driven through `createApi`. The default fixture
- * isolates the seeded graph by disabling the periodic triggers and removing
- * the seeded handoff edges so tests build their own graphs; pass
- * `isolate: false` to keep the seed intact. The injected rng (0.5) makes every
- * run last 12.5s of simulated time and succeed.
+ * Shared fixture for the API-level vitest suites: a manual-mode MockServer
+ * driven through the in-process API. The default fixture isolates the seeded
+ * graph by disabling the periodic triggers and removing the seeded handoff
+ * edges so tests build their own graphs; pass `isolate: false` to keep the
+ * seed intact. The injected rng (0.5) makes every run last 12.5s of simulated
+ * time and succeed. `sim.advance` is the in-process clock and is not a network
+ * command.
  */
-import { vi } from 'vitest'
-import { createApi, type Api } from '../src/api/client'
-import { MockServer, type StorageLike } from '../src/api/mockServer'
+import { createApi, type InProcessApi } from '../server/api'
+import { MockServer } from '../server/simulation'
 import type { AgentId, FactoryEvent, SandboxId, Task, TaskId, World } from '../src/domain/types'
 
 export const RNG = () => 0.5
 export const sb = (id: string) => id as SandboxId
 
-export type InMemoryStorage = StorageLike & { store: Map<string, string> }
-
-export function makeStorage(): InMemoryStorage {
-  const store = new Map<string, string>()
-  return {
-    store,
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => { store.set(key, value) },
-    removeItem: (key: string) => { store.delete(key) },
-  }
-}
-
 export type Fixture = {
   server: MockServer
-  api: Api
+  api: InProcessApi
   world: () => World
   agent: (name: string) => AgentId
   task: (id: TaskId) => Task
   firstTask: (agentId: AgentId) => Task
   events: () => FactoryEvent[]
   runs: () => World['runs']
-  flushSave: () => void
 }
 
-export function makeFixture(options: { storage?: InMemoryStorage; isolate?: boolean } = {}): Fixture {
-  const server = new MockServer({ manual: true, rng: RNG, storage: options.storage })
+export function makeFixture(options: { isolate?: boolean } = {}): Fixture {
+  const server = new MockServer({ manual: true, rng: RNG })
   const api = createApi(server)
   let latest = server.snapshot()
   api.subscribe((w) => { latest = w })
@@ -72,6 +59,5 @@ export function makeFixture(options: { storage?: InMemoryStorage; isolate?: bool
     firstTask,
     events: () => latest.events,
     runs: () => latest.runs,
-    flushSave: () => vi.advanceTimersByTime(1000),
   }
 }

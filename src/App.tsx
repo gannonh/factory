@@ -11,14 +11,20 @@ import { useShortcuts } from './shortcuts'
 
 export default function App() {
   const view = useStore((s) => s.view)
+  const link = useStore((s) => s.link)
   useShortcuts({
-    undo: () => { history.undo(); return true },
-    redo: () => { history.redo(); return true },
+    undo: () => { void history.undo(); return true },
+    redo: () => { void history.redo(); return true },
   })
   return (
     <ReactFlowProvider>
       <div className="h-full flex flex-col">
         <TopBar />
+        {link === 'down' && (
+          <div role="status" className="shrink-0 bg-red-950 text-red-100 text-sm px-3 py-2 border-b border-red-800">
+            disconnected from server
+          </div>
+        )}
         <div className="flex-1 flex min-h-0">
           <Rail />
           <div className="flex-1 flex flex-col min-w-0 min-h-0">

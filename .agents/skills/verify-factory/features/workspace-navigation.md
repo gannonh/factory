@@ -24,7 +24,7 @@ Preconditions:
 - **Open Agents.** `agent-browser find role button click --name "Agents"`. `agent-browser snapshot` shows `heading "Agents"` and column headers `AGENT`, `STATUS`, `MODEL`, `TEMP`, `LOAD`, `QUEUE`, `DONE`, `FAILED`, `TOKENS`, `SANDBOXES`, and `TOOLS`.
 - **Open Sandboxes.** `agent-browser find role button click --name "Sandboxes"`. The snapshot shows `heading "Sandboxes"`, `button "New sandbox"`, and cards containing `mac-studio`, `builder-a`, and `hetzner-cx32`.
 - **Return to Canvas.** `agent-browser find role button click --name "Canvas"`. The snapshot lists groups whose names start with `Nightly sweep`, `GitHub PR opened`, `Planner`, `Coder`, `Reviewer`, `QA`, `mac-studio`, `builder-a`, and `hetzner-cx32`, plus groups named `Edge from <id> to <id>`.
-- **Prove no mutation.** Read the keys of `agents`, `sandboxes`, `triggers`, and `edges` in `factory.world.v3` before and after navigation. The four key sets are identical, and the stored world has no `view` key.
+- **Prove no mutation.** After visiting Agents and Sandboxes and returning to Canvas, the same seeded node names are on the canvas. A reload opens Canvas. `localStorage.getItem('factory.world.v3')` is null.
 
 ## Gotchas
 

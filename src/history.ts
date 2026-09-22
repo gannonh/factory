@@ -3,7 +3,7 @@
  * the world before its write, records the edit as data, and replay calls the
  * raw API so ids stay stable across the stack.
  */
-import type { Api } from './api/client'
+import type { Api } from './api/types'
 import {
   attachedEdges,
   nodeKindOf,
@@ -130,6 +130,13 @@ export function createHistory(api: Api, getWorld: () => World) {
     }
   }
 
+  let tail: Promise<void> = Promise.resolve()
+  function enqueue<T>(op: () => Promise<T>): Promise<T> {
+    const run = tail.then(op, op)
+    tail = run.then(() => undefined, () => undefined)
+    return run
+  }
+
   /** Merge into the top patch entry when it targets the same record and key, dropping a round trip back to the start. */
   function pushPatch(entry: PatchEntry) {
     const top = entries[cursor - 1]
@@ -151,38 +158,37 @@ export function createHistory(api: Api, getWorld: () => World) {
     push(entry)
   }
 
-  function recordPatch(write: PatchWrite) {
+  async function recordPatch(write: PatchWrite) {
     const keys = Object.keys(write.values).sort()
     const before = readPatch(write, keys)
     if (!before) return
-    writePatch(write)
+    await writePatch(write)
     const after = readPatch(write, keys)
     if (!after || deepEqual(before.values, after.values)) return
     pushPatch({ kind: 'patch', key: keys.join(','), before, after })
   }
 
-  // delete replays skip ids that are already gone so the server logs no phantom delete
-  function deleteExistingNodes(ids: NodeId[]) {
+  async function deleteExistingNodes(ids: NodeId[]) {
     const existing = ids.filter((id) => nodeKindOf(getWorld(), id) !== null)
-    if (existing.length > 0) api.graph.deleteNodes(existing)
+    if (existing.length > 0) await api.graph.deleteNodes(existing)
   }
 
-  function removeExistingEdges(ids: EdgeId[]) {
+  async function removeExistingEdges(ids: EdgeId[]) {
     const existing = ids.filter((id) => getWorld().edges[id])
-    if (existing.length > 0) api.graph.removeEdges(existing)
+    if (existing.length > 0) await api.graph.removeEdges(existing)
   }
 
-  function addNodeSet(entry: NodeSet) {
-    api.graph.restoreNodes(entry.nodes)
-    api.graph.restoreEdges(entry.edges)
+  async function addNodeSet(entry: NodeSet) {
+    await api.graph.restoreNodes(entry.nodes)
+    await api.graph.restoreEdges(entry.edges)
   }
 
-  function removeNodeSet(entry: NodeSet) {
-    deleteExistingNodes(entry.nodes.map((ref) => ref.node.id))
-    removeExistingEdges(entry.edges.map((e) => e.id))
+  async function removeNodeSet(entry: NodeSet) {
+    await deleteExistingNodes(entry.nodes.map((ref) => ref.node.id))
+    await removeExistingEdges(entry.edges.map((e) => e.id))
   }
 
-  function revert(entry: HistoryEntry) {
+  async function revert(entry: HistoryEntry) {
     switch (entry.kind) {
       case 'create': return removeNodeSet(entry)
       case 'delete': return addNodeSet(entry)
@@ -192,13 +198,13 @@ export function createHistory(api: Api, getWorld: () => World) {
       case 'move': return api.graph.updatePositions(entry.before)
       case 'patch': return writePatch(entry.before)
       case 'group':
-        if (getWorld().groups[entry.group.id]) api.graph.ungroup(entry.group.id)
+        if (getWorld().groups[entry.group.id]) await api.graph.ungroup(entry.group.id)
         return
       case 'ungroup': return api.graph.restoreGroup(entry.group, entry.memberIds)
     }
   }
 
-  function apply(entry: HistoryEntry) {
+  async function apply(entry: HistoryEntry) {
     switch (entry.kind) {
       case 'create': return addNodeSet(entry)
       case 'delete': return removeNodeSet(entry)
@@ -209,31 +215,31 @@ export function createHistory(api: Api, getWorld: () => World) {
       case 'patch': return writePatch(entry.after)
       case 'group': return api.graph.restoreGroup(entry.group, entry.memberIds)
       case 'ungroup':
-        if (getWorld().groups[entry.group.id]) api.graph.ungroup(entry.group.id)
+        if (getWorld().groups[entry.group.id]) await api.graph.ungroup(entry.group.id)
         return
     }
   }
 
   return {
-    undo: () => {
+    undo: () => enqueue(async () => {
       if (cursor === 0) return
       cursor -= 1
       mergeable = false
-      revert(entries[cursor])
+      await revert(entries[cursor]!)
       notify()
-    },
-    redo: () => {
+    }),
+    redo: () => enqueue(async () => {
       if (cursor === entries.length) return
       cursor += 1
       mergeable = false
-      apply(entries[cursor - 1])
+      await apply(entries[cursor - 1]!)
       notify()
-    },
+    }),
     /** Reset the simulation to the seed; the stack goes with the world it described. */
-    reset: () => {
-      api.sim.reset()
+    reset: () => enqueue(async () => {
+      await api.sim.reset()
       clear()
-    },
+    }),
     clear,
     canUndo: () => cursor > 0,
     canRedo: () => cursor < entries.length,
@@ -241,68 +247,68 @@ export function createHistory(api: Api, getWorld: () => World) {
       listeners.add(fn)
       return () => { listeners.delete(fn) }
     },
-    createNode: (kind: NodeKind, position: Position): NodeId => {
-      const id = api.graph.createNode(kind, position)
+    createNode: (kind: NodeKind, position: Position) => enqueue(async () => {
+      const id = await api.graph.createNode(kind, position)
       const ref = nodeRef(getWorld(), id)
       if (ref) push({ kind: 'create', nodes: [ref], edges: [] })
       return id
-    },
+    }),
     /** Paste or duplicate: every new node and the edges between them in one entry. */
-    paste: (fragment: GraphFragment, offset: Position): GraphFragment => {
-      const created = api.graph.paste(fragment, offset)
+    paste: (fragment: GraphFragment, offset: Position) => enqueue(async () => {
+      const created = await api.graph.paste(fragment, offset)
       if (created.nodes.length > 0) push({ kind: 'create', ...created })
       return created
-    },
+    }),
     /** One Delete keypress: the nodes, every edge attached to them, and separately selected edges. */
-    delete: ({ nodeIds, edgeIds }: { nodeIds: NodeId[]; edgeIds: EdgeId[] }) => {
+    delete: ({ nodeIds, edgeIds }: { nodeIds: NodeId[]; edgeIds: EdgeId[] }) => enqueue(async () => {
       const world = getWorld()
       const nodes = nodeIds.map((id) => nodeRef(world, id)).filter((ref) => ref !== null)
       const attached = attachedEdges(world, nodes.map((ref) => ref.node.id))
       const attachedIds = new Set(attached.map((e) => e.id))
       const standalone = edgeIds.map((id) => world.edges[id]).filter((e) => e && !attachedIds.has(e.id))
       if (nodes.length === 0 && standalone.length === 0) return
-      if (nodes.length > 0) api.graph.deleteNodes(nodes.map((ref) => ref.node.id))
-      if (standalone.length > 0) api.graph.removeEdges(standalone.map((e) => e.id))
+      if (nodes.length > 0) await api.graph.deleteNodes(nodes.map((ref) => ref.node.id))
+      if (standalone.length > 0) await api.graph.removeEdges(standalone.map((e) => e.id))
       push({ kind: 'delete', nodes, edges: [...attached, ...standalone] })
-    },
-    connect: (source: NodeId, target: NodeId, preferred: EdgeKind | null) => {
-      const result = api.graph.connect(source, target, preferred)
+    }),
+    connect: (source: NodeId, target: NodeId, preferred: EdgeKind | null) => enqueue(async () => {
+      const result = await api.graph.connect(source, target, preferred)
       if (result.ok) {
         const edge = getWorld().edges[result.id]
         if (edge) push({ kind: 'connect', edge })
       }
       return result
-    },
-    removeEdges: (ids: EdgeId[]) => {
+    }),
+    removeEdges: (ids: EdgeId[]) => enqueue(async () => {
       const world = getWorld()
-      const edges = ids.map((id) => world.edges[id]).filter(Boolean)
+      const edges = ids.map((id) => world.edges[id]).filter((e) => e !== undefined)
       if (edges.length === 0) return
-      api.graph.removeEdges(edges.map((e) => e.id))
+      await api.graph.removeEdges(edges.map((e) => e.id))
       push({ kind: 'remove-edges', edges })
-    },
+    }),
     /** A drag or an auto layout: every moved node in one entry. */
-    move: (moves: Move[]) => {
+    move: (moves: Move[]) => enqueue(async () => {
       const positions = () => moves.flatMap(({ id }) => {
         const ref = nodeRef(getWorld(), id)
         return ref ? [{ id, position: ref.node.position }] : []
       })
       const before = positions()
-      api.graph.updatePositions(moves)
+      await api.graph.updatePositions(moves)
       const after = positions()
       if (!deepEqual(before, after)) push({ kind: 'move', before, after })
-    },
-    setEdgeKind: (id: EdgeId, kind: EdgeKind) => {
+    }),
+    setEdgeKind: (id: EdgeId, kind: EdgeKind) => enqueue(async () => {
       const before = getWorld().edges[id]?.kind
-      api.graph.setEdgeKind(id, kind)
+      await api.graph.setEdgeKind(id, kind)
       const after = getWorld().edges[id]?.kind
       if (before && after && before !== after) push({ kind: 'edge-kind', id, before, after })
-    },
-    updateAgent: (id: AgentId, patch: Parameters<Api['agents']['update']>[1]) => recordPatch({ target: 'agent', id, values: patch }),
-    updateTrigger: (id: TriggerId, patch: Parameters<Api['triggers']['update']>[1]) => recordPatch({ target: 'trigger', id, values: patch }),
-    updateSandbox: (id: SandboxId, patch: Parameters<Api['sandboxes']['update']>[1]) => recordPatch({ target: 'sandbox', id, values: patch }),
-    updateGroup: (id: GroupId, patch: Parameters<Api['groups']['update']>[1]) => recordPatch({ target: 'group', id, values: patch }),
-    group: (ids: NodeId[]): GroupId | null => {
-      const id = api.graph.group(ids)
+    }),
+    updateAgent: (id: AgentId, patch: Parameters<Api['agents']['update']>[1]) => enqueue(() => recordPatch({ target: 'agent', id, values: patch })),
+    updateTrigger: (id: TriggerId, patch: Parameters<Api['triggers']['update']>[1]) => enqueue(() => recordPatch({ target: 'trigger', id, values: patch })),
+    updateSandbox: (id: SandboxId, patch: Parameters<Api['sandboxes']['update']>[1]) => enqueue(() => recordPatch({ target: 'sandbox', id, values: patch })),
+    updateGroup: (id: GroupId, patch: Parameters<Api['groups']['update']>[1]) => enqueue(() => recordPatch({ target: 'group', id, values: patch })),
+    group: (ids: NodeId[]) => enqueue(async () => {
+      const id = await api.graph.group(ids)
       if (id === null) return null
       const group = getWorld().groups[id]
       if (!group) return id
@@ -313,8 +319,8 @@ export function createHistory(api: Api, getWorld: () => World) {
       for (const t of Object.values(w.triggers)) if (t.groupId === id) memberIds.push(t.id)
       push({ kind: 'group', group, memberIds })
       return id
-    },
-    ungroup: (id: GroupId) => {
+    }),
+    ungroup: (id: GroupId) => enqueue(async () => {
       const w = getWorld()
       const group = w.groups[id]
       if (!group) return
@@ -322,8 +328,8 @@ export function createHistory(api: Api, getWorld: () => World) {
       for (const a of Object.values(w.agents)) if (a.groupId === id) memberIds.push(a.id)
       for (const s of Object.values(w.sandboxes)) if (s.groupId === id) memberIds.push(s.id)
       for (const t of Object.values(w.triggers)) if (t.groupId === id) memberIds.push(t.id)
-      api.graph.ungroup(id)
+      await api.graph.ungroup(id)
       push({ kind: 'ungroup', group, memberIds })
-    },
+    }),
   }
 }

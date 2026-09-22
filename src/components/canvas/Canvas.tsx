@@ -233,8 +233,9 @@ export function Canvas() {
   const onConnect = useCallback(
     (c: Connection) => {
       if (!c.source || !c.target) return
-      const r = history.connect(c.source as NodeId, c.target as NodeId, agentEdgeTool)
-      if (!r.ok) setToast(r.reason)
+      void history.connect(c.source as NodeId, c.target as NodeId, agentEdgeTool).then((r) => {
+        if (!r.ok) setToast(r.reason)
+      })
     },
     [agentEdgeTool],
   )
@@ -269,8 +270,10 @@ export function Canvas() {
   const spawn = useCallback(
     (kind: NodeKind) => {
       if (!menu) return
-      select(nodeSubject(kind, history.createNode(kind, menu.flow)))
-      setMenu(null)
+      void history.createNode(kind, menu.flow).then((id) => {
+        select(nodeSubject(kind, id))
+        setMenu(null)
+      })
     },
     [menu, select],
   )
@@ -314,12 +317,13 @@ export function Canvas() {
   useShortcuts({
     // selected text, in the dock logs for example, keeps the native copy
     copy: () => !window.getSelection()?.toString() && clipboard.copy(selectedNodeIds()),
-    paste: () => applyPaste(clipboard.paste()),
-    duplicate: () => applyPaste(clipboard.duplicate(selectedNodeIds())),
+    paste: () => { void clipboard.paste().then(applyPaste); return true },
+    duplicate: () => { void clipboard.duplicate(selectedNodeIds()).then(applyPaste); return true },
     group: () => {
       if (canGroup) {
-        const id = history.group(groupable.map((n) => n.id as NodeId))
-        if (id) select({ kind: 'group', id })
+        void history.group(groupable.map((n) => n.id as NodeId)).then((id) => {
+          if (id) select({ kind: 'group', id })
+        })
       }
       return true
     },
@@ -379,8 +383,9 @@ export function Canvas() {
             disabled={!canGroup}
             title={chordOf('group')}
             onClick={() => {
-              const id = history.group(groupable.map((n) => n.id as NodeId))
-              if (id) select({ kind: 'group', id })
+              void history.group(groupable.map((n) => n.id as NodeId)).then((id) => {
+                if (id) select({ kind: 'group', id })
+              })
             }}
           >
             Group

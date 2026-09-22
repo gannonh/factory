@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api } from './api/client'
+import { api, subscribeLink, type Link } from './api/client'
 import { existingSubject, type EdgeKind, type LogLevel, type Subject, type World } from './domain/types'
 import { seedWorld } from './domain/seed'
 import { createClipboard } from './clipboard'
@@ -11,6 +11,7 @@ export type Selection = Subject | null
 
 type UiState = {
   world: World
+  link: Link
   view: View
   selection: Selection
   dockTab: DockTab
@@ -32,6 +33,7 @@ type UiState = {
 
 export const useStore = create<UiState>((set) => ({
   world: seedWorld(Date.now()),
+  link: 'connecting',
   view: 'canvas',
   selection: null,
   dockTab: 'logs',
@@ -55,6 +57,8 @@ api.subscribe((world) => {
     return s.selection && existingSubject(world, s.selection) === null ? { world, selection: null } : { world }
   })
 })
+
+subscribeLink((link) => useStore.setState({ link }))
 
 export const history = createHistory(api, () => useStore.getState().world)
 export const clipboard = createClipboard(history, () => useStore.getState().world)

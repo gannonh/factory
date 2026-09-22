@@ -8,7 +8,7 @@ The Sandboxes workspace lets a user configure a local, Docker, VPS, or remote sa
 - `sandbox-configure` accepts name, kind, host, image, and capacity.
 - `sandbox-provision` creates a provisioning sandbox.
 - `sandbox-cancel` closes the form without adding a sandbox.
-- `sandbox-persist` stores the new sandbox under `factory.world.v3`.
+- `sandbox-persist` leaves the new sandbox visible after a reload. The page does not write `factory.world.v3`.
 
 ## How to get to it (user POV)
 
@@ -27,8 +27,8 @@ Preconditions:
 - **Open the form.** `agent-browser find role button click --name "Sandboxes"`, then `agent-browser find role button click --name "New sandbox"`. The snapshot lists `textbox "NAME"`, `combobox "KIND"` with value `docker`, `textbox "HOST"` with `docker.internal`, `textbox "IMAGE"` with `ghcr.io/factory/dev:node22`, `spinbutton "CAPACITY"` with `1`, a disabled `button "Provision"`, and `button "Cancel"`.
 - **Configure.** `agent-browser find label "Name" fill "vf-box"` enables `Provision`. `agent-browser find label "Capacity" fill "2"`. To change the kind, take the combobox ref from the snapshot and run `agent-browser select @<ref> vps`.
 - **Provision.** `agent-browser find role button click --name "Provision"`, then `agent-browser wait --text "vf-box"`. The form closes and a card shows `vf-box`, `docker · docker.internal`, `provisioning`, `0%`, and `allocating docker host`.
-- **Prove persistence.** After 1200 ms, read `sandboxes` in `factory.world.v3`. One entry has `name: "vf-box"`, `kind: "docker"`, `host: "docker.internal"`, `image: "ghcr.io/factory/dev:node22"`, `capacity: 2`, `state: "provisioning"`, `progress: 0`, and an `id` starting with `sb-`.
-- **Cancel.** Open the form again, fill Name with `vf-cancelled`, and `agent-browser find role button click --name "Cancel"`. After 1200 ms neither the page text nor the stored world contains `vf-cancelled`.
+- **Prove the sandbox stayed on the server.** `agent-browser reload`, open Sandboxes, and require the text `vf-box`. `localStorage.getItem('factory.world.v3')` is null.
+- **Cancel.** Open the form again, fill Name with `vf-cancelled`, and `agent-browser find role button click --name "Cancel"`. The page text does not contain `vf-cancelled`.
 
 ## Gotchas
 
