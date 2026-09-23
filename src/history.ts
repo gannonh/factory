@@ -221,18 +221,19 @@ export function createHistory(api: Api, getWorld: () => World) {
   }
 
   return {
+    // the cursor moves only once the server holds the change, so a failed call leaves the entry undoable
     undo: () => enqueue(async () => {
       if (cursor === 0) return
+      await revert(entries[cursor - 1]!)
       cursor -= 1
       mergeable = false
-      await revert(entries[cursor]!)
       notify()
     }),
     redo: () => enqueue(async () => {
       if (cursor === entries.length) return
+      await apply(entries[cursor]!)
       cursor += 1
       mergeable = false
-      await apply(entries[cursor - 1]!)
       notify()
     }),
     /** Reset the simulation to the seed; the stack goes with the world it described. */

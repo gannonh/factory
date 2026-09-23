@@ -189,6 +189,15 @@ export function Canvas() {
     requestAnimationFrame(() => fitView({ padding: 0.15, duration: 300 }))
   }, [nodes.length, fitView])
 
+  /** set once the laid out world is in the store; the node sync that renders it fits the view */
+  const layoutFitPending = useRef(false)
+
+  useEffect(() => {
+    if (!layoutFitPending.current) return
+    layoutFitPending.current = false
+    requestAnimationFrame(() => fitView({ padding: 0.15, duration: 400 }))
+  }, [nodes, fitView])
+
   useEffect(() => {
     if (!toast) return
     const t = setTimeout(() => setToast(null), 2600)
@@ -296,9 +305,8 @@ export function Canvas() {
   }
 
   const runLayout = useCallback(() => {
-    history.move(autoLayout(world))
-    requestAnimationFrame(() => fitView({ padding: 0.15, duration: 400 }))
-  }, [world, fitView])
+    void history.move(autoLayout(world)).then(() => { layoutFitPending.current = true })
+  }, [world])
 
   const minimapColor = useMemo(
     () => (n: FactoryNode) =>

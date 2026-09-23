@@ -41,6 +41,29 @@ test('a spawned node undoes away and redoes back under its original id', async (
   expect(history.canRedo()).toBe(false)
 })
 
+test('a failed undo keeps the entry undoable', async () => {
+  const fixture = makeFixture()
+  let offline = false
+  const graph = {
+    ...fixture.api.graph,
+    deleteNodes: (ids: Parameters<typeof fixture.api.graph.deleteNodes>[0]) =>
+      offline ? Promise.reject(new Error('disconnected from server')) : fixture.api.graph.deleteNodes(ids),
+  }
+  const history = createHistory({ ...fixture.api, graph }, fixture.world)
+  const id = await history.createNode('agent', { x: 80, y: 90 }) as AgentId
+
+  offline = true
+  await expect(history.undo()).rejects.toThrow('disconnected from server')
+  expect(fixture.world().agents).toHaveProperty(id)
+  expect(history.canUndo()).toBe(true)
+  expect(history.canRedo()).toBe(false)
+
+  offline = false
+  await history.undo()
+  expect(fixture.world().agents).not.toHaveProperty(id)
+  expect(history.canRedo()).toBe(true)
+})
+
 test('a deleted node round trips through undo and redo under its original id', async () => {
   const { fixture, history } = setup()
   const planner = fixture.agent('Planner')

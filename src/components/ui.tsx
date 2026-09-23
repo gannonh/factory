@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react'
+import { useState, type ButtonHTMLAttributes, type ChangeEvent, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 
 export function cx(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(' ')
@@ -78,6 +78,28 @@ export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
 }
 export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return <textarea {...props} className={cx(control, 'font-mono leading-relaxed resize-y', props.className)} />
+}
+
+type DraftProps = { value: string | number; onText: (text: string) => void }
+
+/** Keeps typed text on screen while each write reaches the server; the server value shows again on blur. */
+function useDraft({ value, onText }: DraftProps) {
+  const [draft, setDraft] = useState<string | null>(null)
+  return {
+    value: draft ?? value,
+    onChange: (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      setDraft(e.target.value)
+      onText(e.target.value)
+    },
+    onBlur: () => setDraft(null),
+  }
+}
+
+export function DraftInput({ value, onText, ...rest }: Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'onBlur'> & DraftProps) {
+  return <Input {...rest} {...useDraft({ value, onText })} />
+}
+export function DraftTextarea({ value, onText, ...rest }: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChange' | 'onBlur'> & DraftProps) {
+  return <Textarea {...rest} {...useDraft({ value, onText })} />
 }
 
 export function Section({ title, right, children }: { title: string; right?: ReactNode; children: ReactNode }) {
