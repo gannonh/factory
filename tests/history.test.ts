@@ -64,6 +64,23 @@ test('a failed undo keeps the entry undoable', async () => {
   expect(history.canRedo()).toBe(true)
 })
 
+test('a delete whose edge removal fails still undoes the deleted node', async () => {
+  const fixture = makeFixture()
+  const graph = { ...fixture.api.graph, removeEdges: () => Promise.reject(new Error('disconnected from server')) }
+  const history = createHistory({ ...fixture.api, graph }, fixture.world)
+  const planner = fixture.agent('Planner')
+  const coder = fixture.agent('Coder')
+  const loose = await fixture.api.graph.connect(coder, fixture.agent('Reviewer'), 'handoff')
+  if (!loose.ok) throw new Error(loose.reason)
+
+  await expect(history.delete({ nodeIds: [planner], edgeIds: [loose.id] })).rejects.toThrow('disconnected from server')
+  expect(fixture.world().agents).not.toHaveProperty(planner)
+  expect(history.canUndo()).toBe(true)
+
+  await history.undo()
+  expect(fixture.world().agents).toHaveProperty(planner)
+})
+
 test('a deleted node round trips through undo and redo under its original id', async () => {
   const { fixture, history } = setup()
   const planner = fixture.agent('Planner')
@@ -298,8 +315,10 @@ test('retry Attempts then Backoff edits coalesce under the retry key', async () 
   const planner = fixture.agent('Planner')
   const original = fixture.world().agents[planner].retry
 
-  await history.updateAgent(planner, { retry: { ...original, maxAttempts: 5 } })
-  await history.updateAgent(planner, { retry: { ...fixture.world().agents[planner].retry, backoffMs: 9000 } })
+  // each field sends only itself, as the inspector does, and the server merges it into the policy
+  const attempts = history.updateAgent(planner, { retry: { maxAttempts: 5 } })
+  const backoff = history.updateAgent(planner, { retry: { backoffMs: 9000 } })
+  await Promise.all([attempts, backoff])
   expect(fixture.world().agents[planner].retry).toEqual({ ...original, maxAttempts: 5, backoffMs: 9000 })
 
   await history.undo()

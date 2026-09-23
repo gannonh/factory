@@ -1,6 +1,6 @@
 import type { MockServer } from './simulation'
 import type {
-  Agent, AgentId, Edge, EdgeId, EdgeKind, GraphFragment, Group, GroupId, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
+  AgentId, AgentPatch, Edge, EdgeId, EdgeKind, GraphFragment, Group, GroupId, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
 } from '../src/domain/types'
 
 /** In-process binding for tests. `advance` stays here and is not a network command. */
@@ -24,7 +24,7 @@ export const createApi = (server: MockServer) => ({
     update: (id: GroupId, patch: { name: string }) => server.updateGroup(id, patch),
   },
   agents: {
-    update: (id: AgentId, patch: Partial<Omit<Agent, 'id' | 'status' | 'position' | 'groupId'>>) => server.updateAgent(id, patch),
+    update: (id: AgentId, patch: AgentPatch) => server.updateAgent(id, patch),
     setPaused: (id: AgentId, paused: boolean) => server.setAgentPaused(id, paused),
     enqueue: (id: AgentId, input: { title: string; prompt: string; priority: Priority }) => server.enqueueTask(id, input),
   },

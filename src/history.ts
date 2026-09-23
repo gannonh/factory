@@ -269,7 +269,13 @@ export function createHistory(api: Api, getWorld: () => World) {
       const standalone = edgeIds.map((id) => world.edges[id]).filter((e) => e && !attachedIds.has(e.id))
       if (nodes.length === 0 && standalone.length === 0) return
       if (nodes.length > 0) await api.graph.deleteNodes(nodes.map((ref) => ref.node.id))
-      if (standalone.length > 0) await api.graph.removeEdges(standalone.map((e) => e.id))
+      try {
+        if (standalone.length > 0) await api.graph.removeEdges(standalone.map((e) => e.id))
+      } catch (err) {
+        // the nodes are already gone on the server, so their deletion stays undoable
+        if (nodes.length > 0) push({ kind: 'delete', nodes, edges: attached })
+        throw err
+      }
       push({ kind: 'delete', nodes, edges: [...attached, ...standalone] })
     }),
     connect: (source: NodeId, target: NodeId, preferred: EdgeKind | null) => enqueue(async () => {

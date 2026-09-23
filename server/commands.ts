@@ -1,5 +1,5 @@
 import type {
-  Agent, AgentId, EdgeKind, GraphFragment, Group, GroupId, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, Trigger, TriggerId,
+  AgentId, AgentPatch, EdgeKind, GraphFragment, Group, GroupId, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, Trigger, TriggerId,
 } from '../src/domain/types'
 import type { MockServer } from './simulation'
 
@@ -23,7 +23,7 @@ const commands: Record<string, Command> = {
   'graph.ungroup': (s, a) => s.ungroup(at<GroupId>(a, 0)),
   'graph.restoreGroup': (s, a) => s.restoreGroup(at<Group>(a, 0), at<NodeId[]>(a, 1)),
   'groups.update': (s, a) => s.updateGroup(at<GroupId>(a, 0), at(a, 1)),
-  'agents.update': (s, a) => s.updateAgent(at<AgentId>(a, 0), at<Partial<Omit<Agent, 'id' | 'status' | 'position' | 'groupId'>>>(a, 1)),
+  'agents.update': (s, a) => s.updateAgent(at<AgentId>(a, 0), at<AgentPatch>(a, 1)),
   'agents.setPaused': (s, a) => s.setAgentPaused(at<AgentId>(a, 0), at<boolean>(a, 1)),
   'agents.enqueue': (s, a) => s.enqueueTask(at<AgentId>(a, 0), at<{ title: string; prompt: string; priority: Priority }>(a, 1)),
   'tasks.cancel': (s, a) => s.cancelTask(at(a, 0)),

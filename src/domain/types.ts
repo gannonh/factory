@@ -45,6 +45,9 @@ export type Agent = {
   groupId: GroupId | null
 }
 
+/** The editable agent fields. `retry` merges into the current policy, so each retry field is written on its own. */
+export type AgentPatch = Partial<Omit<Agent, 'id' | 'status' | 'position' | 'groupId' | 'retry'>> & { retry?: Partial<RetryPolicy> }
+
 export type SandboxKind = 'local' | 'docker' | 'vps' | 'remote'
 
 /** Lifecycle state machine; SANDBOX_TRANSITIONS is the only place the edges live. */

@@ -1,5 +1,5 @@
 import type {
-  Agent, AgentId, Edge, EdgeId, EdgeKind, GraphFragment, Group, GroupId, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
+  AgentId, AgentPatch, Edge, EdgeId, EdgeKind, GraphFragment, Group, GroupId, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
 } from '../domain/types'
 import type { Api, ConnectResult } from './types'
 
@@ -113,7 +113,7 @@ export const api: Api = {
     update: (id: GroupId, patch: { name: string }) => call('groups.update', [id, patch]),
   },
   agents: {
-    update: (id: AgentId, patch: Partial<Omit<Agent, 'id' | 'status' | 'position' | 'groupId'>>) => call('agents.update', [id, patch]),
+    update: (id: AgentId, patch: AgentPatch) => call('agents.update', [id, patch]),
     setPaused: (id: AgentId, paused: boolean) => call('agents.setPaused', [id, paused]),
     enqueue: (id: AgentId, input: { title: string; prompt: string; priority: Priority }) => call<TaskId>('agents.enqueue', [id, input]),
   },

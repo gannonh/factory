@@ -2,14 +2,14 @@ import { Pause, Play, Plus, Send, X } from 'lucide-react'
 import { useState } from 'react'
 import { api } from '../../api/client'
 import { TOOL_CATALOG } from '../../domain/seed'
-import { AGENT_STATUS_COLOR, MODELS, TASK_STATUS_COLOR, type Agent, type ModelName, type Priority } from '../../domain/types'
+import { AGENT_STATUS_COLOR, MODELS, TASK_STATUS_COLOR, type Agent, type AgentPatch, type ModelName, type Priority } from '../../domain/types'
 import { history, useStore } from '../../store'
 import { Badge, Button, Dot, DraftInput, DraftTextarea, Field, Input, Section, Select, Textarea, cx, fmtDuration } from '../ui'
 
 export function AgentInspector({ agent }: { agent: Agent }) {
   const world = useStore((s) => s.world)
   const setDockTab = useStore((s) => s.setDockTab)
-  const update = (patch: Partial<Omit<Agent, 'id' | 'status' | 'position' | 'groupId'>>) => history.updateAgent(agent.id, patch)
+  const update = (patch: AgentPatch) => history.updateAgent(agent.id, patch)
   const runs = Object.values(world.runs).filter((r) => r.agentId === agent.id)
   const active = runs.filter((r) => r.status === 'running')
   const pending = Object.values(world.tasks).filter((t) => t.agentId === agent.id && (t.status === 'queued' || t.status === 'waiting'))
@@ -85,10 +85,10 @@ export function AgentInspector({ agent }: { agent: Agent }) {
 
       <Section title="Retry policy">
         <div className="grid grid-cols-3 gap-2">
-          <Field label="Attempts"><DraftInput type="number" min={1} max={10} value={agent.retry.maxAttempts} onText={(text) => update({ retry: { ...agent.retry, maxAttempts: Math.max(1, Math.min(10, Number(text) || 1)) } })} /></Field>
-          <Field label="Backoff ms"><DraftInput type="number" min={0} step={500} value={agent.retry.backoffMs} onText={(text) => update({ retry: { ...agent.retry, backoffMs: Math.max(0, Number(text) || 0) } })} /></Field>
+          <Field label="Attempts"><DraftInput type="number" min={1} max={10} value={agent.retry.maxAttempts} onText={(text) => update({ retry: { maxAttempts: Math.max(1, Math.min(10, Number(text) || 1)) } })} /></Field>
+          <Field label="Backoff ms"><DraftInput type="number" min={0} step={500} value={agent.retry.backoffMs} onText={(text) => update({ retry: { backoffMs: Math.max(0, Number(text) || 0) } })} /></Field>
           <Field label="Curve">
-            <Select value={agent.retry.backoff} onChange={(e) => update({ retry: { ...agent.retry, backoff: e.target.value as Agent['retry']['backoff'] } })}>
+            <Select value={agent.retry.backoff} onChange={(e) => update({ retry: { backoff: e.target.value as Agent['retry']['backoff'] } })}>
               <option value="fixed">fixed</option><option value="exponential">exponential</option>
             </Select>
           </Field>

@@ -10,6 +10,7 @@ import {
   nodeSubject,
   type Agent,
   type AgentId,
+  type AgentPatch,
   type Edge,
   type EdgeId,
   type EdgeKind,
@@ -428,8 +429,10 @@ export class MockServer {
     this.publish()
   }
 
-  updateAgent(id: AgentId, patch: Partial<Omit<Agent, 'id' | 'status' | 'position' | 'groupId'>>) {
-    this.patchAgent(id, patch)
+  updateAgent(id: AgentId, patch: AgentPatch) {
+    const cur = this.world.agents[id]
+    if (!cur) return
+    this.patchAgent(id, { ...patch, retry: { ...cur.retry, ...patch.retry } })
     this.publish()
   }
 

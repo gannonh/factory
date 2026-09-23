@@ -129,6 +129,12 @@ export function Canvas() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<FactoryEdgeType>([])
   const [menu, setMenu] = useState<MenuState>(null)
   const [toast, setToast] = useState<string | null>(null)
+  /** a rejected command shows in the toast; the disconnected banner covers a lost link */
+  const report = useCallback((pending: Promise<unknown>) => {
+    pending.catch((err: unknown) => setToast(err instanceof Error ? err.message : 'command failed'))
+  }, [])
+  /** bumped once the laid out world is in the store; the render that shows it fits the view */
+  const [layoutFits, setLayoutFits] = useState(0)
   const [helpOpen, setHelpOpen] = useState(false)
   const pane = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition, fitView, getNodes, getInternalNode } = useReactFlow()
@@ -189,14 +195,10 @@ export function Canvas() {
     requestAnimationFrame(() => fitView({ padding: 0.15, duration: 300 }))
   }, [nodes.length, fitView])
 
-  /** set once the laid out world is in the store; the node sync that renders it fits the view */
-  const layoutFitPending = useRef(false)
-
   useEffect(() => {
-    if (!layoutFitPending.current) return
-    layoutFitPending.current = false
+    if (layoutFits === 0) return
     requestAnimationFrame(() => fitView({ padding: 0.15, duration: 400 }))
-  }, [nodes, fitView])
+  }, [layoutFits, fitView])
 
   useEffect(() => {
     if (!toast) return
@@ -242,11 +244,11 @@ export function Canvas() {
   const onConnect = useCallback(
     (c: Connection) => {
       if (!c.source || !c.target) return
-      void history.connect(c.source as NodeId, c.target as NodeId, agentEdgeTool).then((r) => {
+      report(history.connect(c.source as NodeId, c.target as NodeId, agentEdgeTool).then((r) => {
         if (!r.ok) setToast(r.reason)
-      })
+      }))
     },
-    [agentEdgeTool],
+    [agentEdgeTool, report],
   )
 
   const onNodeDragStop = useCallback(
@@ -263,9 +265,9 @@ export function Canvas() {
         const abs = getInternalNode(id)?.internals.positionAbsolute
         return abs ? [{ id, position: { x: abs.x, y: abs.y } }] : []
       })
-      history.move(moves)
+      report(history.move(moves))
     },
-    [getInternalNode, world],
+    [getInternalNode, world, report],
   )
 
   const onPaneContextMenu = useCallback(
@@ -279,12 +281,12 @@ export function Canvas() {
   const spawn = useCallback(
     (kind: NodeKind) => {
       if (!menu) return
-      void history.createNode(kind, menu.flow).then((id) => {
+      report(history.createNode(kind, menu.flow).then((id) => {
         select(nodeSubject(kind, id))
         setMenu(null)
-      })
+      }))
     },
-    [menu, select],
+    [menu, select, report],
   )
 
   const selectedNodeIds = () => getNodes().filter((n) => n.selected && n.type !== 'group').map((n) => n.id as NodeId)
@@ -305,8 +307,8 @@ export function Canvas() {
   }
 
   const runLayout = useCallback(() => {
-    void history.move(autoLayout(world)).then(() => { layoutFitPending.current = true })
-  }, [world])
+    report(history.move(autoLayout(world)).then(() => setLayoutFits((n) => n + 1)))
+  }, [world, report])
 
   const minimapColor = useMemo(
     () => (n: FactoryNode) =>
@@ -325,18 +327,18 @@ export function Canvas() {
   useShortcuts({
     // selected text, in the dock logs for example, keeps the native copy
     copy: () => !window.getSelection()?.toString() && clipboard.copy(selectedNodeIds()),
-    paste: () => { void clipboard.paste().then(applyPaste); return true },
-    duplicate: () => { void clipboard.duplicate(selectedNodeIds()).then(applyPaste); return true },
+    paste: () => { report(clipboard.paste().then(applyPaste)); return true },
+    duplicate: () => { report(clipboard.duplicate(selectedNodeIds()).then(applyPaste)); return true },
     group: () => {
       if (canGroup) {
-        void history.group(groupable.map((n) => n.id as NodeId)).then((id) => {
+        report(history.group(groupable.map((n) => n.id as NodeId)).then((id) => {
           if (id) select({ kind: 'group', id })
-        })
+        }))
       }
       return true
     },
     ungroup: () => {
-      if (ungroupId) history.ungroup(ungroupId)
+      if (ungroupId) report(history.ungroup(ungroupId))
       return true
     },
   }, {
@@ -357,10 +359,10 @@ export function Canvas() {
         onConnect={onConnect}
         isValidConnection={isValidConnection}
         onNodeDragStop={onNodeDragStop}
-        onDelete={({ nodes: ns, edges: es }) => history.delete({
+        onDelete={({ nodes: ns, edges: es }) => report(history.delete({
           nodeIds: ns.filter((n) => n.type !== 'group').map((n) => n.id as NodeId),
           edgeIds: es.map((e) => e.id as EdgeId),
-        })}
+        }))}
         onPaneContextMenu={onPaneContextMenu}
         onPaneClick={() => setMenu(null)}
         selectionOnDrag
@@ -379,10 +381,10 @@ export function Canvas() {
 
       <div className="absolute top-3 left-3 z-50 flex items-center gap-2">
         <div className="flex items-center gap-1 rounded-lg border border-ink-700 bg-ink-900/90 backdrop-blur p-1">
-          <Button variant="ghost" size="xs" onClick={() => history.undo()} disabled={!canUndo} title="Undo (⌘/Ctrl+Z)">
+          <Button variant="ghost" size="xs" onClick={() => report(history.undo())} disabled={!canUndo} title="Undo (⌘/Ctrl+Z)">
             <Undo2 size={13} /> Undo <span className="text-ink-500">⌘/Ctrl+Z</span>
           </Button>
-          <Button variant="ghost" size="xs" onClick={() => history.redo()} disabled={!canRedo} title="Redo (⇧⌘/Ctrl+Z or ⌘/Ctrl+Y)">
+          <Button variant="ghost" size="xs" onClick={() => report(history.redo())} disabled={!canRedo} title="Redo (⇧⌘/Ctrl+Z or ⌘/Ctrl+Y)">
             <Redo2 size={13} /> Redo <span className="text-ink-500">⇧⌘/Ctrl+Z</span>
           </Button>
           <Button
@@ -391,9 +393,9 @@ export function Canvas() {
             disabled={!canGroup}
             title={chordOf('group')}
             onClick={() => {
-              void history.group(groupable.map((n) => n.id as NodeId)).then((id) => {
+              report(history.group(groupable.map((n) => n.id as NodeId)).then((id) => {
                 if (id) select({ kind: 'group', id })
-              })
+              }))
             }}
           >
             Group
@@ -403,7 +405,7 @@ export function Canvas() {
             size="xs"
             disabled={!ungroupId}
             title={chordOf('ungroup')}
-            onClick={() => { if (ungroupId) history.ungroup(ungroupId) }}
+            onClick={() => { if (ungroupId) report(history.ungroup(ungroupId)) }}
           >
             Ungroup
           </Button>

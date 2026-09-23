@@ -1,4 +1,4 @@
-import { useState, type ButtonHTMLAttributes, type ChangeEvent, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
+import { useRef, useState, type ButtonHTMLAttributes, type ChangeEvent, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react'
 
 export function cx(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(' ')
@@ -80,25 +80,46 @@ export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return <textarea {...props} className={cx(control, 'font-mono leading-relaxed resize-y', props.className)} />
 }
 
-type DraftProps = { value: string | number; onText: (text: string) => void }
+type DraftProps = { value: string | number; onText: (text: string) => Promise<unknown> }
 
-/** Keeps typed text on screen while each write reaches the server; the server value shows again on blur. */
+/**
+ * Keeps typed text on screen while its writes reach the server. The server value shows again once the field
+ * is blurred and every write has landed. A failed write keeps the text, so nothing typed disappears.
+ */
 function useDraft({ value, onText }: DraftProps) {
   const [draft, setDraft] = useState<string | null>(null)
+  const state = useRef({ focused: false, pending: 0, latest: 0, failed: false })
+  const settle = () => {
+    const { focused, pending, failed } = state.current
+    if (!focused && pending === 0 && !failed) setDraft(null)
+  }
   return {
     value: draft ?? value,
+    onFocus: () => { state.current.focused = true },
     onChange: (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       setDraft(e.target.value)
+      const write = ++state.current.latest
+      state.current.pending += 1
+      // only the newest write decides whether the draft may give way to the server value
       onText(e.target.value)
+        .then(() => { if (write === state.current.latest) state.current.failed = false },
+          () => { if (write === state.current.latest) state.current.failed = true })
+        .finally(() => {
+          state.current.pending -= 1
+          settle()
+        })
     },
-    onBlur: () => setDraft(null),
+    onBlur: () => {
+      state.current.focused = false
+      settle()
+    },
   }
 }
 
-export function DraftInput({ value, onText, ...rest }: Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'onBlur'> & DraftProps) {
+export function DraftInput({ value, onText, ...rest }: Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'onBlur' | 'onFocus'> & DraftProps) {
   return <Input {...rest} {...useDraft({ value, onText })} />
 }
-export function DraftTextarea({ value, onText, ...rest }: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChange' | 'onBlur'> & DraftProps) {
+export function DraftTextarea({ value, onText, ...rest }: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChange' | 'onBlur' | 'onFocus'> & DraftProps) {
   return <Textarea {...rest} {...useDraft({ value, onText })} />
 }
 
