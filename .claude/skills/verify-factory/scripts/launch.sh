@@ -18,6 +18,17 @@ run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 evidence_dir="$repo_root/uat-evidence/verify-factory/$run_id"
 mkdir -p "$evidence_dir"
 
+# a failed startup stops whichever of the two processes is still running
+stop_on_failure() {
+  local status=$?
+  if (( status != 0 )); then
+    for pid in "${server_pid:-}" "${world_pid:-}"; do
+      if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; fi
+    done
+  fi
+}
+trap stop_on_failure EXIT
+
 cd "$repo_root"
 FACTORY_PORT="$world_port" FACTORY_ORIGIN="http://127.0.0.1:$port" \
   nohup node --import tsx server/main.ts \
@@ -56,13 +67,14 @@ for _ in $(seq 1 60); do
     echo "vite exited during startup; see $evidence_dir/server.log" >&2
     exit 1
   fi
-  if curl --fail --silent "http://127.0.0.1:$port/" | grep -q '<title>Factory</title>' \
-    && curl --fail --silent --output /dev/null "http://127.0.0.1:$world_port/health"; then
+  if curl --fail --silent --max-time 2 "http://127.0.0.1:$port/" | grep -q '<title>Factory</title>' \
+    && curl --fail --silent --max-time 2 --output /dev/null "http://127.0.0.1:$world_port/health"; then
+    trap - EXIT
     printf '%s\n' "$state_file"
     exit 0
   fi
   sleep 0.5
 done
 
-echo "vite did not serve Factory on port $port within 30 seconds; run $scripts_dir/cleanup.sh $state_file" >&2
+echo "vite did not serve Factory on port $port within 30 seconds; see $evidence_dir" >&2
 exit 1

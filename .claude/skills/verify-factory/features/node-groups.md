@@ -23,9 +23,9 @@ Preconditions:
 - Doctor passes, the simulation is paused, and the viewport is 1440 by 900.
 - Drive `Group` and `Ungroup` with `role button` and those exact accessible names. Use `--exact`. Canvas node snapshots also expose accessibility `group` roles for seed agents such as QA; those are not the toolbar buttons. Do not retarget those locators.
 
-- **Group.** `agent-browser find role button click --name "Fit" --exact`. Take the refs of the groups whose names start with `Planner` and `Coder` from `agent-browser snapshot -i`, click the Planner ref, then `agent-browser press Shift`, click the Coder ref. `agent-browser find role button click --name "Group" --exact`. The snapshot lists a group whose name starts with `Group 1`, `Ungroup` becomes enabled, and the inspector heading is `GROUP`. After 1200 ms the stored `groups` hold one record named `Group 1` whose id is shared as `groupId` on the Planner and Coder agents.
-- **Rename.** With that group selected, fill the inspector name field with `Crew`. The frame header reads `Crew`. After 1200 ms the stored group name is `Crew`.
-- **Ungroup.** `agent-browser find role button click --name "Ungroup" --exact`. The `Group 1` / `Crew` frame is gone. After 1200 ms those agents have `groupId` null and `groups` is empty.
+- **Group.** `agent-browser find role button click --name "Fit" --exact`. Take the refs of the groups whose names start with `Planner` and `Coder` from `agent-browser snapshot -i`, click the Planner ref, then `agent-browser press Shift`, click the Coder ref. `agent-browser find role button click --name "Group" --exact`. The snapshot lists a group whose name starts with `Group 1`, `Ungroup` becomes enabled, and the inspector heading is `GROUP`. The inspector's members list shows `Planner` and `Coder`.
+- **Rename.** With that group selected, fill the inspector name field with `Crew`. The frame header reads `Crew`. After `agent-browser reload`, the snapshot still lists a group whose name starts with `Crew`.
+- **Ungroup.** `agent-browser find role button click --name "Ungroup" --exact`. The `Group 1` / `Crew` frame is gone. The snapshot still lists the `Planner` and `Coder` nodes, and `Ungroup` is disabled.
 
 ## Gotchas
 
