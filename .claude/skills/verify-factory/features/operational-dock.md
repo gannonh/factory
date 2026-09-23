@@ -29,7 +29,7 @@ Preconditions:
 - **Open Logs.** Click the Logs tab ref. The snapshot lists buttons `DEBUG`, `INFO`, `WARN`, and `ERROR`, `textbox "filter…"`, `checkbox "selected agent only"`, and `button "following"`. `agent-browser find role button click --name "ERROR"` on a new origin shows `No log lines at this level yet.`
 - **Open Events.** Click the Events tab ref. Each event is a button named by its message, such as `Queued “vf-task-1” for Planner`. Choosing a task event opens the task inspector, which shows the text `TASK` and headings `DETAILS`, `PROMPT`, and `RUNS`.
 - **Collapse and expand.** `agent-browser find role button click --name "Collapse dock"` and require `button "Expand dock"`. `agent-browser find role button click --name "Expand dock"` brings the active panel back. Choosing any tab, or `open runs` in an agent inspector, also expands a collapsed dock.
-- **Run history.** With at least one run listed, read `factory.world.v3`: `runs` and `events` are non-empty and the world has no `logs` key. `agent-browser reload`, open the Runs tab, and require the earlier rows. Runs that were in progress at the reload show `failed`.
+- **Run history.** With at least one run listed, `agent-browser reload`, open the Runs tab, and require the earlier rows. A run that was in progress stays in progress, because the server kept it. `localStorage.getItem('factory.world.v3')` is null.
 
 ## Gotchas
 

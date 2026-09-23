@@ -8,7 +8,7 @@ An agent inspector lets a user enter a title, optional prompt, and priority, the
 - `task-compose` accepts a title and optional prompt.
 - `task-priority` selects low, normal, or high priority. The default is normal.
 - `task-queue` submits the task and opens the Queue dock tab.
-- `task-persist` stores the task under `factory.world.v3`.
+- `task-persist` leaves the queued task visible after a reload. The page does not write `factory.world.v3`.
 
 ## How to get to it (user POV)
 
@@ -29,7 +29,7 @@ Preconditions:
 - **Set priority.** `agent-browser find role button click --name "high"`.
 - **Queue through the button.** `agent-browser find role button click --name "Queue" --exact`. The fields clear, the composer's `Queue` button is disabled, the dock tab reads `Queue 1`, and the Queue panel lists `button "vf-task-1"`.
 - **Queue through the keyboard.** Fill the title, then `agent-browser press Control+Enter`. The same Queue result appears. `Meta+Enter` is equivalent.
-- **Prove persistence.** After 1200 ms, read `tasks` in `factory.world.v3`. One task has `title: "vf-task-1"`, `agentId: "ag-planner"`, `priority: "high"`, `status: "queued"`, and `origin.kind: "manual"`.
+- **Prove the task stayed on the server.** `agent-browser reload`, open Queue, and require `button "vf-task-1"`. `localStorage.getItem('factory.world.v3')` is null.
 
 ## Gotchas
 

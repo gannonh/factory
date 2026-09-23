@@ -2,14 +2,14 @@ import { Pause, Play, Plus, Send, X } from 'lucide-react'
 import { useState } from 'react'
 import { api } from '../../api/client'
 import { TOOL_CATALOG } from '../../domain/seed'
-import { AGENT_STATUS_COLOR, MODELS, TASK_STATUS_COLOR, type Agent, type ModelName, type Priority } from '../../domain/types'
+import { AGENT_STATUS_COLOR, MODELS, TASK_STATUS_COLOR, type Agent, type AgentPatch, type ModelName, type Priority } from '../../domain/types'
 import { history, useStore } from '../../store'
-import { Badge, Button, Dot, Field, Input, Section, Select, Textarea, cx, fmtDuration } from '../ui'
+import { Badge, Button, Dot, DraftInput, DraftTextarea, Field, Input, Section, Select, Textarea, cx, fmtDuration } from '../ui'
 
 export function AgentInspector({ agent }: { agent: Agent }) {
   const world = useStore((s) => s.world)
   const setDockTab = useStore((s) => s.setDockTab)
-  const update = (patch: Partial<Omit<Agent, 'id' | 'status' | 'position' | 'groupId'>>) => history.updateAgent(agent.id, patch)
+  const update = (patch: AgentPatch) => history.updateAgent(agent.id, patch)
   const runs = Object.values(world.runs).filter((r) => r.agentId === agent.id)
   const active = runs.filter((r) => r.status === 'running')
   const pending = Object.values(world.tasks).filter((t) => t.agentId === agent.id && (t.status === 'queued' || t.status === 'waiting'))
@@ -20,8 +20,8 @@ export function AgentInspector({ agent }: { agent: Agent }) {
     <>
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0 flex flex-col gap-2">
-          <Input value={agent.name} onChange={(e) => update({ name: e.target.value })} className="font-semibold text-sm" />
-          <Input value={agent.role} onChange={(e) => update({ role: e.target.value })} placeholder="role" />
+          <DraftInput value={agent.name} onText={(text) => update({ name: text })} className="font-semibold text-sm" />
+          <DraftInput value={agent.role} onText={(text) => update({ role: text })} placeholder="role" />
         </div>
         <div className="flex flex-col items-end gap-2">
           <Badge color={AGENT_STATUS_COLOR[agent.status]}><Dot color={AGENT_STATUS_COLOR[agent.status]} pulse={agent.status === 'working'} />{agent.status}</Badge>
@@ -78,17 +78,17 @@ export function AgentInspector({ agent }: { agent: Agent }) {
           <input type="range" min={0} max={1} step={0.05} value={agent.temperature} onChange={(e) => update({ temperature: Number(e.target.value) })} />
         </Field>
         <div className="grid grid-cols-2 gap-2">
-          <Field label="Concurrency"><Input type="number" min={1} max={8} value={agent.concurrency} onChange={(e) => update({ concurrency: Math.max(1, Math.min(8, Number(e.target.value) || 1)) })} /></Field>
-          <Field label="Timeout (s)"><Input type="number" min={5} value={Math.round(agent.timeoutMs / 1000)} onChange={(e) => update({ timeoutMs: Math.max(5, Number(e.target.value) || 5) * 1000 })} /></Field>
+          <Field label="Concurrency"><DraftInput type="number" min={1} max={8} value={agent.concurrency} onText={(text) => update({ concurrency: Math.max(1, Math.min(8, Number(text) || 1)) })} /></Field>
+          <Field label="Timeout (s)"><DraftInput type="number" min={5} value={Math.round(agent.timeoutMs / 1000)} onText={(text) => update({ timeoutMs: Math.max(5, Number(text) || 5) * 1000 })} /></Field>
         </div>
       </Section>
 
       <Section title="Retry policy">
         <div className="grid grid-cols-3 gap-2">
-          <Field label="Attempts"><Input type="number" min={1} max={10} value={agent.retry.maxAttempts} onChange={(e) => update({ retry: { ...agent.retry, maxAttempts: Math.max(1, Math.min(10, Number(e.target.value) || 1)) } })} /></Field>
-          <Field label="Backoff ms"><Input type="number" min={0} step={500} value={agent.retry.backoffMs} onChange={(e) => update({ retry: { ...agent.retry, backoffMs: Math.max(0, Number(e.target.value) || 0) } })} /></Field>
+          <Field label="Attempts"><DraftInput type="number" min={1} max={10} value={agent.retry.maxAttempts} onText={(text) => update({ retry: { maxAttempts: Math.max(1, Math.min(10, Number(text) || 1)) } })} /></Field>
+          <Field label="Backoff ms"><DraftInput type="number" min={0} step={500} value={agent.retry.backoffMs} onText={(text) => update({ retry: { backoffMs: Math.max(0, Number(text) || 0) } })} /></Field>
           <Field label="Curve">
-            <Select value={agent.retry.backoff} onChange={(e) => update({ retry: { ...agent.retry, backoff: e.target.value as Agent['retry']['backoff'] } })}>
+            <Select value={agent.retry.backoff} onChange={(e) => update({ retry: { backoff: e.target.value as Agent['retry']['backoff'] } })}>
               <option value="fixed">fixed</option><option value="exponential">exponential</option>
             </Select>
           </Field>
@@ -100,7 +100,7 @@ export function AgentInspector({ agent }: { agent: Agent }) {
       </Section>
 
       <Section title="System prompt" right={<span className="text-[10px] text-ink-500 font-mono">{agent.systemPrompt.length} chars</span>}>
-        <Textarea rows={6} value={agent.systemPrompt} onChange={(e) => update({ systemPrompt: e.target.value })} />
+        <DraftTextarea rows={6} value={agent.systemPrompt} onText={(text) => update({ systemPrompt: text })} />
       </Section>
     </>
   )

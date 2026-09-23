@@ -5,7 +5,7 @@ description: Verify Factory's Vite React web UI by driving it with agent-browser
 
 # Verify Factory
 
-Factory is a browser-only React app backed by an in-page mock server. The app needs no credentials or external services. Each verification run uses a new Vite port, which gives it a separate localStorage origin for `factory.world.v3`, and a named `agent-browser` session with a temporary browser profile.
+Factory is a React page backed by a Node process on this machine. The page needs no credentials. Each verification run starts that process and a Vite server on a free loopback port, and uses a named `agent-browser` session with a temporary browser profile. The world is not stored in `localStorage`.
 
 Read [features/README.md](features/README.md) before choosing a recipe.
 
@@ -68,25 +68,21 @@ Use `agent-browser` only. Do not install Playwright or Cypress, use coordinates,
 
    `--name` matches a substring. Add `--exact` when another control contains the same text. When a name carries live text, such as a dock tab count or a canvas node's model and load, take the ref from the snapshot line that starts with the name.
 4. Wait on the result with `agent-browser wait --text "..."`, then snapshot again.
-5. Read stored state with a read-only expression. The app saves `factory.world.v3` at most once per second, so wait 1200 ms after the UI change or repeat the read until the value appears.
+5. Read browser storage only to prove the page did not write the world. The Pause button is the simulation state.
 
    ```bash
-   agent-browser wait 1200
    cat <<'EOF' | agent-browser eval --stdin | tee "$FACTORY_EVIDENCE_DIR/sim-pause-storage.json"
-   (() => {
-     const raw = localStorage.getItem('factory.world.v3')
-     if (raw === null) return { key: 'factory.world.v3', present: false }
-     const { sim } = JSON.parse(raw)
-     return { key: 'factory.world.v3', present: true, origin: location.origin, paused: sim.paused, speed: sim.speed }
-   })()
+   (() => ({ key: 'factory.world.v3', present: localStorage.getItem('factory.world.v3') !== null }))()
    EOF
    ```
+
+   `present` is false. Pause and resume are visible on the top bar.
 
 The snapshot shows text after CSS transforms. Column headers, section headings, form labels, and log level buttons appear in uppercase (`AGENT`, `COMPOSE TASK`, `NAME`, `DEBUG`) although the source text is lower or title case. `find` matches names without regard to case.
 
 ## Evidence
 
-Every proof records a video of the action, a screenshot before and after it, and a read-only check of the stored side effect. Name the files after the sub-feature ID from the feature map.
+Every proof records a video of the action, a screenshot before and after it, and a read-only check. Name the files after the sub-feature ID from the feature map.
 
 The baseline proof is `sim-pause`:
 
@@ -99,15 +95,15 @@ agent-browser find role button click --name "Pause"
 agent-browser wait --text "Resume"
 agent-browser wait 1200
 agent-browser screenshot "$FACTORY_EVIDENCE_DIR/sim-pause-after.png"
-# run the storage expression from Drive here; require present: true and paused: true
+# run the storage expression from Drive here; require present: false. The button reads Resume.
 agent-browser record stop
 ```
 
-`record start` reopens the page in a fresh browser context. The stored world returns to the seed, the simulation is running again, the view is Canvas, and nothing is selected; the viewport size is kept. Start the recording first, then do the proof's setup, such as pausing or opening a workspace, inside the recording.
+`record start` reopens the page in a fresh browser context. The view is Canvas and nothing is selected. The viewport size is kept. The world stays on the server, so a reload does not restore the seed. Start the recording first, then do the proof's setup, such as pausing or opening a workspace, inside the recording.
 
 Keep each recording to the action under proof. Short waits before and after the click make the change visible to a viewer. Stop the recording before starting the next proof.
 
-A valid proof exercises the user-facing control and captures both the action state and the result. Internal setters and test-only endpoints do not count. Mocks are acceptable only at Factory's existing in-browser mock-server boundary.
+A valid proof exercises the user-facing control and captures both the action state and the result. Internal setters and test-only endpoints do not count.
 
 Post the evidence to the pull request under verification:
 
@@ -125,7 +121,7 @@ GitHub embeds a video player only for files uploaded through its web editor, whi
 "$FACTORY_SCRIPTS/cleanup.sh" "$FACTORY_STATE_FILE"
 ```
 
-`cleanup.sh` closes this run's `agent-browser` session, which discards its temporary profile and this origin's `factory.world.v3`. It stops the recorded PID only after confirming that PID is this checkout's Vite server on the recorded port, confirms the origin no longer answers, writes `cleanup.txt`, and lists the evidence directory. It never kills by process name or port, and it leaves the evidence directory and the posted comment intact. It is safe to run again.
+`cleanup.sh` closes this run's `agent-browser` session, which discards its temporary profile. It stops the recorded Vite PID only after confirming that PID is this checkout's Vite server on the recorded port, and the recorded world-server PID only after confirming it is this checkout's `server/main.ts` on the recorded world port. It confirms the page origin no longer answers, writes `cleanup.txt`, and lists the evidence directory. It never kills by process name alone, and it leaves the evidence directory and the posted comment intact. It is safe to run again.
 
 Run cleanup after the last proof and after every failed attempt before launching again. Confirm the listed evidence files still exist.
 

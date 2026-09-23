@@ -1,6 +1,6 @@
 import { nodeRef, nodeSubject, type Group } from '../../domain/types'
 import { history, useStore } from '../../store'
-import { Button, Input, Section } from '../ui'
+import { Button, DraftInput, Section } from '../ui'
 import { membersOf } from '../canvas/groups'
 
 export function GroupInspector({ group }: { group: Group }) {
@@ -9,9 +9,9 @@ export function GroupInspector({ group }: { group: Group }) {
   const members = membersOf(world, group.id)
   return (
     <>
-      <Input
+      <DraftInput
         value={group.name}
-        onChange={(e) => history.updateGroup(group.id, { name: e.target.value })}
+        onText={(text) => history.updateGroup(group.id, { name: text })}
         className="font-semibold text-sm"
       />
       <Section title="Members">

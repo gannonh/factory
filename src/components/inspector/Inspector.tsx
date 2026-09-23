@@ -60,7 +60,8 @@ export function Inspector() {
         <span className="text-[11px] uppercase tracking-wider text-ink-400 font-semibold">{title}</span>
         <button onClick={() => select(null)} aria-label="Close inspector" className="text-ink-400 hover:text-ink-100"><X size={14} /></button>
       </div>
-      <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-5">{body}</div>
+      {/* keyed so a focused field's draft never carries over to the next selection */}
+      <div key={`${selection.kind}:${selection.id}`} className="flex-1 overflow-y-auto p-3 flex flex-col gap-5">{body}</div>
     </aside>
   )
 }

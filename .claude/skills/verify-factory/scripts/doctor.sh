@@ -19,6 +19,19 @@ if [[ "$listener" != "$FACTORY_SERVER_PID" ]]; then
   exit 1
 fi
 
+if [[ -n "${FACTORY_WORLD_PID:-}" ]] && ! kill -0 "$FACTORY_WORLD_PID" 2>/dev/null; then
+  echo "world pid $FACTORY_WORLD_PID is not running" >&2
+  exit 1
+fi
+
+if [[ -n "${FACTORY_WORLD_PORT:-}" ]]; then
+  world_listener="$(lsof -nP -iTCP:"$FACTORY_WORLD_PORT" -sTCP:LISTEN -t || true)"
+  if [[ "$world_listener" != "$FACTORY_WORLD_PID" ]]; then
+    echo "port $FACTORY_WORLD_PORT is owned by pid '${world_listener:-none}', expected $FACTORY_WORLD_PID" >&2
+    exit 1
+  fi
+fi
+
 if ! curl --fail --silent --show-error "$FACTORY_ORIGIN/" | grep -q '<title>Factory</title>'; then
   echo "$FACTORY_ORIGIN did not serve the Factory page" >&2
   exit 1

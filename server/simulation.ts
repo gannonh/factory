@@ -1,4 +1,4 @@
-import { seedWorld } from '../domain/seed'
+import { seedWorld } from '../src/domain/seed'
 import {
   EDGE_RULES,
   SANDBOX_TIMED,
@@ -10,6 +10,7 @@ import {
   nodeSubject,
   type Agent,
   type AgentId,
+  type AgentPatch,
   type Edge,
   type EdgeId,
   type EdgeKind,
@@ -37,14 +38,11 @@ import {
   type Trigger,
   type TriggerId,
   type World,
-} from '../domain/types'
+} from '../src/domain/types'
 
-export const STORAGE_KEY = 'factory.world.v3'
-export type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 const TICK_MS = 400
 const MAX_LOGS = 2000
 const MAX_EVENTS = 400
-const MAX_COMPLETED_RUNS = 200
 const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 }
 const ID_PREFIX: Record<NodeKind, string> = { agent: 'ag', sandbox: 'sb', trigger: 'tr' }
 
@@ -61,16 +59,6 @@ function connectable(world: World, source: NodeId, target: NodeId): { from: Node
 /** Whether an edge with these endpoints and kind already exists, ignoring `exceptId`. */
 function edgeExists(world: World, source: NodeId, target: NodeId, kind: EdgeKind, exceptId?: EdgeId): boolean {
   return Object.values(world.edges).some((e) => e.id !== exceptId && e.source === source && e.target === target && e.kind === kind)
-}
-
-/** `window.localStorage` access throws when site data is blocked; run in memory then. */
-function browserStorage(): StorageLike | null {
-  if (typeof window === 'undefined') return null
-  try {
-    return window.localStorage
-  } catch {
-    return null
-  }
 }
 
 const RUN_LOG_LINES: Array<[LogLevel, string]> = [
@@ -116,30 +104,25 @@ export class MockServer {
   private world: World
   private listeners = new Set<Listener>()
   private timer: ReturnType<typeof setInterval> | null = null
-  private saveTimer: ReturnType<typeof setTimeout> | null = null
   private rng: () => number
-  private storage: StorageLike | null
   private seq = 0
+  private rev = 0
 
   /**
    * `manual` stops the automatic interval; tests then advance simulated time with
    * `advance(ms)`. `rng` makes run outcomes, durations, and metric noise repeatable.
-   * `storage` defaults to `window.localStorage` in the browser and to none elsewhere.
+   * A new server always starts from the seed. Nothing is read from disk.
    */
-  constructor(options: { manual?: boolean; rng?: () => number; storage?: StorageLike } = {}) {
+  constructor(options: { manual?: boolean; rng?: () => number } = {}) {
     this.rng = options.rng ?? Math.random
-    this.storage = options.storage ?? browserStorage()
-    const restored = load(this.storage)
-    if (restored) {
-      this.world = restored
-      this.seq = restored.events.reduce((max, e) => Math.max(max, e.id), 0)
-      const interrupted = Object.values(restored.runs).filter((run) => run.status === 'running')
-      for (const run of interrupted) this.finishRun(run, { status: 'failed', reason: 'interrupted by reload' })
-      if (interrupted.length > 0) this.publish()
-    } else {
-      this.world = seedWorld(Date.now())
-    }
+    this.world = seedWorld(Date.now())
+    this.rev = 1
     if (!options.manual) this.start()
+  }
+
+  /** Monotonic count of publishes. The initial seed is revision 1. */
+  revision() {
+    return this.rev
   }
 
   /** Advance simulated time by `ms` and run one full tick. For manual mode. */
@@ -175,13 +158,9 @@ export class MockServer {
   }
 
   private publish() {
+    this.rev += 1
     this.world = { ...this.world }
     for (const fn of this.listeners) fn(this.world)
-    if (this.saveTimer) return
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null
-      save(this.world, this.storage)
-    }, 1000)
   }
 
   // ---- writes -------------------------------------------------------------
@@ -450,8 +429,10 @@ export class MockServer {
     this.publish()
   }
 
-  updateAgent(id: AgentId, patch: Partial<Omit<Agent, 'id' | 'status' | 'position' | 'groupId'>>) {
-    this.patchAgent(id, patch)
+  updateAgent(id: AgentId, patch: AgentPatch) {
+    const cur = this.world.agents[id]
+    if (!cur) return
+    this.patchAgent(id, { ...patch, retry: { ...cur.retry, ...patch.retry } })
     this.publish()
   }
 
@@ -534,11 +515,6 @@ export class MockServer {
   }
 
   reset() {
-    try {
-      this.storage?.removeItem(STORAGE_KEY)
-    } catch {
-      /* storage unavailable: reset in memory only */
-    }
     this.world = seedWorld(Date.now())
     this.publish()
   }
@@ -845,91 +821,8 @@ export class MockServer {
   }
 }
 
-type Persisted = Pick<World, 'now' | 'agents' | 'sandboxes' | 'triggers' | 'edges' | 'groups' | 'sim' | 'tasks' | 'runs' | 'events'>
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-/** A record whose entries are all records; rejects arrays and null entries. */
-function isRecordMap(value: unknown): value is Record<string, Record<string, unknown>> {
-  return isRecord(value) && Object.values(value).every(isRecord)
-}
-
 /**
- * Shape check for a saved payload. Anything restoration consumes must be
- * present and the right kind; a malformed save is rejected whole so the caller
- * seeds a fresh world instead of crashing while restoring it.
- */
-function isPersisted(value: unknown): value is Persisted {
-  return isRecord(value)
-    && typeof value.now === 'number' && Number.isFinite(value.now)
-    && isRecordMap(value.agents) && isRecordMap(value.sandboxes) && isRecordMap(value.triggers)
-    && isRecordMap(value.edges) && isRecordMap(value.groups) && isRecordMap(value.tasks) && isRecordMap(value.runs)
-    && isRecord(value.sim) && typeof value.sim.paused === 'boolean'
-    && (value.sim.speed === 1 || value.sim.speed === 2 || value.sim.speed === 4)
-    && Array.isArray(value.events) && value.events.every((e) => isRecord(e) && typeof e.id === 'number' && Number.isFinite(e.id))
-}
-
-/**
- * The save payload for a world: what survives a reload. Logs never do. Every
- * running run is kept plus the newest MAX_COMPLETED_RUNS finished runs; tasks
- * are kept when they are pending, referenced by a kept run, or share a flow
- * with a kept queued/waiting task, so post-reload dependency evaluation sees
- * the same prerequisites. Returned slices alias the live world and must be
- * serialized or copied before the world mutates.
- */
-export function retainWorld(w: World): Persisted {
-  const runs: World['runs'] = {}
-  for (const run of Object.values(w.runs)) if (run.status === 'running') runs[run.id] = run
-  const completed = Object.values(w.runs)
-    .filter((run) => run.status !== 'running')
-    .sort((a, b) => b.startedAt - a.startedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-    .slice(0, MAX_COMPLETED_RUNS)
-  for (const run of completed) runs[run.id] = run
-
-  const runTaskIds = new Set(Object.values(runs).map((run) => run.taskId))
-  const pendingFlowIds = new Set(
-    Object.values(w.tasks).filter((t) => t.status === 'queued' || t.status === 'waiting').map((t) => t.flowId),
-  )
-  const tasks: World['tasks'] = {}
-  for (const task of Object.values(w.tasks)) {
-    const pending = task.status === 'queued' || task.status === 'waiting'
-    if (task.status === 'running' || pending || runTaskIds.has(task.id) || pendingFlowIds.has(task.flowId)) tasks[task.id] = task
-  }
-
-  const membered = new Set<string>()
-  for (const a of Object.values(w.agents)) if (a.groupId) membered.add(a.groupId)
-  for (const s of Object.values(w.sandboxes)) if (s.groupId) membered.add(s.groupId)
-  for (const t of Object.values(w.triggers)) if (t.groupId) membered.add(t.groupId)
-  const groups = Object.fromEntries(Object.entries(w.groups).filter(([id]) => membered.has(id))) as World['groups']
-
-  return {
-    now: w.now,
-    agents: w.agents,
-    sandboxes: w.sandboxes,
-    triggers: w.triggers,
-    edges: w.edges,
-    groups,
-    sim: w.sim,
-    tasks,
-    runs,
-    events: w.events.slice(-MAX_EVENTS),
-  }
-}
-
-function save(w: World, storage: StorageLike | null) {
-  if (!storage) return
-  const data = retainWorld(w)
-  try {
-    storage.setItem(STORAGE_KEY, JSON.stringify(data))
-  } catch {
-    /* storage unavailable: run in memory only */
-  }
-}
-
-/**
- * Normalization for a node record coming back from a save or an undo: runtime
+ * Normalization for a node record coming back from undo: runtime
  * state (live status, leases, metric history, trigger schedule) starts fresh,
  * everything else returns as captured.
  */
@@ -984,35 +877,3 @@ function pastedNode(ref: NodeRef, id: string, offset: Position, now: number): No
     }
   }
 }
-
-function load(storage: StorageLike | null): World | null {
-  if (!storage) return null
-  try {
-    const raw = storage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    const parsed: unknown = JSON.parse(raw)
-    if (!isPersisted(parsed)) return null
-    const p = parsed
-    const now = p.now
-    const agents = Object.fromEntries(Object.entries(p.agents).map(([id, a]) => [id, restoredAgent(a)])) as World['agents']
-    const sandboxes = Object.fromEntries(Object.entries(p.sandboxes).map(([id, s]) => [id, restoredSandbox(s, now)])) as World['sandboxes']
-    const triggers = Object.fromEntries(Object.entries(p.triggers).map(([id, t]) => [id, restoredTrigger(t)])) as World['triggers']
-    return {
-      now,
-      agents,
-      sandboxes,
-      triggers,
-      edges: p.edges,
-      groups: p.groups,
-      tasks: p.tasks,
-      runs: p.runs,
-      logs: [],
-      events: p.events,
-      sim: p.sim,
-    }
-  } catch {
-    return null
-  }
-}
-
-export const mockServer = new MockServer()

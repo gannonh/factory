@@ -28,8 +28,8 @@ Preconditions:
 - **Select.** `agent-browser find role button click --name "Fit" --exact`, take the ref of the group whose name starts with `QA` from `agent-browser snapshot -i`, and click that ref. The agent inspector opens.
 - **Duplicate.** `agent-browser press Meta+d`. The snapshot lists two groups whose names start with `QA`, and `Undo` becomes enabled.
 - **Undo.** `agent-browser find role button click --name "Undo"`. One `QA` group remains, `Undo` is disabled, and `Redo` is enabled.
-- **Redo.** `agent-browser find role button click --name "Redo"`. Two `QA` groups return. After 1200 ms the stored `agents` hold the seeded `ag-qa` and one more agent named `QA` with a generated ID.
-- **Delete.** Click the ref of the last `QA` group, then `agent-browser press Backspace`. One `QA` group remains and the stored `agents` hold only the four seeded IDs.
+- **Redo.** `agent-browser find role button click --name "Redo"`. Two `QA` groups return. After `agent-browser reload`, two `QA` groups remain.
+- **Delete.** Click the ref of the last `QA` group, then `agent-browser press Backspace`. One `QA` group remains After `agent-browser reload`, one `QA` group remains.
 
 ## Gotchas
 

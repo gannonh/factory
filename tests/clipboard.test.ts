@@ -36,7 +36,7 @@ function edgesAmong(fixture: Fixture, ids: NodeId[]): Edge[] {
   return fragmentOf(fixture.world(), ids).edges
 }
 
-test('paste creates offset copies of two agents and the handoff between them, leaving the originals alone', () => {
+test('paste creates offset copies of two agents and the handoff between them, leaving the originals alone', async () => {
   const { fixture, clipboard, planner, coder, handoff } = setup()
   fixture.api.agents.enqueue(planner, { title: 'Plan', prompt: 'plan it', priority: 'normal' })
   fixture.api.sim.advance(1)
@@ -47,7 +47,7 @@ test('paste creates offset copies of two agents and the handoff between them, le
   const before = snapshot(fixture)
 
   expect(clipboard.copy([planner, coder])).toBe(true)
-  const pasted = clipboard.paste() as AgentId[]
+  const pasted = await clipboard.paste() as AgentId[]
 
   expect(pasted).toHaveLength(2)
   expect(new Set([...pasted, planner, coder]).size).toBe(4)
@@ -80,34 +80,34 @@ test('paste creates offset copies of two agents and the handoff between them, le
   expect(w.runs).toEqual(before.runs)
 })
 
-test('a paused agent pastes paused', () => {
+test('a paused agent pastes paused', async () => {
   const { fixture, clipboard, planner } = setup()
   fixture.api.agents.setPaused(planner, true)
   clipboard.copy([planner])
-  const [copy] = clipboard.paste() as AgentId[]
+  const [copy] = await clipboard.paste() as AgentId[]
   expect(fixture.world().agents[copy].status).toBe('paused')
 })
 
-test('repeated pastes cascade by one more offset each, and a new copy starts over', () => {
+test('repeated pastes cascade by one more offset each, and a new copy starts over', async () => {
   const { fixture, clipboard, planner } = setup()
   clipboard.copy([planner])
-  const [first] = clipboard.paste() as AgentId[]
-  const [second] = clipboard.paste() as AgentId[]
+  const [first] = await clipboard.paste() as AgentId[]
+  const [second] = await clipboard.paste() as AgentId[]
   expect(fixture.world().agents[first].position).toEqual({ x: 360, y: 100 })
   expect(fixture.world().agents[second].position).toEqual({ x: 400, y: 140 })
 
   clipboard.copy([planner])
-  const [third] = clipboard.paste() as AgentId[]
+  const [third] = await clipboard.paste() as AgentId[]
   expect(fixture.world().agents[third].position).toEqual({ x: 360, y: 100 })
 })
 
-test('an edge from a copied agent to an unselected sandbox is not copied', () => {
+test('an edge from a copied agent to an unselected sandbox is not copied', async () => {
   const { fixture, clipboard, planner, coder } = setup()
   const before = snapshot(fixture)
   expect(Object.values(before.edges).filter((e) => e.kind === 'runs-in' && (e.source === planner || e.source === coder))).toHaveLength(3)
 
   clipboard.copy([planner, coder])
-  const pasted = clipboard.paste()
+  const pasted = await clipboard.paste()
 
   const w = fixture.world()
   expect(Object.keys(w.edges)).toHaveLength(Object.keys(before.edges).length + 1)
@@ -116,32 +116,32 @@ test('an edge from a copied agent to an unselected sandbox is not copied', () =>
   expect(Object.keys(w.sandboxes)).toEqual(Object.keys(before.sandboxes))
 })
 
-test('copying an empty selection returns false and keeps the fragment copied before', () => {
+test('copying an empty selection returns false and keeps the fragment copied before', async () => {
   const { fixture, clipboard, planner } = setup()
   expect(clipboard.copy([planner])).toBe(true)
   expect(clipboard.copy([])).toBe(false)
   expect(clipboard.copy(['ag-missing' as AgentId])).toBe(false)
 
-  const pasted = clipboard.paste() as AgentId[]
+  const pasted = await clipboard.paste() as AgentId[]
   expect(pasted).toHaveLength(1)
   expect(fixture.world().agents[pasted[0]].name).toBe('Planner')
 })
 
-test('paste with nothing copied and duplicate of nothing change nothing', () => {
+test('paste with nothing copied and duplicate of nothing change nothing', async () => {
   const fixture = makeFixture()
   const history = createHistory(fixture.api, fixture.world)
   const clipboard = createClipboard(history, fixture.world)
   const published = fixture.world()
   const before = snapshot(fixture)
 
-  expect(clipboard.paste()).toEqual([])
-  expect(clipboard.duplicate([])).toEqual([])
+  expect(await clipboard.paste()).toEqual([])
+  expect(await clipboard.duplicate([])).toEqual([])
   expect(fixture.world()).toBe(published)
   expect(fixture.world()).toEqual(before)
   expect(history.canUndo()).toBe(false)
 })
 
-test('a leased sandbox and a fired trigger paste idle', () => {
+test('a leased sandbox and a fired trigger paste idle', async () => {
   const { fixture, clipboard, planner } = setup()
   fixture.api.triggers.fire(tr('tr-cron'))
   fixture.api.sim.advance(1)
@@ -151,7 +151,7 @@ test('a leased sandbox and a fired trigger paste idle', () => {
   expect(before.triggers[tr('tr-cron')]).toMatchObject({ fired: 1, lastFiredAt: expect.any(Number) })
 
   clipboard.copy([sb('sb-local-1'), tr('tr-cron')])
-  const pasted = clipboard.paste()
+  const pasted = await clipboard.paste()
 
   const w = fixture.world()
   const newSandbox = pasted.find((id) => id in w.sandboxes)
@@ -173,13 +173,13 @@ test('a leased sandbox and a fired trigger paste idle', () => {
   expect(w.logs.at(-1)?.msg).toBe('provisioning mac-studio (local) on localhost')
 })
 
-test('paste still works after the copied originals were edited and deleted', () => {
+test('paste still works after the copied originals were edited and deleted', async () => {
   const { fixture, history, clipboard, planner, coder } = setup()
   clipboard.copy([planner, coder])
-  history.updateAgent(planner, { name: 'Lead' })
-  history.delete({ nodeIds: [planner, coder], edgeIds: [] })
+  await history.updateAgent(planner, { name: 'Lead' })
+  await history.delete({ nodeIds: [planner, coder], edgeIds: [] })
 
-  const pasted = clipboard.paste() as AgentId[]
+  const pasted = await clipboard.paste() as AgentId[]
 
   const w = fixture.world()
   expect(pasted.map((id) => w.agents[id].name)).toEqual(['Planner', 'Coder'])
@@ -187,32 +187,32 @@ test('paste still works after the copied originals were edited and deleted', () 
   expect(edgesAmong(fixture, pasted)).toEqual([{ id: expect.stringMatching(/^ed-/), kind: 'handoff', source: pasted[0], target: pasted[1] }])
 })
 
-test('one undo removes a paste and redo restores it under the same ids', () => {
+test('one undo removes a paste and redo restores it under the same ids', async () => {
   const { fixture, history, clipboard, planner, coder } = setup()
   const before = snapshot(fixture)
   clipboard.copy([planner, coder])
-  const pasted = clipboard.paste() as AgentId[]
+  const pasted = await clipboard.paste() as AgentId[]
   const after = snapshot(fixture)
   const [newEdge] = edgesAmong(fixture, pasted)
 
-  history.undo()
+  await history.undo()
   expect(fixture.world().agents).toEqual(before.agents)
   expect(fixture.world().edges).toEqual(before.edges)
   expect(history.canUndo()).toBe(false)
 
-  history.redo()
+  await history.redo()
   expect(fixture.world().agents).toEqual(after.agents)
   expect(fixture.world().edges).toEqual(after.edges)
   expect(fixture.world().edges[newEdge.id]).toEqual({ id: newEdge.id, kind: 'handoff', source: pasted[0], target: pasted[1] })
 })
 
-test('duplicate copies the selection at one offset without touching the clipboard, and undoes in one step', () => {
+test('duplicate copies the selection at one offset without touching the clipboard, and undoes in one step', async () => {
   const { fixture, history, clipboard, planner, coder } = setup()
   const reviewer = fixture.agent('Reviewer')
   clipboard.copy([reviewer])
   const before = snapshot(fixture)
 
-  const dup = clipboard.duplicate([planner, coder]) as AgentId[]
+  const dup = await clipboard.duplicate([planner, coder]) as AgentId[]
 
   const after = snapshot(fixture)
   expect(dup.map((id) => after.agents[id].name)).toEqual(['Planner', 'Coder'])
@@ -223,20 +223,20 @@ test('duplicate copies the selection at one offset without touching the clipboar
   expect(after.agents[planner]).toEqual(before.agents[planner])
   expect(after.agents[coder]).toEqual(before.agents[coder])
 
-  history.undo()
+  await history.undo()
   expect(fixture.world().agents).toEqual(before.agents)
   expect(fixture.world().edges).toEqual(before.edges)
   expect(history.canUndo()).toBe(false)
 
-  history.redo()
+  await history.redo()
   expect(fixture.world().agents).toEqual(after.agents)
   expect(fixture.world().edges).toEqual(after.edges)
 
-  const [fromClipboard] = clipboard.paste() as AgentId[]
+  const [fromClipboard] = await clipboard.paste() as AgentId[]
   expect(fixture.world().agents[fromClipboard]).toMatchObject({ name: 'Reviewer', position: { x: 680, y: 300 } })
 })
 
-test('api.graph.paste drops an edge that leaves the fragment and logs one Pasted event', () => {
+test('api.graph.paste drops an edge that leaves the fragment and logs one Pasted event', async () => {
   const { fixture, planner, coder } = setup()
   const before = snapshot(fixture)
   const external = Object.values(before.edges).find((e) => e.kind === 'runs-in' && e.source === planner)
@@ -254,7 +254,7 @@ test('api.graph.paste drops an edge that leaves the fragment and logs one Pasted
   expect(events).toEqual([{ id: expect.any(Number), ts: w.now, kind: 'graph', subject: { kind: 'agent', id: created.nodes[0].node.id }, msg: 'Pasted 2 nodes' }])
 })
 
-test('api.graph.paste of an empty fragment creates nothing and publishes nothing', () => {
+test('api.graph.paste of an empty fragment creates nothing and publishes nothing', async () => {
   const fixture = makeFixture()
   const published = fixture.world()
   const before = snapshot(fixture)
@@ -263,7 +263,7 @@ test('api.graph.paste of an empty fragment creates nothing and publishes nothing
   expect(fixture.world()).toEqual(before)
 })
 
-test('paste and duplicate of grouped members yield copies with groupId null', () => {
+test('paste and duplicate of grouped members yield copies with groupId null', async () => {
   const { fixture, clipboard, planner, coder } = setup()
   const id = fixture.api.graph.group([planner, coder])
   expect(id).toMatch(/^gr-/)
@@ -271,14 +271,14 @@ test('paste and duplicate of grouped members yield copies with groupId null', ()
   expect(fixture.world().agents[coder].groupId).toBe(id)
 
   expect(clipboard.copy([planner, coder])).toBe(true)
-  const pasted = clipboard.paste() as AgentId[]
+  const pasted = await clipboard.paste() as AgentId[]
   expect(pasted).toHaveLength(2)
   expect(fixture.world().agents[pasted[0]].groupId).toBeNull()
   expect(fixture.world().agents[pasted[1]].groupId).toBeNull()
   expect(fixture.world().agents[planner].groupId).toBe(id)
   expect(fixture.world().agents[coder].groupId).toBe(id)
 
-  const dup = clipboard.duplicate([planner, coder]) as AgentId[]
+  const dup = await clipboard.duplicate([planner, coder]) as AgentId[]
   expect(dup).toHaveLength(2)
   expect(fixture.world().agents[dup[0]].groupId).toBeNull()
   expect(fixture.world().agents[dup[1]].groupId).toBeNull()

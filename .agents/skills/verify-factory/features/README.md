@@ -18,23 +18,23 @@ This directory is the maintained source for verifying Factory's user-facing web 
 - `--name` matches a substring. Add `--exact` when two controls share text.
 - The snapshot shows text after CSS transforms, so headings, column headers, labels, and log levels appear in uppercase. `find` ignores case.
 - Use `agent-browser eval` only for read-only proof.
-- The app saves `factory.world.v3` at most once per second. Wait 1200 ms after a UI change before reading it.
-- View, selection, dock tab, and dock collapsed state live in memory only. A reload returns to Canvas with the Logs tab open.
+- `localStorage` has no `factory.world.v3` key. Prove a mutation by what the page shows.
+- View, selection, dock tab, and dock collapsed state live in the page only. A reload returns to Canvas with the Logs tab open. The world on the server stays.
 
 ## Proof and skip reporting
 
 - Record a video of the action and capture a screenshot before and after it. `record start` resets the page to the seed world, so meet each recipe's preconditions after starting the recording.
-- For a mutation, read the stored value through `factory.world.v3` after the UI changes.
+- For a mutation, require the new value on the page. `factory.world.v3` stays absent from `localStorage`.
 - Name evidence files after the sub-feature ID, for example `sim-pause.webm`, `sim-pause-before.png`, `sim-pause-after.png`, and `sim-pause-storage.json`.
 - Post the evidence to the pull request with `post-evidence.sh`.
 - Report an unreachable entry point with the attempted locator and snapshot. Do not claim it passed through another entry point.
 
 ## Features
 
-- [Simulation controls](simulation-controls.md) covers pause, resume, speed selection, reset, and persisted simulation state.
+- [Simulation controls](simulation-controls.md) covers pause, resume, speed selection, and reset.
 - [Workspace navigation](workspace-navigation.md) covers the Canvas, Agents, and Sandboxes rail destinations.
 - [Canvas editing](canvas-editing.md) covers duplicate, copy and paste, delete, undo, redo, layout, and fit on the graph canvas.
 - [Node groups](node-groups.md) covers grouping a selection, naming the group, moving members together, and ungrouping, driven by the `Group` and `Ungroup` toolbar buttons.
-- [Agent task composition](agent-task-composition.md) covers opening an agent, composing a task, priority, queue visibility, and persisted task state.
-- [Sandbox creation](sandbox-creation.md) covers the sandbox form, cancellation, provisioning, and persisted sandbox state.
+- [Agent task composition](agent-task-composition.md) covers opening an agent, composing a task, priority, queue visibility, and a reload that still shows the task.
+- [Sandbox creation](sandbox-creation.md) covers the sandbox form, cancellation, provisioning, and a reload that still shows the sandbox.
 - [Operational dock](operational-dock.md) covers Queue, Runs, Logs, Events, collapse, expand, run history after a reload, and the agent inspector's runs shortcut.

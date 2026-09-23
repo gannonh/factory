@@ -2,7 +2,7 @@ import { Zap } from 'lucide-react'
 import { api } from '../../api/client'
 import type { Trigger, TriggerKind } from '../../domain/types'
 import { history, useStore } from '../../store'
-import { Button, Field, Input, Section, Select, Textarea, fmtAgo } from '../ui'
+import { Button, DraftInput, DraftTextarea, Field, Section, Select, fmtAgo } from '../ui'
 
 export function TriggerInspector({ trigger }: { trigger: Trigger }) {
   const world = useStore((s) => s.world)
@@ -12,7 +12,7 @@ export function TriggerInspector({ trigger }: { trigger: Trigger }) {
   return (
     <>
       <div className="flex items-center gap-2">
-        <Input value={trigger.name} onChange={(e) => update({ name: e.target.value })} className="font-semibold text-sm" />
+        <DraftInput value={trigger.name} onText={(text) => update({ name: text })} className="font-semibold text-sm" />
         <Button variant="primary" onClick={() => api.triggers.fire(trigger.id)} title="Fire now"><Zap size={12} />Fire</Button>
       </div>
       <Section title="Status">
@@ -29,9 +29,9 @@ export function TriggerInspector({ trigger }: { trigger: Trigger }) {
           </Select>
         </Field>
         {periodic && (
-          <Field label="Interval (s)" hint="simulated"><Input type="number" min={3} value={Math.round(trigger.intervalMs / 1000)} onChange={(e) => update({ intervalMs: Math.max(3, Number(e.target.value) || 3) * 1000 })} /></Field>
+          <Field label="Interval (s)" hint="simulated"><DraftInput type="number" min={3} value={Math.round(trigger.intervalMs / 1000)} onText={(text) => update({ intervalMs: Math.max(3, Number(text) || 3) * 1000 })} /></Field>
         )}
-        <Field label="Task template"><Textarea rows={3} value={trigger.template} onChange={(e) => update({ template: e.target.value })} /></Field>
+        <Field label="Task template"><DraftTextarea rows={3} value={trigger.template} onText={(text) => update({ template: text })} /></Field>
       </Section>
     </>
   )
