@@ -58,7 +58,8 @@ state_file="$evidence_dir/state.env"
   printf 'export AGENT_BROWSER_SESSION=%q\n' "verify-factory-$run_id"
 } > "$state_file"
 
-for _ in $(seq 1 60); do
+deadline=$((SECONDS + 30))
+while (( SECONDS < deadline )); do
   if ! kill -0 "$world_pid" 2>/dev/null; then
     echo "factory server exited during startup; see $evidence_dir/world.log" >&2
     exit 1

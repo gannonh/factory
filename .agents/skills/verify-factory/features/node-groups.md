@@ -25,7 +25,7 @@ Preconditions:
 
 - **Group.** `agent-browser find role button click --name "Fit" --exact`. Take the refs of the groups whose names start with `Planner` and `Coder` from `agent-browser snapshot -i`, click the Planner ref, then `agent-browser press Shift`, click the Coder ref. `agent-browser find role button click --name "Group" --exact`. The snapshot lists a group whose name starts with `Group 1`, `Ungroup` becomes enabled, and the inspector heading is `GROUP`. The inspector's members list shows `Planner` and `Coder`.
 - **Rename.** With that group selected, fill the inspector name field with `Crew`. The frame header reads `Crew`. After `agent-browser reload`, the snapshot still lists a group whose name starts with `Crew`.
-- **Ungroup.** `agent-browser find role button click --name "Ungroup" --exact`. The `Group 1` / `Crew` frame is gone. The snapshot still lists the `Planner` and `Coder` nodes, and `Ungroup` is disabled.
+- **Ungroup.** The reload cleared the selection. Take the ref of the group whose name starts with `Crew` from `agent-browser snapshot -i`, click it, then `agent-browser find role button click --name "Ungroup" --exact`. The `Group 1` / `Crew` frame is gone. The snapshot still lists the `Planner` and `Coder` nodes, and `Ungroup` is disabled.
 
 ## Gotchas
 

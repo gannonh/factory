@@ -27,7 +27,7 @@ Preconditions:
 - **Pause.** Run the `sim-pause` proof in [SKILL.md](../SKILL.md): record, screenshot, `agent-browser find role button click --name "Pause"`, wait for `Resume`, screenshot, read storage, stop recording. Require `present: false` and a Resume button.
 - **Resume.** `agent-browser find role button click --name "Resume"`, then `agent-browser wait --text "Pause"`. The snapshot lists `button "Pause"`.
 - **Change speed.** `agent-browser find role button click --name "4×"`. After 1200 ms, take an after screenshot and require the `4×` button to be the highlighted speed.
-- **Reset.** `agent-browser find role button click --name "Reset"`. The pause control reads `Pause`, the dock tabs read `Queue 0`, `Runs 0`, `Logs 0`, and `Events 0`, and `Undo` and `Redo` are disabled. After 1500 ms, a screenshot shows `1×` highlighted, and the Sandboxes view lists only the three seeded sandboxes.
+- **Reset.** `agent-browser find role button click --name "Reset"`. The pause control reads `Pause`, the dock tabs read `Queue 0`, `Runs 0`, `Logs 0`, and `Events 0`, and `Undo` and `Redo` are disabled. After 1500 ms, a screenshot shows `1×` highlighted. `agent-browser find role button click --name "Sandboxes"`, and the view lists only the three seeded sandboxes.
 
 ## Gotchas
 
