@@ -6,6 +6,7 @@ import { runCommand } from './commands'
 const HOST = '127.0.0.1'
 
 export type RunningServer = {
+  address: string
   port: number
   close: () => Promise<void>
 }
@@ -15,8 +16,14 @@ function originOf(req: IncomingMessage): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-function allow(req: IncomingMessage, res: ServerResponse, origin: string): boolean {
-  if (originOf(req) !== origin) {
+function allowedOrigin(req: IncomingMessage, origins: readonly string[]): string | undefined {
+  const origin = originOf(req)
+  return origin !== undefined && origins.includes(origin) ? origin : undefined
+}
+
+function allow(req: IncomingMessage, res: ServerResponse, origins: readonly string[]): boolean {
+  const origin = allowedOrigin(req, origins)
+  if (origin === undefined) {
     res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
     res.end('forbidden origin')
     return false
@@ -47,13 +54,13 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 
 export function startFactoryServer(
   simulation: MockServer,
-  options: { port: number; origin: string },
+  options: { port: number; origins: readonly string[] },
 ): Promise<RunningServer> {
   const sockets = new Set<WebSocket>()
   const wss = new WebSocketServer({ noServer: true })
   const snapshot = () => JSON.stringify({ rev: simulation.revision(), world: simulation.snapshot() })
 
-  simulation.subscribe(() => {
+  const unsubscribe = simulation.subscribe(() => {
     const msg = snapshot()
     for (const ws of sockets) {
       if (ws.readyState === WebSocket.OPEN) ws.send(msg)
@@ -76,7 +83,7 @@ export function startFactoryServer(
       return
     }
     if (req.method === 'OPTIONS' && url === '/command') {
-      if (!allow(req, res, options.origin)) return
+      if (!allow(req, res, options.origins)) return
       res.writeHead(204)
       res.end()
       return
@@ -86,7 +93,7 @@ export function startFactoryServer(
       res.end()
       return
     }
-    if (!allow(req, res, options.origin)) return
+    if (!allow(req, res, options.origins)) return
     const parsed: unknown = JSON.parse(await readBody(req))
     if (typeof parsed !== 'object' || parsed === null || !('method' in parsed)) {
       sendJson(res, 400, { ok: false, error: 'expected a command' })
@@ -108,7 +115,7 @@ export function startFactoryServer(
   }
 
   httpServer.on('upgrade', (req, socket, head) => {
-    if (originOf(req) !== options.origin || (req.url ?? '/') !== '/world') {
+    if (allowedOrigin(req, options.origins) === undefined || (req.url ?? '/') !== '/world') {
       socket.write('HTTP/1.1 403 Forbidden\r\nconnection: close\r\n\r\n')
       socket.destroy()
       return
@@ -129,16 +136,19 @@ export function startFactoryServer(
         return
       }
       resolve({
+        address: addr.address,
         port: addr.port,
-        close: () => new Promise((done, fail) => {
-          for (const ws of sockets) ws.close()
-          wss.close()
-          httpServer.close((err) => {
-            httpServer.closeAllConnections()
-            if (err) fail(err)
-            else done()
-          })
-        }),
+        close: async () => {
+          unsubscribe()
+          for (const ws of sockets) ws.terminate()
+          await Promise.all([
+            new Promise<void>((done, fail) => wss.close((err) => (err ? fail(err) : done()))),
+            new Promise<void>((done, fail) => {
+              httpServer.close((err) => (err ? fail(err) : done()))
+              httpServer.closeAllConnections()
+            }),
+          ])
+        },
       })
     })
   })

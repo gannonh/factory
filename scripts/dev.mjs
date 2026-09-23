@@ -4,7 +4,6 @@ import process from 'node:process'
 const env = {
   ...process.env,
   FACTORY_PORT: process.env.FACTORY_PORT ?? '8787',
-  FACTORY_ORIGIN: process.env.FACTORY_ORIGIN ?? 'http://localhost:5173',
   FACTORY_WORLD_PORT: process.env.FACTORY_WORLD_PORT ?? process.env.FACTORY_PORT ?? '8787',
 }
 

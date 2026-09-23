@@ -1,26 +1,21 @@
-import { execFile } from 'node:child_process'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 import { expect, test } from 'vitest'
 import { WebSocket } from 'ws'
 import { startFactoryServer } from '../server/http'
 import { MockServer } from '../server/simulation'
 
-const execFileAsync = promisify(execFile)
 const ORIGIN = 'http://localhost:5173'
 
 async function boot() {
-  const running = await startFactoryServer(new MockServer({ manual: true, rng: () => 0.5 }), { port: 0, origin: ORIGIN })
+  const running = await startFactoryServer(new MockServer({ manual: true, rng: () => 0.5 }), { port: 0, origins: [ORIGIN] })
   return running
 }
 
 test('the server listens on 127.0.0.1 and rejects a foreign origin', async () => {
   const running = await boot()
   try {
-    const ss = await execFileAsync('ss', ['-ltn', `sport = :${running.port}`])
-    expect(ss.stdout).toContain('127.0.0.1:' + running.port)
-    expect(ss.stdout).not.toContain('0.0.0.0:' + running.port)
+    expect(running.address).toBe('127.0.0.1')
 
     const foreign = await fetch(`http://127.0.0.1:${running.port}/command`, {
       method: 'POST',
@@ -91,7 +86,7 @@ test('a command updates every connected client and advance is not a command', as
 })
 
 test('the world keeps running after every client disconnects', async () => {
-  const running = await startFactoryServer(new MockServer({ rng: () => 0.5 }), { port: 0, origin: ORIGIN })
+  const running = await startFactoryServer(new MockServer({ rng: () => 0.5 }), { port: 0, origins: [ORIGIN] })
   try {
     const post = async (method: string, args: unknown[]) => {
       const response = await fetch(`http://127.0.0.1:${running.port}/command`, {
