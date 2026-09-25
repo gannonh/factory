@@ -5,6 +5,7 @@ import {
   SANDBOX_TRANSITIONS,
   attachedEdges,
   edgeKindFor,
+  isCapacity,
   nodeKindOf,
   nodeRef,
   nodeSubject,
@@ -47,7 +48,6 @@ const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 }
 const ID_PREFIX: Record<NodeKind, string> = { agent: 'ag', sandbox: 'sb', trigger: 'tr' }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
-const isCapacity = (v: number) => Number.isInteger(v) && v >= 1
 
 /** What may join two nodes, or null when either endpoint is gone. */
 function connectable(world: World, source: NodeId, target: NodeId): { from: NodeKind; to: NodeKind; kinds: EdgeKind[] } | null {

@@ -8,8 +8,29 @@ import { MockServer } from '../server/simulation'
 const ORIGIN = 'http://localhost:5173'
 
 async function boot() {
-  const running = await startFactoryServer(new MockServer({ manual: true, rng: () => 0.5 }), { port: 0, origins: [ORIGIN] })
-  return running
+  const simulation = new MockServer({ manual: true, rng: () => 0.5 })
+  const running = await startFactoryServer(simulation, { port: 0, origins: [ORIGIN] })
+  return Object.assign(running, { simulation })
+}
+
+async function post(port: number, method: string, args: unknown[]) {
+  const response = await fetch(`http://127.0.0.1:${port}/command`, {
+    method: 'POST',
+    headers: { origin: ORIGIN, 'content-type': 'application/json' },
+    body: JSON.stringify({ method, args }),
+  })
+  return { status: response.status, body: await response.json() as { ok: boolean; error?: string } }
+}
+
+/** Revisions published after the call, skipping the snapshot `subscribe` delivers immediately. */
+function published(simulation: MockServer): number[] {
+  const revs: number[] = []
+  let initial = true
+  simulation.subscribe(() => {
+    if (initial) initial = false
+    else revs.push(simulation.revision())
+  })
+  return revs
 }
 
 test('the server listens on 127.0.0.1 and rejects a foreign origin', async () => {
@@ -80,6 +101,66 @@ test('a command updates every connected client and advance is not a command', as
     expect(advance.status).toBe(400)
     a.close()
     b.close()
+  } finally {
+    await running.close()
+  }
+})
+
+test('sim.set rejects a speed outside 1, 2, 4 and publishes nothing', async () => {
+  const running = await boot()
+  try {
+    const { simulation } = running
+    const revs = published(simulation)
+
+    const rejected = await post(running.port, 'sim.set', [{ speed: 3 }])
+    expect(rejected).toEqual({ status: 400, body: { ok: false, error: 'sim.set: args[0].speed: expected one of 1, 2, 4' } })
+    expect(simulation.revision()).toBe(1)
+    expect(revs).toEqual([])
+    expect(simulation.snapshot().sim.speed).toBe(1)
+
+    const accepted = await post(running.port, 'sim.set', [{ speed: 4 }])
+    expect(accepted.status).toBe(200)
+    expect(simulation.revision()).toBe(2)
+    expect(revs).toEqual([2])
+    expect(simulation.snapshot().sim).toEqual({ paused: false, speed: 4 })
+  } finally {
+    await running.close()
+  }
+})
+
+test('graph.restoreNodes rejects an incomplete agent and restores a full one', async () => {
+  const running = await boot()
+  try {
+    const { simulation } = running
+    const revs = published(simulation)
+
+    const rejected = await post(running.port, 'graph.restoreNodes', [[{ kind: 'agent', node: { id: 'ag-x', name: 'x' } }]])
+    expect(rejected).toEqual({ status: 400, body: { ok: false, error: 'graph.restoreNodes: args[0][0].node.role: expected a string' } })
+    expect(Object.keys(simulation.snapshot().agents)).not.toContain('ag-x')
+    expect(simulation.revision()).toBe(1)
+    expect(revs).toEqual([])
+
+    const agent = Object.values(simulation.snapshot().agents)[0]
+    expect((await post(running.port, 'graph.deleteNodes', [[agent.id]])).status).toBe(200)
+    expect(simulation.snapshot().agents[agent.id]).toBeUndefined()
+    const restored = await post(running.port, 'graph.restoreNodes', [[{ kind: 'agent', node: agent }]])
+    expect(restored.status).toBe(200)
+    expect(simulation.snapshot().agents[agent.id]).toEqual({ ...agent, status: 'idle' })
+    expect(revs).toEqual([2, 3])
+  } finally {
+    await running.close()
+  }
+})
+
+test('a command with the wrong argument count is rejected before it runs', async () => {
+  const running = await boot()
+  try {
+    const { simulation } = running
+    const revs = published(simulation)
+    const rejected = await post(running.port, 'graph.connect', ['ag-planner'])
+    expect(rejected).toEqual({ status: 400, body: { ok: false, error: 'graph.connect: expected 3 arguments, got 1' } })
+    expect(simulation.revision()).toBe(1)
+    expect(revs).toEqual([])
   } finally {
     await running.close()
   }

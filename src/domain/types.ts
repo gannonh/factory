@@ -106,6 +106,9 @@ export type Sandbox = {
   groupId: GroupId | null
 }
 
+/** The admission-limit rule for `Sandbox.capacity`. */
+export const isCapacity = (v: number) => Number.isInteger(v) && v >= 1
+
 export type TriggerKind = 'cron' | 'webhook' | 'manual' | 'event'
 
 export type Trigger = {
