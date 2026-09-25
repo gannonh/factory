@@ -4,7 +4,7 @@ An orchestration-graph control plane for a software factory: agents, sandboxes, 
 
 ![Factory canvas with the Planner agent selected: graph of triggers, agents and sandboxes, live inspector, and streaming logs](docs/screenshot.png)
 
-The page is a client of a Node process on this machine. That process owns the world and the simulation loop. Closing every tab leaves the factory running. Restarting the process loads the seed world again. Nothing is written to `localStorage`.
+The page is a client of a Node process on this machine. That process owns the world and the simulation loop. Closing every tab leaves the factory running. The process saves the world to a file, so stopping and starting it brings back the same graph, groups, tasks, run history and events. Nothing is written to `localStorage`.
 
 ## Run
 
@@ -14,6 +14,16 @@ npm run dev
 ```
 
 `npm run dev` starts the factory server on `127.0.0.1:8787` and the Vite dev server. Open http://localhost:5173. Commands go over HTTP. A websocket pushes the full world after each change. The server accepts only that page's origin, spelled `localhost` or `127.0.0.1`. `npm run build` type-checks and produces the browser bundle. `npm run lint` runs oxlint.
+
+### Where the world is stored
+
+The server writes the world to `.factory/world.json` in the repository root. Set `FACTORY_DATA_DIR` to use another directory. The server prints the file path when it starts. `.factory/` is gitignored.
+
+The server saves at most once per second and saves again when it stops. It keeps every running run, the newest 200 finished runs and the tasks they use, every pending task and its flow, and the newest 400 events. Logs are not saved. A run that was in progress when the server stopped comes back as failed with the reason `interrupted by restart`, and its task retries if the agent's retry policy allows it.
+
+To reset the world, click Reset in the top bar. That deletes the file and loads the seed world. You can also stop the server and delete `world.json`.
+
+If the file cannot be read or is not a valid world, the server starts from the seed world. It renames the bad file to `world.json.corrupt` and logs one error line with the path.
 
 ## MVP features
 
@@ -57,6 +67,7 @@ Simulation
 - `src/domain/types.ts` is the whole domain: branded ids, node and edge types, the sandbox transition table, the edge rule table, and the status colour tables.
 - `src/domain/seed.ts` is the seed world.
 - `server/simulation.ts` owns state, the tick loop, and the scheduler. Tests advance time with `advance` on that class. The network does not expose it.
+- `server/worldFile.ts` reads and writes the world file. A save writes a temporary file and renames it over `world.json`. The storage choice is recorded in `docs/adr/0002-world-storage.md`.
 - `server/http.ts` serves commands and the world websocket. The library choice is recorded in `docs/adr/0001-server-transport.md`.
 - `src/api/client.ts` is the promise API the page calls. Graph methods return after the server has applied the command.
 - `src/store.ts` holds the latest world snapshot plus UI state (view, selection, dock, and whether the socket is up).
