@@ -1,4 +1,4 @@
-import { spawn, execFile } from 'node:child_process'
+import { spawn, spawnSync, execFile } from 'node:child_process'
 import { appendFile, mkdir, readFile, realpath, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -173,7 +173,11 @@ export class ClaudeRunner implements Runner {
   kill(runId: RunId) {
     const child = this.processes.get(runId)
     if (!child) return
-    if (process.platform === 'win32' || !child.pid) {
+    if (process.platform === 'win32' && child.pid) {
+      spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true })
+      return
+    }
+    if (!child.pid) {
       child.kill('SIGKILL')
       return
     }

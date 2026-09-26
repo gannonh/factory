@@ -12,7 +12,7 @@ export function TopBar() {
   const working = agents.filter((a) => a.status === 'working').length
   const queued = tasks.filter((t) => t.status === 'queued' || t.status === 'waiting').length
   const running = runs.filter((r) => r.status === 'running').length
-  const done = runs.filter((r) => r.status !== 'running')
+  const done = runs.filter((r) => r.status === 'succeeded' || r.status === 'failed')
   const successRate = done.length ? Math.round((done.filter((r) => r.status === 'succeeded').length / done.length) * 100) : null
   const sbRunning = sandboxes.filter((s) => s.state === 'running').length
   const { paused, speed } = world.sim
