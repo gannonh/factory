@@ -41,6 +41,18 @@ test('a spawned node undoes away and redoes back under its original id', async (
   expect(history.canRedo()).toBe(false)
 })
 
+test('a local sandbox root edit is recorded in undo history', async () => {
+  const { fixture, history } = setup()
+  const id = sb('sb-local-1')
+  await fixture.api.sandboxes.update(id, { host: '/tmp/initial-root' })
+  await history.updateSandbox(id, { host: '/tmp/factory-root' })
+  expect(fixture.world().sandboxes[id].host).toBe('/tmp/factory-root')
+  await history.undo()
+  expect(fixture.world().sandboxes[id].host).toBe('/tmp/initial-root')
+  await history.redo()
+  expect(fixture.world().sandboxes[id].host).toBe('/tmp/factory-root')
+})
+
 test('a failed undo keeps the entry undoable', async () => {
   const fixture = makeFixture()
   let offline = false

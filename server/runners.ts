@@ -1,6 +1,6 @@
 import { spawn, execFile } from 'node:child_process'
-import { mkdir, realpath, stat } from 'node:fs/promises'
-import { basename, isAbsolute, join, resolve } from 'node:path'
+import { appendFile, mkdir, readFile, realpath, stat } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import type { Agent, LogLevel, Run, RunId, Task } from '../src/domain/types'
 
@@ -83,7 +83,17 @@ export async function prepareWorkdir(root: string, runId: RunId): Promise<string
   try { gitRoot = (await execFileAsync('git', ['-C', rootPath, 'rev-parse', '--show-toplevel'])).stdout.trim() } catch { /* plain directory */ }
   await mkdir(join(rootPath, '.factory-runs'), { recursive: true })
   if (gitRoot && resolve(gitRoot) === rootPath) {
-    await execFileAsync('git', ['-C', rootPath, 'worktree', 'add', '--detach', workdir, 'HEAD'])
+    const excludePath = (await execFileAsync('git', ['-C', rootPath, 'rev-parse', '--git-path', 'info/exclude'])).stdout.trim()
+    const exclude = isAbsolute(excludePath) ? excludePath : resolve(rootPath, excludePath)
+    const current = await readFile(exclude, 'utf8').catch(() => '')
+    if (!current.split(/\r?\n/).includes('/.factory-runs/')) {
+      await mkdir(dirname(exclude), { recursive: true })
+      await appendFile(exclude, `${current.endsWith('\n') || current.length === 0 ? '' : '\n'}/.factory-runs/\n`)
+    }
+    let hasHead = true
+    try { await execFileAsync('git', ['-C', rootPath, 'rev-parse', '--verify', 'HEAD']) } catch { hasHead = false }
+    if (hasHead) await execFileAsync('git', ['-C', rootPath, 'worktree', 'add', '--detach', workdir, 'HEAD'])
+    else await mkdir(workdir)
   } else {
     await mkdir(workdir)
   }

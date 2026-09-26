@@ -102,6 +102,15 @@ test('a repository root gives each run a detached git worktree', async () => {
   expect(readFileSync(join(second, 'README.md'), 'utf8')).toBe('root\n')
   expect(first).not.toBe(second)
   expect(execFileSync('git', ['-C', first, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()).toBe(first)
+  expect(execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('')
+})
+
+test('an empty Git repository uses a plain run directory until it has a HEAD', async () => {
+  const root = temporaryRoot()
+  execFileSync('git', ['init', root])
+  const workdir = await prepareWorkdir(root, 'run-unborn' as RunId)
+  expect(existsSync(workdir)).toBe(true)
+  expect(execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('')
 })
 
 test('closing while a working directory is prepared never starts the process', async () => {
