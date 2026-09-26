@@ -27,3 +27,6 @@ dist-ssr
 # local user-acceptance evidence artifacts
 uat-evidence/
 *.tsbuildinfo
+
+# factory server world file (FACTORY_DATA_DIR default)
+.factory/
