@@ -158,7 +158,7 @@ test('a command with the wrong argument count is rejected before it runs', async
     const { simulation } = running
     const revs = published(simulation)
     const rejected = await post(running.port, 'graph.connect', ['ag-planner'])
-    expect(rejected).toEqual({ status: 400, body: { ok: false, error: 'graph.connect: expected 3 arguments, got 1' } })
+    expect(rejected).toEqual({ status: 400, body: { ok: false, error: 'graph.connect: args: expected 3 arguments, got 1' } })
     expect(simulation.revision()).toBe(1)
     expect(revs).toEqual([])
   } finally {

@@ -80,9 +80,7 @@ export function tagged<T extends { kind: string }>(cases: { [K in T['kind']]: Pa
 export function args<T extends unknown[]>(...parsers: { [K in keyof T]: Parser<T[K]> }): Parser<T> {
   return (value, path) => {
     if (!Array.isArray(value)) return fail(path, 'an array')
-    if (value.length !== parsers.length) {
-      throw new Error(`expected ${parsers.length} argument${parsers.length === 1 ? '' : 's'}, got ${value.length}`)
-    }
+    if (value.length !== parsers.length) return fail(path, `${parsers.length} argument${parsers.length === 1 ? '' : 's'}, got ${value.length}`)
     return parsers.map((parser, i) => parser(value[i], `${path}[${i}]`)) as T
   }
 }
