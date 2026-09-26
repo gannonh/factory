@@ -41,7 +41,7 @@ export function QueueTab() {
                 <td className="px-3 py-1.5 text-ink-400">{taskOriginLabel(world, t.origin)}</td>
                 <td className="px-3 py-1.5 text-amber-300/90">{t.blockedOn ?? ''}</td>
                 <td className="px-3 py-1.5 text-ink-400 font-mono tabular-nums">{fmtAgo(world.now, t.createdAt)}</td>
-                <td className="px-3 py-1.5 text-right">{t.status !== 'running' && <button onClick={(event) => { event.stopPropagation(); api.tasks.cancel(t.id) }} className="text-ink-500 hover:text-red-300" title="Cancel"><X size={12} /></button>}</td>
+                <td className="px-3 py-1.5 text-right">{(t.status !== 'running' || Object.values(world.runs).some((run) => run.taskId === t.id && run.status === 'running' && run.execution === 'local')) && <button onClick={(event) => { event.stopPropagation(); api.tasks.cancel(t.id) }} className="text-ink-500 hover:text-red-300" title="Cancel"><X size={12} /></button>}</td>
               </tr>
             )
           })}

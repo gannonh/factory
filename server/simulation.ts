@@ -69,6 +69,7 @@ function edgeExists(world: World, source: NodeId, target: NodeId, kind: EdgeKind
 type RunCompletion =
   | { status: 'succeeded'; agent: Pick<Agent, 'role' | 'tools'> }
   | { status: 'failed'; reason: string; retryable?: boolean }
+  | { status: 'cancelled'; reason: string }
 
 function createRunOutput(run: Pick<Run, 'id' | 'title'>, agent: Pick<Agent, 'role' | 'tools'>): RunOutput {
   const summary = `The ${agent.role} completed "${run.title}".`
@@ -95,6 +96,7 @@ export class MockServer {
   private listeners = new Set<Listener>()
   private timer: ReturnType<typeof setInterval> | null = null
   private saveTimer: ReturnType<typeof setTimeout> | null = null
+  private localTimeouts = new Map<RunId, ReturnType<typeof setTimeout>>()
   private store: WorldStore | null
   private rng: () => number
   private runners: Record<Run['execution'], Runner>
@@ -154,6 +156,8 @@ export class MockServer {
     this.closed = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    for (const timeout of this.localTimeouts.values()) clearTimeout(timeout)
+    this.localTimeouts.clear()
     for (const run of Object.values(this.world.runs)) if (run.status === 'running') this.runners[run.execution ?? 'simulated'].kill(run.id)
     this.flush()
   }
@@ -495,7 +499,15 @@ export class MockServer {
 
   cancelTask(id: TaskId) {
     const t = this.world.tasks[id]
-    if (!t || (t.status !== 'queued' && t.status !== 'waiting')) return
+    if (!t) return
+    if (t.status === 'running') {
+      const run = Object.values(this.world.runs).find((candidate) => candidate.taskId === id && candidate.status === 'running' && candidate.execution === 'local')
+      if (!run) return
+      this.finishRun(run, { status: 'cancelled', reason: 'cancelled by operator' })
+      this.publish()
+      return
+    }
+    if (t.status !== 'queued' && t.status !== 'waiting') return
     this.patchTask(id, { status: 'cancelled', blockedOn: null })
     this.event('task', { kind: 'task', id }, `Cancelled “${t.title}”`)
     this.publish()
@@ -556,6 +568,8 @@ export class MockServer {
   }
 
   reset() {
+    for (const timeout of this.localTimeouts.values()) clearTimeout(timeout)
+    this.localTimeouts.clear()
     for (const run of Object.values(this.world.runs)) if (run.status === 'running') this.runners[run.execution ?? 'simulated'].kill(run.id)
     this.store?.clear()
     this.world = seedWorld(Date.now(), this.seedOptions)
@@ -681,6 +695,9 @@ export class MockServer {
 
   private finishRun(run: Run, completion: RunCompletion) {
     if (run.status !== 'running' || this.world.runs[run.id]?.status !== 'running') return
+    const timeout = this.localTimeouts.get(run.id)
+    if (timeout) clearTimeout(timeout)
+    this.localTimeouts.delete(run.id)
     this.runners[run.execution ?? 'simulated'].kill(run.id)
     const w = this.world
     const agent = w.agents[run.agentId]
@@ -691,7 +708,7 @@ export class MockServer {
       endedAt: run.execution === 'local' ? Date.now() : w.now,
       progress: completion.status === 'succeeded' && run.execution !== 'local' ? 1 : run.progress,
       output,
-      error: completion.status === 'failed' ? completion.reason : null,
+      error: completion.status === 'succeeded' ? null : completion.reason,
     })
     const sb = w.sandboxes[run.sandboxId]
     if (sb && sb.leases.some((l) => l.runId === run.id)) {
@@ -713,6 +730,10 @@ export class MockServer {
           }
         }
       }
+    } else if (completion.status === 'cancelled') {
+      if (task) this.patchTask(task.id, { status: 'cancelled', retryAt: null, blockedOn: null })
+      this.log('info', `run cancelled: ${run.title}`, { runId: run.id, agentId: run.agentId })
+      this.event('run', { kind: 'run', id: run.id }, `${this.nameOf(run.agentId)} cancelled “${run.title}”`)
     } else if (completion.status === 'failed' && task && agent) {
       const canRetry = (completion.retryable ?? true) && task.attempts < agent.retry.maxAttempts
       if (canRetry) {
@@ -853,6 +874,15 @@ export class MockServer {
     }
     this.event('run', { kind: 'run', id }, `${agent.name} started “${task.title}” on ${sandbox.name}`)
     if (execution === 'local') {
+      const timeout = setTimeout(() => {
+        const active = this.world.runs[id]
+        if (!active || active.status !== 'running') return
+        this.log('error', `run exceeded timeout of ${Math.round(agent.timeoutMs / 1000)}s`, { runId: id, agentId: agent.id }, Date.now())
+        this.finishRun(active, { status: 'failed', reason: 'timeout' })
+        this.publish()
+      }, agent.timeoutMs)
+      timeout.unref?.()
+      this.localTimeouts.set(id, timeout)
       void prepareWorkdir(sandbox.host, id).then((workdir) => {
         if (this.closed || this.world.runs[id]?.status !== 'running') return
         this.log('info', `working directory: ${workdir}`, { runId: id, agentId: agent.id }, Date.now())

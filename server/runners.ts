@@ -119,7 +119,7 @@ export class ClaudeRunner implements Runner {
     const unmapped = agent.tools.filter((tool) => !(tool in TOOL_MAP))
     if (unmapped.length) emit({ kind: 'log', level: 'warn', message: `Claude tools unavailable: ${unmapped.join(', ')}` })
     const args = claudeArgs(agent, task.prompt)
-    const child = spawn(this.executable, args, { cwd: workdir, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(this.executable, args, { cwd: workdir, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
     this.processes.set(run.id, child)
     let stdout = ''
     let stderr = ''
@@ -170,6 +170,17 @@ export class ClaudeRunner implements Runner {
     })
   }
 
-  kill(runId: RunId) { this.processes.get(runId)?.kill('SIGTERM') }
+  kill(runId: RunId) {
+    const child = this.processes.get(runId)
+    if (!child) return
+    if (process.platform === 'win32' || !child.pid) {
+      child.kill('SIGKILL')
+      return
+    }
+    try { process.kill(-child.pid, 'SIGKILL') } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return
+      throw error
+    }
+  }
   killAll() { for (const runId of this.processes.keys()) this.kill(runId) }
 }

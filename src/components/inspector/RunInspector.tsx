@@ -4,7 +4,7 @@ import { Badge, Dot, Section, fmtDuration, fmtTime } from '../ui'
 import { ArtifactList, TaskInputSection } from './TaskInputSection'
 import { useWallNow } from '../../useWallNow'
 
-const STATUS_COLOR = { running: '#22d3ee', succeeded: '#34d399', failed: '#f87171' } as const
+const STATUS_COLOR = { running: '#22d3ee', succeeded: '#34d399', failed: '#f87171', cancelled: '#64748b' } as const
 
 export function RunInspector({ run }: { run: Run }) {
   const world = useStore((state) => state.world)
@@ -42,8 +42,8 @@ export function RunInspector({ run }: { run: Run }) {
         </dl>
       </Section>
 
-      {run.status === 'failed' && run.error && (
-        <Section title="Failure reason">
+      {(run.status === 'failed' || run.status === 'cancelled') && run.error && (
+        <Section title={run.status === 'cancelled' ? 'Cancellation reason' : 'Failure reason'}>
           <div className="rounded-md border border-red-400/30 bg-red-500/10 px-2.5 py-2 text-xs text-red-200 break-words">{run.error}</div>
         </Section>
       )}
