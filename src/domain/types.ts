@@ -175,7 +175,7 @@ export type Task = {
 
 export type RunStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
 
-export type ArtifactKind = 'branch' | 'pr' | 'file' | 'note'
+export type ArtifactKind = 'branch' | 'commit' | 'pr' | 'file' | 'note'
 
 export type Artifact = {
   kind: ArtifactKind

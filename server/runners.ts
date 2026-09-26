@@ -2,7 +2,7 @@ import { spawn, spawnSync, execFile } from 'node:child_process'
 import { appendFile, mkdir, readFile, realpath, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import type { Agent, LogLevel, Run, RunId, Task } from '../src/domain/types'
+import type { Agent, Artifact, LogLevel, Run, RunId, Task } from '../src/domain/types'
 
 const execFileAsync = promisify(execFile)
 
@@ -74,7 +74,9 @@ export function claudeArgs(agent: Agent, prompt: string): string[] {
   ]
 }
 
-export async function prepareWorkdir(root: string, runId: RunId): Promise<string> {
+export type PreparedWorkdir = { path: string; initialHead: string | null }
+
+export async function prepareWorkdir(root: string, runId: RunId): Promise<PreparedWorkdir> {
   if (!isAbsolute(root)) throw new Error('local sandbox root must be an absolute path')
   const rootPath = await realpath(root)
   if (!(await stat(rootPath)).isDirectory()) throw new Error('local sandbox root must be a directory')
@@ -90,14 +92,46 @@ export async function prepareWorkdir(root: string, runId: RunId): Promise<string
       await mkdir(dirname(exclude), { recursive: true })
       await appendFile(exclude, `${current.endsWith('\n') || current.length === 0 ? '' : '\n'}/.factory-runs/\n`)
     }
-    let hasHead = true
-    try { await execFileAsync('git', ['-C', rootPath, 'rev-parse', '--verify', 'HEAD']) } catch { hasHead = false }
-    if (hasHead) await execFileAsync('git', ['-C', rootPath, 'worktree', 'add', '--detach', workdir, 'HEAD'])
-    else await mkdir(workdir)
+    const initialHead = await execFileAsync('git', ['-C', rootPath, 'rev-parse', '--verify', 'HEAD']).then(({ stdout }) => stdout.trim()).catch(() => null)
+    if (initialHead) {
+      await execFileAsync('git', ['-C', rootPath, 'worktree', 'add', '-b', `factory/${runId}`, workdir, initialHead])
+      return { path: workdir, initialHead }
+    }
+    await mkdir(workdir)
   } else {
     await mkdir(workdir)
   }
-  return workdir
+  return { path: workdir, initialHead: null }
+}
+
+function githubUrl(remote: string): string | null {
+  const ssh = /^git@github\.com:([^\s]+?)(?:\.git)?$/.exec(remote)
+  const https = /^https:\/\/github\.com\/([^\s]+?)(?:\.git)?$/.exec(remote)
+  const repository = ssh?.[1] ?? https?.[1]
+  return repository ? `https://github.com/${repository}` : null
+}
+
+/** Git inspection happens after the agent exits, before the server completes the run. */
+export async function gitArtifacts({ path, initialHead }: PreparedWorkdir): Promise<Artifact[]> {
+  if (!initialHead) return []
+  const git = async (...args: string[]) => (await execFileAsync('git', ['-C', path, ...args])).stdout.trim()
+  const branch = await git('symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => null)
+  const remote = await git('remote', 'get-url', 'origin').catch(() => null)
+  const repository = remote ? githubUrl(remote) : null
+  const artifacts: Artifact[] = []
+  if (branch) artifacts.push({ kind: 'branch', label: branch, url: null })
+  const history = await git('log', '--reverse', '--format=%H%x09%s', `${initialHead}..HEAD`)
+  for (const line of history.split('\n').filter(Boolean)) {
+    const separator = line.indexOf('\t')
+    if (separator < 0) continue
+    const hash = line.slice(0, separator)
+    artifacts.push({ kind: 'commit', label: `${hash.slice(0, 7)} ${line.slice(separator + 1)}`, url: null })
+  }
+  if (branch && repository) {
+    const pr = await execFileAsync('gh', ['pr', 'view', branch, '--json', 'url', '--jq', '.url'], { cwd: path, timeout: 5000 }).then(({ stdout }) => stdout.trim()).catch(() => null)
+    if (pr?.startsWith(`${repository}/pull/`)) artifacts.push({ kind: 'pr', label: `Pull request #${pr.split('/').at(-1)}`, url: pr })
+  }
+  return artifacts
 }
 
 type JsonRecord = Record<string, unknown>

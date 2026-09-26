@@ -41,7 +41,8 @@ import {
   type World,
 } from '../src/domain/types'
 import type { WorldStore } from './worldFile'
-import { ClaudeRunner, SimulatedRunner, prepareWorkdir, type Runner, type RunnerEvent } from './runners'
+import { ClaudeRunner, SimulatedRunner, gitArtifacts, prepareWorkdir, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
+import type { RunLogStore } from './runLogs'
 import { isAbsolute } from 'node:path'
 
 const TICK_MS = 400
@@ -67,7 +68,7 @@ function edgeExists(world: World, source: NodeId, target: NodeId, kind: EdgeKind
 }
 
 type RunCompletion =
-  | { status: 'succeeded'; agent: Pick<Agent, 'role' | 'tools'> }
+  | { status: 'succeeded'; agent: Pick<Agent, 'role' | 'tools'>; output?: RunOutput }
   | { status: 'failed'; reason: string; retryable?: boolean }
   | { status: 'cancelled'; reason: string }
 
@@ -98,9 +99,11 @@ export class MockServer {
   private saveTimer: ReturnType<typeof setTimeout> | null = null
   private localTimeouts = new Map<RunId, ReturnType<typeof setTimeout>>()
   private store: WorldStore | null
+  private runLogs: RunLogStore | null
   private rng: () => number
   private runners: Record<Run['execution'], Runner>
   private localRunner: Runner
+  private workdirs = new Map<RunId, PreparedWorkdir>()
   private seedOptions: { localRoot?: string; localCronEnabled?: boolean }
   private seq = 0
   private rev = 0
@@ -111,12 +114,13 @@ export class MockServer {
    * `advance(ms)`. `rng` makes run outcomes, durations, and metric noise repeatable.
    * `store` holds the saved world; without one the world lives in memory only.
    */
-  constructor(options: { manual?: boolean; rng?: () => number; store?: WorldStore; localRunner?: Runner; localRoot?: string; localCronEnabled?: boolean } = {}) {
+  constructor(options: { manual?: boolean; rng?: () => number; store?: WorldStore; runLogs?: RunLogStore; localRunner?: Runner; localRoot?: string; localCronEnabled?: boolean } = {}) {
     this.rng = options.rng ?? Math.random
     this.localRunner = options.localRunner ?? new ClaudeRunner()
     this.runners = { simulated: new SimulatedRunner(this.rng), local: this.localRunner }
     this.seedOptions = { localRoot: options.localRoot, localCronEnabled: options.localCronEnabled }
     this.store = options.store ?? null
+    this.runLogs = options.runLogs ?? null
     this.rev = 1
     this.world = seedWorld(Date.now(), this.seedOptions)
     if (!this.store?.load((text) => this.restore(text))) {
@@ -137,7 +141,9 @@ export class MockServer {
       if (seededCron) seededCron.enabled = false
     }
     this.world = restored
-    this.seq = restored.events.reduce((max, e) => Math.max(max, e.id), 0)
+    const localRunIds = Object.values(restored.runs).filter((run) => run.execution === 'local').map((run) => run.id)
+    restored.logs = this.runLogs?.load(localRunIds).slice(-MAX_LOGS) ?? []
+    this.seq = Math.max(0, ...restored.events.map((event) => event.id), ...restored.logs.map((line) => line.id))
     const interrupted = Object.values(restored.runs).filter((run) => run.status === 'running')
     for (const run of interrupted) this.finishRun(run, { status: 'failed', reason: 'interrupted by restart' })
     if (interrupted.length > 0) this.publish()
@@ -238,8 +244,9 @@ export class MockServer {
     this.world.runs = { ...this.world.runs, [id]: { ...cur, ...patch } }
   }
 
-  private log(level: LogLevel, msg: string, ref: { runId?: RunId; agentId?: AgentId } = {}, ts = this.world.now) {
+  private log(level: LogLevel, msg: string, ref: { runId?: RunId; agentId?: AgentId } = {}, ts = ref.runId && this.world.runs[ref.runId]?.execution === 'local' ? Date.now() : this.world.now) {
     const line = { id: ++this.seq, ts, level, runId: ref.runId ?? null, agentId: ref.agentId ?? null, msg }
+    if (ref.runId && this.world.runs[ref.runId]?.execution === 'local') this.runLogs?.append(line)
     const logs = this.world.logs.length >= MAX_LOGS ? this.world.logs.slice(-MAX_LOGS + 1) : this.world.logs.slice()
     logs.push(line)
     this.world.logs = logs
@@ -570,6 +577,7 @@ export class MockServer {
   reset() {
     for (const timeout of this.localTimeouts.values()) clearTimeout(timeout)
     this.localTimeouts.clear()
+    this.workdirs.clear()
     for (const run of Object.values(this.world.runs)) if (run.status === 'running') this.runners[run.execution ?? 'simulated'].kill(run.id)
     this.store?.clear()
     this.world = seedWorld(Date.now(), this.seedOptions)
@@ -686,11 +694,29 @@ export class MockServer {
     else if (event.kind === 'tokens') this.patchRun(id, { tokens: event.count })
     else {
       const agent = this.world.agents[run.agentId]
-      this.finishRun(run, event.status === 'succeeded' && agent
+      if (event.status === 'succeeded' && agent && run.execution === 'local') {
+        const timeout = this.localTimeouts.get(run.id)
+        if (timeout) clearTimeout(timeout)
+        this.localTimeouts.delete(run.id)
+        if (event.result === null) this.finishRun(run, { status: 'failed', reason: 'agent returned no final result' })
+        else void this.completeLocalRun(run, agent, event.result)
+      } else this.finishRun(run, event.status === 'succeeded' && agent
         ? { status: 'succeeded', agent }
         : { status: 'failed', reason: event.reason ?? 'agent unavailable' })
     }
     if (run.execution === 'local') this.publish()
+  }
+
+  private async completeLocalRun(run: Run, agent: Agent, result: string) {
+    const prepared = this.workdirs.get(run.id)
+    let artifacts: RunOutput['artifacts'] = []
+    if (prepared) {
+      try { artifacts = await gitArtifacts(prepared) }
+      catch (error) { this.log('warn', `git artifacts unavailable: ${error instanceof Error ? error.message : String(error)}`, { runId: run.id, agentId: run.agentId }) }
+    }
+    if (this.closed || this.world.runs[run.id]?.status !== 'running') return
+    this.finishRun(run, { status: 'succeeded', agent, output: { summary: result, artifacts } })
+    this.publish()
   }
 
   private finishRun(run: Run, completion: RunCompletion) {
@@ -702,7 +728,8 @@ export class MockServer {
     const w = this.world
     const agent = w.agents[run.agentId]
     const task = w.tasks[run.taskId]
-    const output = completion.status === 'succeeded' && run.execution !== 'local' ? createRunOutput(run, completion.agent) : null
+    const output = completion.status === 'succeeded' ? completion.output ?? createRunOutput(run, completion.agent) : null
+    this.workdirs.delete(run.id)
     this.patchRun(run.id, {
       status: completion.status,
       endedAt: run.execution === 'local' ? Date.now() : w.now,
@@ -885,9 +912,10 @@ export class MockServer {
       this.localTimeouts.set(id, timeout)
       void prepareWorkdir(sandbox.host, id).then((workdir) => {
         if (this.closed || this.world.runs[id]?.status !== 'running') return
-        this.log('info', `working directory: ${workdir}`, { runId: id, agentId: agent.id }, Date.now())
+        this.workdirs.set(id, workdir)
+        this.log('info', `working directory: ${workdir.path}`, { runId: id, agentId: agent.id }, Date.now())
         this.publish()
-        this.runners.local.start({ run, agent, task, workdir }, (event) => this.handleRunnerEvent(id, event))
+        this.runners.local.start({ run, agent, task, workdir: workdir.path }, (event) => this.handleRunnerEvent(id, event))
       }).catch((error: unknown) => this.handleRunnerEvent(id, { kind: 'complete', status: 'failed', result: null, reason: error instanceof Error ? error.message : String(error) }))
     } else this.runners.simulated.start({ run, agent, task, workdir: '' }, (event) => this.handleRunnerEvent(id, event))
   }
