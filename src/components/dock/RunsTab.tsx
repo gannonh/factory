@@ -40,7 +40,7 @@ export function RunsTab() {
                 </td>
               <td className="px-3 py-1.5 w-32">
                 <div className="flex items-center gap-2">
-                  {r.progress === null ? <span className="text-cyan-300 animate-pulse">running</span> : <><div className="flex-1 h-1.5 rounded-full bg-ink-700 overflow-hidden"><div className="h-full transition-[width] duration-300" style={{ width: `${r.progress * 100}%`, background: COLOR[r.status] }} /></div><span className="font-mono tabular-nums text-ink-400 w-8 text-right">{Math.round(r.progress * 100)}%</span></>}
+                  {r.progress === null ? <span className={r.status === 'running' ? 'text-cyan-300 animate-pulse' : 'text-ink-500'}>{r.status === 'running' ? 'running' : '—'}</span> : <><div className="flex-1 h-1.5 rounded-full bg-ink-700 overflow-hidden"><div className="h-full transition-[width] duration-300" style={{ width: `${r.progress * 100}%`, background: COLOR[r.status] }} /></div><span className="font-mono tabular-nums text-ink-400 w-8 text-right">{Math.round(r.progress * 100)}%</span></>}
                 </div>
               </td>
               <td className="px-3 py-1.5 font-mono tabular-nums text-ink-300">{r.attempt}</td>
