@@ -9,10 +9,24 @@
  */
 import { createApi, type InProcessApi } from '../server/api'
 import { MockServer } from '../server/simulation'
+import type { WorldStore } from '../server/worldFile'
 import type { AgentId, FactoryEvent, SandboxId, Task, TaskId, World } from '../src/domain/types'
 
 export const RNG = () => 0.5
 export const sb = (id: string) => id as SandboxId
+
+export type MemoryStore = WorldStore & { text: string | null }
+
+/** A WorldStore over one string. `text` is the saved document, or null when nothing is saved. */
+export function memoryStore(): MemoryStore {
+  const store: MemoryStore = {
+    text: null,
+    load: (parse) => (store.text === null ? null : parse(store.text)),
+    save: (text) => { store.text = text },
+    clear: () => { store.text = null },
+  }
+  return store
+}
 
 export type Fixture = {
   server: MockServer
@@ -25,8 +39,8 @@ export type Fixture = {
   runs: () => World['runs']
 }
 
-export function makeFixture(options: { isolate?: boolean } = {}): Fixture {
-  const server = new MockServer({ manual: true, rng: RNG })
+export function makeFixture(options: { isolate?: boolean; store?: WorldStore } = {}): Fixture {
+  const server = new MockServer({ manual: true, rng: RNG, store: options.store })
   const api = createApi(server)
   let latest = server.snapshot()
   api.subscribe((w) => { latest = w })

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Starts one Factory world process and one Vite server for a verification run
 # and prints the path of the run's state file. Everything the run writes lives
-# in one evidence directory under uat-evidence/, which is gitignored.
+# in one evidence directory under uat-evidence/, which is gitignored, including
+# the world file, so a run never reads or writes the repository's .factory/.
 set -euo pipefail
 
 scripts_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -16,6 +17,7 @@ port="$(node -e "const s=require('node:net').createServer();s.listen(0,'127.0.0.
 world_port="$(node -e "const s=require('node:net').createServer();s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})")"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 evidence_dir="$repo_root/uat-evidence/verify-factory/$run_id"
+data_dir="$evidence_dir/data"
 mkdir -p "$evidence_dir"
 
 # a failed startup stops whichever of the two processes is still running
@@ -30,7 +32,7 @@ stop_on_failure() {
 trap stop_on_failure EXIT
 
 cd "$repo_root"
-FACTORY_PORT="$world_port" FACTORY_ORIGIN="http://127.0.0.1:$port" \
+FACTORY_PORT="$world_port" FACTORY_ORIGIN="http://127.0.0.1:$port" FACTORY_DATA_DIR="$data_dir" \
   nohup node --import tsx server/main.ts \
   > "$evidence_dir/world.log" 2>&1 < /dev/null &
 world_pid=$!
@@ -54,6 +56,7 @@ state_file="$evidence_dir/state.env"
   printf 'export FACTORY_SERVER_PID=%q\n' "$server_pid"
   printf 'export FACTORY_WORLD_PORT=%q\n' "$world_port"
   printf 'export FACTORY_WORLD_PID=%q\n' "$world_pid"
+  printf 'export FACTORY_DATA_DIR=%q\n' "$data_dir"
   printf 'export FACTORY_EVIDENCE_DIR=%q\n' "$evidence_dir"
   printf 'export AGENT_BROWSER_SESSION=%q\n' "verify-factory-$run_id"
 } > "$state_file"

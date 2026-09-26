@@ -39,10 +39,13 @@ import {
   type TriggerId,
   type World,
 } from '../src/domain/types'
+import type { WorldStore } from './worldFile'
 
 const TICK_MS = 400
 const MAX_LOGS = 2000
 const MAX_EVENTS = 400
+const MAX_COMPLETED_RUNS = 200
+const SAVE_MS = 1000
 const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 }
 const ID_PREFIX: Record<NodeKind, string> = { agent: 'ag', sandbox: 'sb', trigger: 'tr' }
 
@@ -104,6 +107,8 @@ export class MockServer {
   private world: World
   private listeners = new Set<Listener>()
   private timer: ReturnType<typeof setInterval> | null = null
+  private saveTimer: ReturnType<typeof setTimeout> | null = null
+  private store: WorldStore | null
   private rng: () => number
   private seq = 0
   private rev = 0
@@ -111,13 +116,44 @@ export class MockServer {
   /**
    * `manual` stops the automatic interval; tests then advance simulated time with
    * `advance(ms)`. `rng` makes run outcomes, durations, and metric noise repeatable.
-   * A new server always starts from the seed. Nothing is read from disk.
+   * `store` holds the saved world; without one the world lives in memory only.
    */
-  constructor(options: { manual?: boolean; rng?: () => number } = {}) {
+  constructor(options: { manual?: boolean; rng?: () => number; store?: WorldStore } = {}) {
     this.rng = options.rng ?? Math.random
-    this.world = seedWorld(Date.now())
+    this.store = options.store ?? null
     this.rev = 1
+    this.world = seedWorld(Date.now())
+    if (!this.store?.load((text) => this.restore(text))) {
+      this.world = seedWorld(Date.now())
+      this.seq = 0
+    }
     if (!options.manual) this.start()
+  }
+
+  /** Run inside the store's load so a document that throws while replaying is set aside like one that fails to parse. */
+  private restore(text: string): true | null {
+    const restored = parseWorld(text)
+    if (!restored) return null
+    this.world = restored
+    this.seq = restored.events.reduce((max, e) => Math.max(max, e.id), 0)
+    const interrupted = Object.values(restored.runs).filter((run) => run.status === 'running')
+    for (const run of interrupted) this.finishRun(run, { status: 'failed', reason: 'interrupted by restart' })
+    if (interrupted.length > 0) this.publish()
+    return true
+  }
+
+  /** Write the world now instead of when the save throttle fires. */
+  flush() {
+    if (this.saveTimer) clearTimeout(this.saveTimer)
+    this.saveTimer = null
+    this.store?.save(JSON.stringify(retainWorld(this.world)))
+  }
+
+  /** Stop the tick loop and write the world. */
+  close() {
+    if (this.timer) clearInterval(this.timer)
+    this.timer = null
+    this.flush()
   }
 
   /** Monotonic count of publishes. The initial seed is revision 1. */
@@ -161,6 +197,8 @@ export class MockServer {
     this.rev += 1
     this.world = { ...this.world }
     for (const fn of this.listeners) fn(this.world)
+    if (!this.store || this.saveTimer) return
+    this.saveTimer = setTimeout(() => this.flush(), SAVE_MS)
   }
 
   // ---- writes -------------------------------------------------------------
@@ -515,6 +553,7 @@ export class MockServer {
   }
 
   reset() {
+    this.store?.clear()
     this.world = seedWorld(Date.now())
     this.publish()
   }
@@ -821,8 +860,81 @@ export class MockServer {
   }
 }
 
+type Persisted = Pick<World, 'now' | 'agents' | 'sandboxes' | 'triggers' | 'edges' | 'groups' | 'sim' | 'tasks' | 'runs' | 'events'>
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** A record whose entries are all records; rejects arrays and null entries. */
+function isRecordMap(value: unknown): value is Record<string, Record<string, unknown>> {
+  return isRecord(value) && Object.values(value).every(isRecord)
+}
+
 /**
- * Normalization for a node record coming back from undo: runtime
+ * Shape check for a saved payload. Anything restoration consumes must be
+ * present and the right kind; a malformed save is rejected whole so the caller
+ * seeds a fresh world instead of crashing while restoring it.
+ */
+function isPersisted(value: unknown): value is Persisted {
+  return isRecord(value)
+    && typeof value.now === 'number' && Number.isFinite(value.now)
+    && isRecordMap(value.agents) && isRecordMap(value.sandboxes) && isRecordMap(value.triggers)
+    && isRecordMap(value.edges) && isRecordMap(value.groups) && isRecordMap(value.tasks) && isRecordMap(value.runs)
+    && isRecord(value.sim) && typeof value.sim.paused === 'boolean'
+    && (value.sim.speed === 1 || value.sim.speed === 2 || value.sim.speed === 4)
+    && Array.isArray(value.events) && value.events.every((e) => isRecord(e) && typeof e.id === 'number' && Number.isFinite(e.id))
+}
+
+/**
+ * The save payload for a world: what survives a restart. Logs never do. Every
+ * running run is kept plus the newest MAX_COMPLETED_RUNS finished runs; tasks
+ * are kept when they are pending, referenced by a kept run, or share a flow
+ * with a kept queued/waiting task, so post-restart dependency evaluation sees
+ * the same prerequisites. Returned slices alias the live world and must be
+ * serialized or copied before the world mutates.
+ */
+export function retainWorld(w: World): Persisted {
+  const runs: World['runs'] = {}
+  for (const run of Object.values(w.runs)) if (run.status === 'running') runs[run.id] = run
+  const completed = Object.values(w.runs)
+    .filter((run) => run.status !== 'running')
+    .sort((a, b) => b.startedAt - a.startedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .slice(0, MAX_COMPLETED_RUNS)
+  for (const run of completed) runs[run.id] = run
+
+  const runTaskIds = new Set(Object.values(runs).map((run) => run.taskId))
+  const pendingFlowIds = new Set(
+    Object.values(w.tasks).filter((t) => t.status === 'queued' || t.status === 'waiting').map((t) => t.flowId),
+  )
+  const tasks: World['tasks'] = {}
+  for (const task of Object.values(w.tasks)) {
+    const pending = task.status === 'queued' || task.status === 'waiting'
+    if (task.status === 'running' || pending || runTaskIds.has(task.id) || pendingFlowIds.has(task.flowId)) tasks[task.id] = task
+  }
+
+  const membered = new Set<string>()
+  for (const a of Object.values(w.agents)) if (a.groupId) membered.add(a.groupId)
+  for (const s of Object.values(w.sandboxes)) if (s.groupId) membered.add(s.groupId)
+  for (const t of Object.values(w.triggers)) if (t.groupId) membered.add(t.groupId)
+  const groups = Object.fromEntries(Object.entries(w.groups).filter(([id]) => membered.has(id))) as World['groups']
+
+  return {
+    now: w.now,
+    agents: w.agents,
+    sandboxes: w.sandboxes,
+    triggers: w.triggers,
+    edges: w.edges,
+    groups,
+    sim: w.sim,
+    tasks,
+    runs,
+    events: w.events.slice(-MAX_EVENTS),
+  }
+}
+
+/**
+ * Normalization for a node record coming back from a save or an undo: runtime
  * state (live status, leases, metric history, trigger schedule) starts fresh,
  * everything else returns as captured.
  */
@@ -875,5 +987,29 @@ function pastedNode(ref: NodeRef, id: string, offset: Position, now: number): No
       const { name, kind, intervalMs, enabled, template } = ref.node
       return { kind: 'trigger', node: { id: id as TriggerId, name, kind, intervalMs, enabled, template, lastFiredAt: null, fired: 0, position, groupId: null } }
     }
+  }
+}
+
+/** A saved world document ready to run, or null when it is not one. */
+function parseWorld(text: string): World | null {
+  const parsed: unknown = JSON.parse(text)
+  if (!isPersisted(parsed)) return null
+  const p = parsed
+  const now = p.now
+  const agents = Object.fromEntries(Object.entries(p.agents).map(([id, a]) => [id, restoredAgent(a)])) as World['agents']
+  const sandboxes = Object.fromEntries(Object.entries(p.sandboxes).map(([id, s]) => [id, restoredSandbox(s, now)])) as World['sandboxes']
+  const triggers = Object.fromEntries(Object.entries(p.triggers).map(([id, t]) => [id, restoredTrigger(t)])) as World['triggers']
+  return {
+    now,
+    agents,
+    sandboxes,
+    triggers,
+    edges: p.edges,
+    groups: p.groups,
+    tasks: p.tasks,
+    runs: p.runs,
+    logs: [],
+    events: p.events,
+    sim: p.sim,
   }
 }
