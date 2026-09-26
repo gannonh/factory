@@ -52,7 +52,7 @@ export function RunInspector({ run }: { run: Run }) {
 
       {run.status === 'succeeded' && run.output && (
         <Section title="Output">
-          <p className="text-xs leading-relaxed text-ink-200">{run.output.summary}</p>
+          <p className="text-xs leading-relaxed whitespace-pre-wrap text-ink-200">{run.output.summary}</p>
           <ArtifactList artifacts={run.output.artifacts} />
         </Section>
       )}
