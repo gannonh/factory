@@ -121,18 +121,25 @@ export class MockServer {
   constructor(options: { manual?: boolean; rng?: () => number; store?: WorldStore } = {}) {
     this.rng = options.rng ?? Math.random
     this.store = options.store ?? null
-    const restored = this.store?.load(parseWorld) ?? null
     this.rev = 1
-    if (restored) {
-      this.world = restored
-      this.seq = restored.events.reduce((max, e) => Math.max(max, e.id), 0)
-      const interrupted = Object.values(restored.runs).filter((run) => run.status === 'running')
-      for (const run of interrupted) this.finishRun(run, { status: 'failed', reason: 'interrupted by restart' })
-      if (interrupted.length > 0) this.publish()
-    } else {
+    this.world = seedWorld(Date.now())
+    if (!this.store?.load((text) => this.restore(text))) {
       this.world = seedWorld(Date.now())
+      this.seq = 0
     }
     if (!options.manual) this.start()
+  }
+
+  /** Run inside the store's load so a document that throws while replaying is set aside like one that fails to parse. */
+  private restore(text: string): true | null {
+    const restored = parseWorld(text)
+    if (!restored) return null
+    this.world = restored
+    this.seq = restored.events.reduce((max, e) => Math.max(max, e.id), 0)
+    const interrupted = Object.values(restored.runs).filter((run) => run.status === 'running')
+    for (const run of interrupted) this.finishRun(run, { status: 'failed', reason: 'interrupted by restart' })
+    if (interrupted.length > 0) this.publish()
+    return true
   }
 
   /** Write the world now instead of when the save throttle fires. */

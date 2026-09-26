@@ -486,6 +486,27 @@ test('an unreadable world file is set aside and the server starts on the seed', 
   }
 })
 
+test('a world file that fails while replaying interrupted runs is set aside and the server starts on the seed', () => {
+  const path = join(dir, 'world.json')
+  const first = makeFixture({ store: fileStore(path), isolate: true })
+  first.api.agents.enqueue(first.agent('Planner'), { title: 'plan', prompt: 'p', priority: 'normal' })
+  first.api.sim.advance(1)
+  first.server.close()
+  const saved = JSON.parse(readFileSync(path, 'utf8'))
+  saved.agents['ag-planner'].retry = null
+  const text = JSON.stringify(saved)
+  writeFileSync(path, text)
+
+  const { lines, log } = logger()
+  const second = fileServer(path, log)
+  expect(second.world().runs).toEqual({})
+  expect(second.world().events).toEqual([])
+  expect(second.world().agents['ag-planner' as AgentId].retry).toEqual({ maxAttempts: 3, backoffMs: 2000, backoff: 'exponential' })
+  expect(readFileSync(`${path}.corrupt`, 'utf8')).toBe(text)
+  expect(lines).toHaveLength(1)
+  expect(lines[0]).toContain(`${path}.corrupt`)
+})
+
 test('a save goes through a temp file, so a failed save leaves the last document whole', () => {
   const path = join(dir, 'data', 'world.json')
   const { lines, log } = logger()
