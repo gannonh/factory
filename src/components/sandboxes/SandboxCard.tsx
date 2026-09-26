@@ -3,6 +3,7 @@ import { api } from '../../api/client'
 import { SANDBOX_STATE_COLOR, SANDBOX_TRANSITIONS, type Sandbox, type SandboxAction } from '../../domain/types'
 import { useStore } from '../../store'
 import { Badge, Button, Meter, Sparkline, cx, fmtAgo, fmtDuration } from '../ui'
+import { useWallNow } from '../../useWallNow'
 
 const ACTIONS: Array<{ action: SandboxAction; label: string; icon: typeof Play; variant: 'default' | 'primary' | 'danger' }> = [
   { action: 'start', label: 'Start', icon: Play, variant: 'primary' },
@@ -21,6 +22,7 @@ const TIMED_LABEL: Partial<Record<Sandbox['state'], string>> = {
 
 export function SandboxCard({ sandbox, expanded, onClick, selected }: { sandbox: Sandbox; expanded?: boolean; onClick?: () => void; selected?: boolean }) {
   const world = useStore((s) => s.world)
+  const wallNow = useWallNow()
   const color = SANDBOX_STATE_COLOR[sandbox.state]
   const allowed = SANDBOX_TRANSITIONS[sandbox.state]
   const timed = TIMED_LABEL[sandbox.state]
@@ -71,7 +73,7 @@ export function SandboxCard({ sandbox, expanded, onClick, selected }: { sandbox:
               <span className="size-1.5 rounded-full bg-cyan-400 pulse-working" />
               <span className="text-cyan-200 font-medium">{world.agents[lease.agentId]?.name}</span>
               <span className="text-ink-400 truncate flex-1">{world.runs[lease.runId]?.title ?? ''}</span>
-              <span className="text-ink-500 font-mono tabular-nums">{fmtDuration(world.now - lease.since)}</span>
+              <span className="text-ink-500 font-mono tabular-nums">{fmtDuration(Math.max(0, (world.runs[lease.runId]?.execution === 'local' ? wallNow : world.now) - lease.since))}</span>
             </div>
           ))
         ) : (

@@ -36,7 +36,7 @@ export type Api = {
   sandboxes: {
     act: (id: SandboxId, action: SandboxAction) => MaybePromise<void>
     create: (input: { name: string; kind: SandboxKind; host: string; image: string; capacity?: number }) => MaybePromise<SandboxId>
-    update: (id: SandboxId, patch: { capacity: number }) => MaybePromise<void>
+    update: (id: SandboxId, patch: { capacity?: number; host?: string }) => MaybePromise<void>
   }
   triggers: {
     update: (id: TriggerId, patch: Partial<Omit<Trigger, 'id' | 'position' | 'groupId'>>) => MaybePromise<void>

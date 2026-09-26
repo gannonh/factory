@@ -33,7 +33,7 @@ export function TopBar() {
       </div>
       <div className="flex-1" />
       <div className="flex items-center gap-1.5">
-        <span className="text-[11px] text-ink-400 mr-1">simulation</span>
+        <span className="text-[11px] text-ink-400 mr-1" title="Pause and speed affect simulation and scheduling. Running local processes continue on wall-clock time.">simulation only · local runs continue</span>
         <Button variant={paused ? 'primary' : 'default'} onClick={() => api.sim.set({ paused: !paused })} title={paused ? 'Resume' : 'Pause'}>
           {paused ? <Play size={13} /> : <Pause size={13} />}
           {paused ? 'Resume' : 'Pause'}

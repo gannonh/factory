@@ -13,7 +13,7 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) {
 }
 
 const worldFile = worldFilePath(process.env, join(import.meta.dirname, '..'))
-const simulation = new MockServer({ store: fileStore(worldFile) })
+const simulation = new MockServer({ store: fileStore(worldFile), localRoot: process.env.FACTORY_LOCAL_ROOT ?? process.cwd(), localCronEnabled: false })
 const running = await startFactoryServer(simulation, { port, origins })
 console.log(`factory server listening on 127.0.0.1:${running.port} for ${origins.join(', ')}, world file ${worldFile}`)
 

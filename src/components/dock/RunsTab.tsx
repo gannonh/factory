@@ -1,11 +1,13 @@
 import { useStore } from '../../store'
 import { Badge, Dot, FlowBadge, fmtDuration, fmtTime } from '../ui'
 import { Empty } from './QueueTab'
+import { useWallNow } from '../../useWallNow'
 
 const COLOR = { running: '#22d3ee', succeeded: '#34d399', failed: '#f87171' } as const
 
 export function RunsTab() {
   const world = useStore((s) => s.world)
+  const wallNow = useWallNow()
   const select = useStore((s) => s.select)
   const runs = Object.values(world.runs).sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || b.startedAt - a.startedAt)
   if (runs.length === 0) return <Empty>No runs yet.</Empty>
@@ -38,14 +40,13 @@ export function RunsTab() {
                 </td>
               <td className="px-3 py-1.5 w-32">
                 <div className="flex items-center gap-2">
-                  <div className="flex-1 h-1.5 rounded-full bg-ink-700 overflow-hidden"><div className="h-full transition-[width] duration-300" style={{ width: `${r.progress * 100}%`, background: COLOR[r.status] }} /></div>
-                  <span className="font-mono tabular-nums text-ink-400 w-8 text-right">{Math.round(r.progress * 100)}%</span>
+                  {r.progress === null ? <span className="text-cyan-300 animate-pulse">running</span> : <><div className="flex-1 h-1.5 rounded-full bg-ink-700 overflow-hidden"><div className="h-full transition-[width] duration-300" style={{ width: `${r.progress * 100}%`, background: COLOR[r.status] }} /></div><span className="font-mono tabular-nums text-ink-400 w-8 text-right">{Math.round(r.progress * 100)}%</span></>}
                 </div>
               </td>
               <td className="px-3 py-1.5 font-mono tabular-nums text-ink-300">{r.attempt}</td>
               <td className="px-3 py-1.5 font-mono tabular-nums text-ink-300">{r.tokens.toLocaleString()}</td>
               <td className="px-3 py-1.5 font-mono tabular-nums text-ink-400">{fmtTime(r.startedAt)}</td>
-              <td className="px-3 py-1.5 font-mono tabular-nums text-ink-300">{fmtDuration((r.endedAt ?? world.now) - r.startedAt)}</td>
+              <td className="px-3 py-1.5 font-mono tabular-nums text-ink-300">{fmtDuration(Math.max(0, (r.endedAt ?? (r.execution === 'local' ? wallNow : world.now)) - r.startedAt))}</td>
             </tr>
             )
           })}

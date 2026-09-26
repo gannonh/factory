@@ -4,11 +4,12 @@ import { expect, test } from 'vitest'
 import { WebSocket } from 'ws'
 import { startFactoryServer } from '../server/http'
 import { MockServer } from '../server/simulation'
+import { SimulatedRunner } from '../server/runners'
 
 const ORIGIN = 'http://localhost:5173'
 
 async function boot() {
-  const simulation = new MockServer({ manual: true, rng: () => 0.5 })
+  const simulation = new MockServer({ manual: true, rng: () => 0.5, localRunner: new SimulatedRunner(() => 0.5) })
   const running = await startFactoryServer(simulation, { port: 0, origins: [ORIGIN] })
   return Object.assign(running, { simulation })
 }
@@ -167,7 +168,7 @@ test('a command with the wrong argument count is rejected before it runs', async
 })
 
 test('the world keeps running after every client disconnects', async () => {
-  const running = await startFactoryServer(new MockServer({ rng: () => 0.5 }), { port: 0, origins: [ORIGIN] })
+  const running = await startFactoryServer(new MockServer({ rng: () => 0.5, localRunner: new SimulatedRunner(() => 0.5) }), { port: 0, origins: [ORIGIN] })
   try {
     const post = async (method: string, args: unknown[]) => {
       const response = await fetch(`http://127.0.0.1:${running.port}/command`, {

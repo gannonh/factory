@@ -135,7 +135,7 @@ const commands: Record<string, Command> = {
     args(object<Parameters<MockServer['createSandbox']>[0]>({ name: string, kind: sandboxKind, host: string, image: string, capacity: optional(capacity) })),
     (s, [input]) => s.createSandbox(input),
   ),
-  'sandboxes.update': command(args(sandboxId, object({ capacity })), (s, [id, patch]) => s.updateSandbox(id, patch)),
+  'sandboxes.update': command(args(sandboxId, partial({ capacity, host: string })), (s, [id, patch]) => s.updateSandbox(id, patch)),
   'triggers.update': command(args(triggerId, triggerPatch), (s, [id, patch]) => s.updateTrigger(id, patch)),
   'triggers.fire': command(args(triggerId), (s, [id]) => s.fireTrigger(id)),
   'sim.set': command(args(simPatch), (s, [patch]) => s.setSim(patch)),

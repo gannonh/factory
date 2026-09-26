@@ -41,7 +41,7 @@ export function SandboxesView() {
   )
 }
 
-const HOST_HINT: Record<SandboxKind, string> = { local: 'localhost', docker: 'docker.internal', vps: '203.0.113.10', remote: 'build-07.corp' }
+const HOST_HINT: Record<SandboxKind, string> = { local: '', docker: 'docker.internal', vps: '203.0.113.10', remote: 'build-07.corp' }
 
 function CreateForm({ onDone }: { onDone: () => void }) {
   const [name, setName] = useState('')
@@ -50,7 +50,7 @@ function CreateForm({ onDone }: { onDone: () => void }) {
   const [image, setImage] = useState('ghcr.io/factory/dev:node22')
   const [capacity, setCapacity] = useState('1')
   const submit = () => {
-    if (!name.trim()) return
+    if (!name.trim() || (kind === 'local' && !host.startsWith('/'))) return
     api.sandboxes.create({ name: name.trim(), kind, host: host.trim() || HOST_HINT[kind], image: image.trim(), capacity: Number(capacity) || 1 })
     onDone()
   }
@@ -62,11 +62,11 @@ function CreateForm({ onDone }: { onDone: () => void }) {
           <option value="local">local</option><option value="docker">docker</option><option value="vps">vps</option><option value="remote">remote</option>
         </Select>
       </Field>
-      <Field label="Host"><Input value={host} onChange={(e) => setHost(e.target.value)} /></Field>
+      <Field label={kind === 'local' ? 'Root directory' : 'Host'}><Input value={host} onChange={(e) => setHost(e.target.value)} placeholder={kind === 'local' ? '/absolute/path/to/repository' : undefined} /></Field>
       <Field label="Image"><Input value={image} onChange={(e) => setImage(e.target.value)} /></Field>
       <Field label="Capacity"><Input type="number" min={1} step={1} value={capacity} onChange={(e) => setCapacity(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submit() }} /></Field>
       <div className="flex gap-1.5">
-        <Button variant="primary" onClick={submit} disabled={!name.trim()}>Provision</Button>
+        <Button variant="primary" onClick={submit} disabled={!name.trim() || (kind === 'local' && !host.startsWith('/'))}>Provision</Button>
         <Button variant="ghost" onClick={onDone}>Cancel</Button>
       </div>
     </div>
