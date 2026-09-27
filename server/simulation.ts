@@ -43,6 +43,7 @@ import {
 import type { WorldStore } from './worldFile'
 import { ClaudeRunner, SimulatedRunner, gitArtifacts, prepareWorkdir, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
 import type { RunLogStore } from './runLogs'
+import { isRestorableInteger } from './storedNumber'
 import { isAbsolute } from 'node:path'
 
 const TICK_MS = 400
@@ -973,7 +974,7 @@ function isPersisted(value: unknown): value is Persisted {
     && isRecordMap(value.edges) && isRecordMap(value.groups) && isRecordMap(value.tasks) && isRecordMap(value.runs)
     && isRecord(value.sim) && typeof value.sim.paused === 'boolean'
     && (value.sim.speed === 1 || value.sim.speed === 2 || value.sim.speed === 4)
-    && Array.isArray(value.events) && value.events.every((e) => isRecord(e) && typeof e.id === 'number' && Number.isFinite(e.id))
+    && Array.isArray(value.events) && value.events.every((e) => isRecord(e) && isRestorableInteger(e.id))
 }
 
 /**

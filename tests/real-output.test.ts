@@ -128,6 +128,7 @@ test('a real result and git artifacts reach handoff; real logs survive restart',
   appendFileSync(logFile, `{"id":1e400,"ts":1e400,"level":"info","runId":"${upstream.id}","agentId":null,"msg":"invalid number"}\n`)
   appendFileSync(logFile, `{"id":1e300,"ts":1,"level":"info","runId":"${upstream.id}","agentId":null,"msg":"unsafe id"}\n`)
   appendFileSync(logFile, `{"id":1,"ts":1e300,"level":"info","runId":"${upstream.id}","agentId":null,"msg":"unsafe timestamp"}\n`)
+  appendFileSync(logFile, `{"id":9007199254740991,"ts":1,"level":"info","runId":"${upstream.id}","agentId":null,"msg":"maximum safe id"}\n`)
   appendFileSync(logFile, '{truncated\n')
 
   const second = new MockServer(options)

@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'no
 import { join } from 'node:path'
 import type { AgentId, LogLine, RunId } from '../src/domain/types'
 import { id } from './parse'
+import { isRestorableInteger } from './storedNumber'
 
 export type RunLogStore = {
   append(line: LogLine): void
@@ -45,8 +46,7 @@ export function fileRunLogs(dataDir: string, report: (message: string) => void =
             const value: unknown = JSON.parse(row)
             if (typeof value !== 'object' || value === null || !('id' in value) || !('ts' in value)
               || !('level' in value) || !('runId' in value) || !('agentId' in value) || !('msg' in value)
-              || typeof value.id !== 'number' || !Number.isSafeInteger(value.id) || value.id < 0
-              || typeof value.ts !== 'number' || !Number.isSafeInteger(value.ts) || value.ts < 0 || value.runId !== runId
+              || !isRestorableInteger(value.id) || !isRestorableInteger(value.ts) || value.runId !== runId
               || (value.level !== 'debug' && value.level !== 'info' && value.level !== 'warn' && value.level !== 'error')
               || (value.agentId !== null && typeof value.agentId !== 'string') || typeof value.msg !== 'string') {
               throw new Error('invalid log line')
