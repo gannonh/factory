@@ -180,6 +180,37 @@ test('a real result and git artifacts reach handoff; real logs survive restart',
   third.close()
 })
 
+test('an oversized final result is visibly bounded before output, handoff, and save', async () => {
+  const path = root()
+  repository(path)
+  const dataDir = root()
+  const marker = '\n… [result truncated]'
+  const prefix = 'x'.repeat(8192 - marker.length - 1)
+  const result = `${prefix}😀${'y'.repeat(100_000)}`
+  const expected = `${prefix}${marker}`
+  const runner: Runner = {
+    execution: 'local',
+    start(_input, emit) { emit({ kind: 'complete', status: 'succeeded', result }) },
+    kill() {},
+  }
+  const worldFile = join(dataDir, 'world.json')
+  const server = new MockServer({ manual: true, localRunner: runner, localRoot: path, store: fileStore(worldFile) })
+  for (const trigger of Object.values(server.snapshot().triggers)) server.updateTrigger(trigger.id, { enabled: false })
+  const planner = Object.values(server.snapshot().agents).find((agent) => agent.name === 'Planner')!
+  const taskId = server.enqueueTask(planner.id, { title: 'large result', prompt: 'return a long message', priority: 'normal' })
+  server.advance(1)
+  await until(() => Object.values(server.snapshot().runs).some((run) => run.taskId === taskId && run.status === 'succeeded'))
+  const run = Object.values(server.snapshot().runs).find((run) => run.taskId === taskId)!
+  expect(run.output?.summary).toBe(expected)
+  expect(run.output!.summary.length).toBeLessThanOrEqual(8192)
+  const handoff = Object.values(server.snapshot().tasks).find((task) => task.origin.kind === 'handoff' && task.origin.runId === run.id)!
+  expect(handoff.input?.summary).toBe(expected)
+  expect(handoff.prompt).toContain(expected)
+  server.flush()
+  expect(readFileSync(worldFile, 'utf8')).not.toContain('y'.repeat(1024))
+  await server.close()
+})
+
 test('shutdown waits for a successful result and its pending PR lookup', async () => {
   const path = root()
   repository(path)

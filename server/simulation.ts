@@ -50,6 +50,8 @@ const TICK_MS = 400
 const MAX_LOGS = 2000
 const MAX_EVENTS = 400
 const MAX_COMPLETED_RUNS = 200
+const MAX_RUN_SUMMARY_CHARS = 8192
+const RESULT_TRUNCATED = '\n… [result truncated]'
 const SAVE_MS = 1000
 const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 }
 const ID_PREFIX: Record<NodeKind, string> = { agent: 'ag', sandbox: 'sb', trigger: 'tr' }
@@ -89,6 +91,15 @@ function createRunOutput(run: Pick<Run, 'id' | 'title'>, agent: Pick<Agent, 'rol
       { kind: 'pr', label: `Pull request #${pullRequest}`, url: `${repository}/pull/${pullRequest}` },
     ],
   }
+}
+
+function boundedRunSummary(result: string): string {
+  if (result.length <= MAX_RUN_SUMMARY_CHARS) return result
+  let end = MAX_RUN_SUMMARY_CHARS - RESULT_TRUNCATED.length
+  const last = result.charCodeAt(end - 1)
+  const next = result.charCodeAt(end)
+  if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end--
+  return result.slice(0, end) + RESULT_TRUNCATED
 }
 
 type Listener = (world: World) => void
@@ -716,7 +727,7 @@ export class MockServer {
         this.localTimeouts.delete(run.id)
         if (event.result === null) this.finishRun(run, { status: 'failed', reason: 'agent returned no final result' })
         else {
-          const completion = this.completeLocalRun(run, agent, event.result)
+          const completion = this.completeLocalRun(run, agent, boundedRunSummary(event.result))
           this.pendingCompletions.set(run.id, completion)
           void completion.then(() => this.pendingCompletions.delete(run.id), () => this.pendingCompletions.delete(run.id))
         }
