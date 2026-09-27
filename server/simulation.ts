@@ -327,6 +327,9 @@ export class MockServer {
     const firstId = ids[0]
     const subject = nodeSubject(nodeKindOf(w, firstId) ?? 'agent', firstId)
     const gone = new Set<string>(ids)
+    if (Object.values(w.runs).some((run) => this.pendingCompletions.has(run.id) && (gone.has(run.agentId) || gone.has(run.sandboxId)))) {
+      throw new Error('run is finishing; try deleting the node again shortly')
+    }
     for (const r of Object.values(w.runs)) {
       if (r.status !== 'running') continue
       if (gone.has(r.agentId)) this.finishRun(r, { status: 'failed', reason: 'agent deleted', retryable: false })
@@ -518,6 +521,7 @@ export class MockServer {
     if (t.status === 'running') {
       const run = Object.values(this.world.runs).find((candidate) => candidate.taskId === id && candidate.status === 'running' && candidate.execution === 'local')
       if (!run) return
+      if (this.pendingCompletions.has(run.id)) return
       this.finishRun(run, { status: 'cancelled', reason: 'cancelled by operator' })
       this.publish()
       return
@@ -533,6 +537,9 @@ export class MockServer {
     if (!sb) return
     const next = SANDBOX_TRANSITIONS[sb.state][action]
     if (!next) return
+    if (sb.leases.some((lease) => this.pendingCompletions.has(lease.runId))) {
+      throw new Error('run is finishing; try the sandbox action again shortly')
+    }
     for (const lease of [...sb.leases]) {
       const run = this.world.runs[lease.runId]
       if (run && run.status === 'running') this.finishRun(run, { status: 'failed', reason: `sandbox ${action}` })
@@ -737,6 +744,7 @@ export class MockServer {
 
   private finishRun(run: Run, completion: RunCompletion) {
     if (run.status !== 'running' || this.world.runs[run.id]?.status !== 'running') return
+    if (completion.status !== 'succeeded' && this.pendingCompletions.has(run.id)) return
     const timeout = this.localTimeouts.get(run.id)
     if (timeout) clearTimeout(timeout)
     this.localTimeouts.delete(run.id)

@@ -226,6 +226,46 @@ test('shutdown waits for a successful result and its pending PR lookup', async (
   } finally { process.env.PATH = previousPath }
 })
 
+test('operator actions cannot replace a successful result while PR lookup finishes', async () => {
+  const path = root()
+  repository(path)
+  git(path, 'remote', 'add', 'origin', 'git@github.com:example/factory.git')
+  const bin = root()
+  const fakeGh = join(bin, 'gh')
+  const lookupStarted = join(bin, 'lookup-started')
+  writeFileSync(fakeGh, `#!/bin/sh\n: > '${lookupStarted}'\nsleep 0.3\nprintf 'https://github.com/example/factory/pull/42\\n'\n`)
+  chmodSync(fakeGh, 0o755)
+  const previousPath = process.env.PATH
+  process.env.PATH = `${bin}:${previousPath}`
+  const runner: Runner = {
+    execution: 'local',
+    start(_input, emit) { emit({ kind: 'complete', status: 'succeeded', result: 'completed before operator action' }) },
+    kill() {},
+  }
+  try {
+    const server = new MockServer({ manual: true, localRunner: runner, localRoot: path })
+    for (const trigger of Object.values(server.snapshot().triggers)) server.updateTrigger(trigger.id, { enabled: false })
+    const planner = Object.values(server.snapshot().agents).find((agent) => agent.name === 'Planner')!
+    const local = 'sb-local-1' as SandboxId
+    const taskId = server.enqueueTask(planner.id, { title: 'operator race', prompt: 'finish first', priority: 'normal' })
+    server.advance(1)
+    await until(() => existsSync(lookupStarted))
+    const run = Object.values(server.snapshot().runs).find((candidate) => candidate.taskId === taskId)!
+    server.cancelTask(taskId)
+    expect(server.snapshot().runs[run.id].status).toBe('running')
+    expect(() => server.sandboxAction(local, 'stop')).toThrow('run is finishing')
+    expect(() => server.deleteNodes([planner.id])).toThrow('run is finishing')
+    expect(() => server.deleteNodes([local])).toThrow('run is finishing')
+    await until(() => server.snapshot().runs[run.id].status === 'succeeded')
+    expect(server.snapshot().runs[run.id].output).toEqual({ summary: 'completed before operator action', artifacts: [
+      { kind: 'branch', label: `factory-${run.id}`, url: null },
+      { kind: 'pr', label: 'Pull request #42', url: 'https://github.com/example/factory/pull/42' },
+    ] })
+    expect(Object.values(server.snapshot().tasks).some((task) => task.origin.kind === 'handoff' && task.input?.summary === 'completed before operator action')).toBe(true)
+    await server.close()
+  } finally { process.env.PATH = previousPath }
+})
+
 test('log files are pruned only after a durable save and are cleared by reset', async () => {
   const path = root()
   repository(path)
