@@ -141,7 +141,9 @@ export async function gitArtifacts({ path, initialHead }: PreparedWorkdir): Prom
   }
   if (branch && repository) {
     const pr = await execFileAsync('gh', ['pr', 'view', branch, '--json', 'url', '--jq', '.url'], { cwd: path, timeout: 5000 }).then(({ stdout }) => stdout.trim()).catch(() => null)
-    if (pr?.startsWith(`${repository}/pull/`)) artifacts.push({ kind: 'pr', label: `Pull request #${pr.split('/').at(-1)}`, url: pr })
+    // GitHub may return a canonical URL after a repository rename or transfer.
+    const match = pr?.match(/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/([1-9]\d*)$/i)
+    if (match && pr) artifacts.push({ kind: 'pr', label: `Pull request #${match[1]}`, url: pr })
   }
   return artifacts
 }

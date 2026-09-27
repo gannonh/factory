@@ -82,6 +82,14 @@ test('a PR link appears only when gh finds a PR for the run branch', async () =>
         { kind: 'pr', label: 'Pull request #42', url: 'https://github.com/example/factory/pull/42' },
       ])
     }
+    git(path, 'remote', 'set-url', 'origin', 'https://github.com/Example/Old-Name.git')
+    writeFileSync(fakeGh, '#!/bin/sh\nprintf "https://github.com/new-owner/new-name/pull/42\\n"\n')
+    expect(await gitArtifacts({ path: workdir, initialHead })).toEqual([
+      { kind: 'branch', label: 'factory-run-pr', url: null },
+      { kind: 'pr', label: 'Pull request #42', url: 'https://github.com/new-owner/new-name/pull/42' },
+    ])
+    writeFileSync(fakeGh, '#!/bin/sh\nprintf "https://github.com.evil/new-owner/new-name/pull/42\\n"\n')
+    expect(await gitArtifacts({ path: workdir, initialHead })).toEqual([{ kind: 'branch', label: 'factory-run-pr', url: null }])
     git(path, 'remote', 'set-url', 'origin', 'ssh://git@other.example/example/factory.git')
     expect(await gitArtifacts({ path: workdir, initialHead })).toEqual([{ kind: 'branch', label: 'factory-run-pr', url: null }])
   } finally { process.env.PATH = previousPath }
