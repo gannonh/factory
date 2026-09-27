@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -252,4 +252,73 @@ test('log files are pruned only after a durable save and are cleared by reset', 
   server.reset()
   expect(existsSync(retainedLog)).toBe(false)
   await server.close()
+})
+
+test('retained log files and legacy reads keep a bounded tail of complete lines', () => {
+  const dataDir = root()
+  const logs = fileRunLogs(dataDir)
+  const runId = 'run-rotation' as RunId
+  const file = join(dataDir, 'run-logs', `${runId}.jsonl`)
+  for (let number = 1; number <= 300; number++) {
+    logs.append({ id: number, ts: number, level: 'info', runId, agentId: null, msg: 'x'.repeat(8192) })
+  }
+  expect(statSync(file).size).toBeLessThanOrEqual(1024 * 1024)
+  const retained = logs.load([runId], 2000)
+  expect(retained[0].id).toBeGreaterThan(1)
+  expect(retained.at(-1)?.id).toBe(300)
+  logs.append({ id: 301, ts: 301, level: 'info', runId, agentId: null, msg: 'y'.repeat(2_000_000) })
+  expect(statSync(file).size).toBeLessThanOrEqual(1024 * 1024)
+  expect(logs.load([runId], 2000).at(-1)?.msg).toBe(`${'y'.repeat(8191)}…`)
+
+  const legacyId = 'run-legacy' as RunId
+  const legacyFile = join(dataDir, 'run-logs', `${legacyId}.jsonl`)
+  const last = { id: 302, ts: 302, level: 'info', runId: legacyId, agentId: null, msg: 'legacy final line' }
+  writeFileSync(legacyFile, `${'z'.repeat(2 * 1024 * 1024)}\n${JSON.stringify(last)}\n`)
+  expect(logs.load([legacyId], 2000)).toEqual([last])
+  expect(statSync(legacyFile).size).toBeLessThanOrEqual(1024 * 1024)
+})
+
+test('restored logs keep the latest global lines across retained runs', () => {
+  const logs = fileRunLogs(root())
+  const older = 'run-older' as RunId
+  const newer = 'run-newer' as RunId
+  for (let number = 1; number <= 3000; number++) {
+    const runId = number <= 1500 ? older : newer
+    logs.append({ id: number, ts: number, level: 'info', runId, agentId: null, msg: `line ${number}` })
+  }
+  const loaded = logs.load([newer, older], 2000)
+  expect(loaded).toHaveLength(2000)
+  expect(loaded[0].id).toBe(1001)
+  expect(loaded.at(-1)?.id).toBe(3000)
+})
+
+test('reset during failed Git inspection does not add an orphaned warning', async () => {
+  const path = root()
+  repository(path)
+  const bin = root()
+  const fakeGit = join(bin, 'git')
+  const inspectionStarted = join(bin, 'inspection-started')
+  writeFileSync(fakeGit, `#!/bin/sh\n: > '${inspectionStarted}'\nsleep 0.2\nexit 1\n`)
+  chmodSync(fakeGit, 0o755)
+  const previousPath = process.env.PATH
+  const runner: Runner = {
+    execution: 'local',
+    start(_input, emit) {
+      process.env.PATH = `${bin}:${previousPath}`
+      emit({ kind: 'complete', status: 'succeeded', result: 'result before reset' })
+    },
+    kill() {},
+  }
+  try {
+    const server = new MockServer({ manual: true, localRunner: runner, localRoot: path })
+    for (const trigger of Object.values(server.snapshot().triggers)) server.updateTrigger(trigger.id, { enabled: false })
+    const planner = Object.values(server.snapshot().agents).find((agent) => agent.name === 'Planner')!
+    server.enqueueTask(planner.id, { title: 'reset race', prompt: 'p', priority: 'normal' })
+    server.advance(1)
+    await until(() => existsSync(inspectionStarted))
+    server.reset()
+    await server.close()
+    expect(server.snapshot().runs).toEqual({})
+    expect(server.snapshot().logs).toEqual([])
+  } finally { process.env.PATH = previousPath }
 })

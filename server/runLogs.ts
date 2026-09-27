@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentId, LogLine, RunId } from '../src/domain/types'
 import { id } from './parse'
@@ -6,8 +6,32 @@ import { isRestorableInteger } from './storedNumber'
 
 export type RunLogStore = {
   append(line: LogLine): void
-  load(runIds: RunId[]): LogLine[]
+  load(runIds: RunId[], maxLines: number): LogLine[]
   prune(runIds: RunId[]): void
+}
+
+const MAX_RUN_LOG_BYTES = 1024 * 1024
+const ROTATED_LOG_BYTES = MAX_RUN_LOG_BYTES / 2
+const MAX_PERSISTED_MESSAGE_CHARS = 8192
+
+/** Read only the end of a file, dropping the first row if the read began mid-row. */
+function readTail(file: string, maxBytes: number): { contents: string; size: number } {
+  const fd = openSync(file, 'r')
+  try {
+    const size = fstatSync(fd).size
+    const length = Math.min(size, maxBytes)
+    const start = size - length
+    const buffer = Buffer.alloc(length)
+    let count = 0
+    while (count < length) {
+      const read = readSync(fd, buffer, count, length - count, start + count)
+      if (read === 0) break
+      count += read
+    }
+    const contents = buffer.subarray(0, count).toString('utf8')
+    const firstRow = start > 0 ? contents.indexOf('\n') + 1 : 0
+    return { contents: start > 0 && firstRow === 0 ? '' : contents.slice(firstRow), size }
+  } finally { closeSync(fd) }
 }
 
 export function fileRunLogs(dataDir: string, report: (message: string) => void = console.error): RunLogStore {
@@ -21,19 +45,32 @@ export function fileRunLogs(dataDir: string, report: (message: string) => void =
       if (!line.runId) return
       try {
         mkdirSync(directory, { recursive: true })
-        appendFileSync(path(line.runId), `\n${JSON.stringify(line)}\n`)
+        const file = path(line.runId)
+        const message = line.msg.length > MAX_PERSISTED_MESSAGE_CHARS
+          ? `${line.msg.slice(0, MAX_PERSISTED_MESSAGE_CHARS - 1)}…` : line.msg
+        let row = `\n${JSON.stringify({ ...line, msg: message })}\n`
+        if (Buffer.byteLength(row) > 64 * 1024) row = `\n${JSON.stringify({ ...line, msg: '[log message too large to persist]' })}\n`
+        const rowBytes = Buffer.byteLength(row)
+        if (rowBytes > MAX_RUN_LOG_BYTES) throw new Error('log line exceeds per-run file limit')
+        let size = 0
+        try { size = statSync(file).size }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+        if (size + rowBytes > MAX_RUN_LOG_BYTES) writeFileSync(file, readTail(file, ROTATED_LOG_BYTES).contents)
+        appendFileSync(file, row)
       } catch (error) {
         report(`could not append run logs for ${line.runId}: ${error instanceof Error ? error.message : String(error)}`)
       }
     },
-    load(runIds) {
+    load(runIds, maxLines) {
       const lines: LogLine[] = []
       for (const runId of runIds) {
         let file: string
         let contents: string
         try {
           file = path(runId)
-          contents = readFileSync(file, 'utf8')
+          const tail = readTail(file, MAX_RUN_LOG_BYTES)
+          contents = tail.contents
+          if (tail.size > MAX_RUN_LOG_BYTES) writeFileSync(file, contents)
         }
         catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
@@ -52,13 +89,17 @@ export function fileRunLogs(dataDir: string, report: (message: string) => void =
               throw new Error('invalid log line')
             }
             lines.push({ id: value.id, ts: value.ts, level: value.level, runId, agentId: value.agentId === null ? null : id<AgentId>()(value.agentId, 'log.agentId'), msg: value.msg })
+            if (lines.length > maxLines * 2) {
+              lines.sort((a, b) => a.id - b.id)
+              lines.splice(0, lines.length - maxLines)
+            }
           } catch (error) {
             if (!reported) report(`could not load run logs from ${file}: ${error instanceof Error ? error.message : String(error)}`)
             reported = true
           }
         }
       }
-      return lines.sort((a, b) => a.id - b.id)
+      return lines.sort((a, b) => a.id - b.id).slice(-maxLines)
     },
     prune(runIds) {
       const keep = new Set(runIds.map((runId) => `${runId}.jsonl`))

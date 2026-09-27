@@ -144,7 +144,7 @@ export class MockServer {
     }
     this.world = restored
     const localRunIds = Object.values(restored.runs).filter((run) => run.execution === 'local').map((run) => run.id)
-    restored.logs = this.runLogs?.load(localRunIds).slice(-MAX_LOGS) ?? []
+    restored.logs = this.runLogs?.load(localRunIds, MAX_LOGS) ?? []
     this.seq = Math.max(0, ...restored.events.map((event) => event.id), ...restored.logs.map((line) => line.id))
     const interrupted = Object.values(restored.runs).filter((run) => run.status === 'running')
     for (const run of interrupted) this.finishRun(run, { status: 'failed', reason: 'interrupted by restart' })
@@ -725,7 +725,10 @@ export class MockServer {
     let artifacts: RunOutput['artifacts'] = []
     if (prepared) {
       try { artifacts = await gitArtifacts(prepared) }
-      catch (error) { this.log('warn', `git artifacts unavailable: ${error instanceof Error ? error.message : String(error)}`, { runId: run.id, agentId: run.agentId }) }
+      catch (error) {
+        if (this.world.runs[run.id]?.status !== 'running') return
+        this.log('warn', `git artifacts unavailable: ${error instanceof Error ? error.message : String(error)}`, { runId: run.id, agentId: run.agentId })
+      }
     }
     if (this.world.runs[run.id]?.status !== 'running') return
     this.finishRun(run, { status: 'succeeded', agent, output: { summary: result, artifacts } })
