@@ -125,6 +125,7 @@ test('a real result and git artifacts reach handoff; real logs survive restart',
   expect(readFileSync(logFile, 'utf8')).toContain('working on plan')
   const before = first.snapshot().logs.filter((line) => line.runId === upstream.id)
   first.close()
+  appendFileSync(logFile, `{"id":1e400,"ts":1e400,"level":"info","runId":"${upstream.id}","agentId":null,"msg":"invalid number"}\n`)
   appendFileSync(logFile, '{truncated\n')
 
   const second = new MockServer(options)
@@ -135,7 +136,11 @@ test('a real result and git artifacts reach handoff; real logs survive restart',
   const maxId = Math.max(...second.snapshot().logs.map((line) => line.id), ...second.snapshot().events.map((event) => event.id))
   second.enqueueTask(planner.id, { title: 'next', prompt: 'another', priority: 'normal' })
   expect(second.snapshot().events.at(-1)!.id).toBeGreaterThan(maxId)
+  expect(Number.isFinite(second.snapshot().events.at(-1)!.id)).toBe(true)
   second.close()
+  const third = new MockServer(options)
+  expect(third.snapshot().runs[upstream.id].output).toEqual(upstream.output)
+  third.close()
 })
 
 test('shutdown waits for a successful result and its pending PR lookup', async () => {

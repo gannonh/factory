@@ -45,7 +45,8 @@ export function fileRunLogs(dataDir: string, report: (message: string) => void =
             const value: unknown = JSON.parse(row)
             if (typeof value !== 'object' || value === null || !('id' in value) || !('ts' in value)
               || !('level' in value) || !('runId' in value) || !('agentId' in value) || !('msg' in value)
-              || typeof value.id !== 'number' || typeof value.ts !== 'number' || value.runId !== runId
+              || typeof value.id !== 'number' || !Number.isFinite(value.id)
+              || typeof value.ts !== 'number' || !Number.isFinite(value.ts) || value.runId !== runId
               || (value.level !== 'debug' && value.level !== 'info' && value.level !== 'warn' && value.level !== 'error')
               || (value.agentId !== null && typeof value.agentId !== 'string') || typeof value.msg !== 'string') {
               throw new Error('invalid log line')
