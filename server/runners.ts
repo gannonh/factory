@@ -105,11 +105,11 @@ export async function prepareWorkdir(root: string, runId: RunId): Promise<Prepar
 }
 
 function githubUrl(remote: string): string | null {
-  let path = /^git@github\.com:([^\s]+)$/.exec(remote)?.[1]
+  let path = /^git@github\.com:([^\s]+)$/i.exec(remote)?.[1]
   if (!path) {
     let url: URL
     try { url = new URL(remote) } catch { return null }
-    if (url.hostname !== 'github.com' || (url.protocol !== 'https:' && url.protocol !== 'ssh:')
+    if (url.hostname.toLowerCase() !== 'github.com' || (url.protocol !== 'https:' && url.protocol !== 'ssh:')
       || (url.protocol === 'ssh:' && url.username !== 'git') || (url.protocol === 'https:' && url.username)
       || url.password || url.search || url.hash) return null
     path = url.pathname.slice(1)

@@ -75,7 +75,11 @@ test('a PR link appears only when gh finds a PR for the run branch', async () =>
   const previousPath = process.env.PATH
   process.env.PATH = `${bin}:${previousPath}`
   try {
-    for (const remote of ['git@github.com:example/factory.git', 'ssh://git@github.com:22/example/factory.git', 'https://github.com/example/factory.git']) {
+    for (const remote of [
+      'git@github.com:example/factory.git', 'git@GitHub.com:example/factory.git',
+      'ssh://git@github.com:22/example/factory.git', 'ssh://git@GitHub.com:22/example/factory.git',
+      'https://github.com/example/factory.git',
+    ]) {
       git(path, 'remote', 'set-url', 'origin', remote)
       expect(await gitArtifacts({ path: workdir, initialHead })).toEqual([
         { kind: 'branch', label: 'factory-run-pr', url: null },
