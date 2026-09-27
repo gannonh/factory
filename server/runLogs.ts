@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentId, LogLine, RunId } from '../src/domain/types'
 import { id } from './parse'
@@ -6,6 +6,7 @@ import { id } from './parse'
 export type RunLogStore = {
   append(line: LogLine): void
   load(runIds: RunId[]): LogLine[]
+  prune(runIds: RunId[]): void
 }
 
 export function fileRunLogs(dataDir: string, report: (message: string) => void = console.error): RunLogStore {
@@ -57,6 +58,18 @@ export function fileRunLogs(dataDir: string, report: (message: string) => void =
         }
       }
       return lines.sort((a, b) => a.id - b.id)
+    },
+    prune(runIds) {
+      const keep = new Set(runIds.map((runId) => `${runId}.jsonl`))
+      try {
+        for (const name of readdirSync(directory)) {
+          if (!/^run-[\w-]+\.jsonl$/.test(name) || keep.has(name)) continue
+          try { rmSync(join(directory, name)) }
+          catch (error) { report(`could not remove run logs from ${name}: ${error instanceof Error ? error.message : String(error)}`) }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') report(`could not list run logs: ${error instanceof Error ? error.message : String(error)}`)
+      }
     },
   }
 }

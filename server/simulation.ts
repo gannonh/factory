@@ -104,6 +104,7 @@ export class MockServer {
   private runners: Record<Run['execution'], Runner>
   private localRunner: Runner
   private workdirs = new Map<RunId, PreparedWorkdir>()
+  private pendingCompletions = new Map<RunId, Promise<void>>()
   private seedOptions: { localRoot?: string; localCronEnabled?: boolean }
   private seq = 0
   private rev = 0
@@ -154,17 +155,23 @@ export class MockServer {
   flush() {
     if (this.saveTimer) clearTimeout(this.saveTimer)
     this.saveTimer = null
-    this.store?.save(JSON.stringify(retainWorld(this.world)))
+    const retained = retainWorld(this.world)
+    if (this.store?.save(JSON.stringify(retained))) {
+      this.runLogs?.prune(Object.values(retained.runs).filter((run) => run.execution === 'local').map((run) => run.id))
+    }
   }
 
   /** Stop the tick loop and write the world. */
-  close() {
+  async close() {
     this.closed = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     for (const timeout of this.localTimeouts.values()) clearTimeout(timeout)
     this.localTimeouts.clear()
-    for (const run of Object.values(this.world.runs)) if (run.status === 'running') this.runners[run.execution ?? 'simulated'].kill(run.id)
+    for (const run of Object.values(this.world.runs)) {
+      if (run.status === 'running' && !this.pendingCompletions.has(run.id)) this.runners[run.execution ?? 'simulated'].kill(run.id)
+    }
+    if (this.pendingCompletions.size) await Promise.all(this.pendingCompletions.values())
     this.flush()
   }
 
@@ -581,6 +588,7 @@ export class MockServer {
     for (const run of Object.values(this.world.runs)) if (run.status === 'running') this.runners[run.execution ?? 'simulated'].kill(run.id)
     this.store?.clear()
     this.world = seedWorld(Date.now(), this.seedOptions)
+    this.runLogs?.prune([])
     this.publish()
   }
 
@@ -699,7 +707,11 @@ export class MockServer {
         if (timeout) clearTimeout(timeout)
         this.localTimeouts.delete(run.id)
         if (event.result === null) this.finishRun(run, { status: 'failed', reason: 'agent returned no final result' })
-        else void this.completeLocalRun(run, agent, event.result)
+        else {
+          const completion = this.completeLocalRun(run, agent, event.result)
+          this.pendingCompletions.set(run.id, completion)
+          void completion.then(() => this.pendingCompletions.delete(run.id), () => this.pendingCompletions.delete(run.id))
+        }
       } else this.finishRun(run, event.status === 'succeeded' && agent
         ? { status: 'succeeded', agent }
         : { status: 'failed', reason: event.reason ?? 'agent unavailable' })
@@ -714,7 +726,7 @@ export class MockServer {
       try { artifacts = await gitArtifacts(prepared) }
       catch (error) { this.log('warn', `git artifacts unavailable: ${error instanceof Error ? error.message : String(error)}`, { runId: run.id, agentId: run.agentId }) }
     }
-    if (this.closed || this.world.runs[run.id]?.status !== 'running') return
+    if (this.world.runs[run.id]?.status !== 'running') return
     this.finishRun(run, { status: 'succeeded', agent, output: { summary: result, artifacts } })
     this.publish()
   }

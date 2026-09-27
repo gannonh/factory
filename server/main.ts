@@ -23,7 +23,7 @@ async function shutdown() {
   // Ctrl+C under scripts/dev.mjs delivers SIGINT to the process group and then SIGTERM from dev.mjs
   if (stopping) return
   stopping = true
-  simulation.close()
+  await simulation.close()
   await running.close()
   process.exit(0)
 }

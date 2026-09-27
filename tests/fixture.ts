@@ -23,7 +23,7 @@ export function memoryStore(): MemoryStore {
   const store: MemoryStore = {
     text: null,
     load: (parse) => (store.text === null ? null : parse(store.text)),
-    save: (text) => { store.text = text },
+    save: (text) => { store.text = text; return true },
     clear: () => { store.text = null },
   }
   return store
