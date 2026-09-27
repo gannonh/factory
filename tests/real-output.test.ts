@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -73,6 +73,8 @@ test('a PR link appears only when gh finds a PR for the run branch', async () =>
   writeFileSync(fakeGh, '#!/bin/sh\nprintf "https://github.com/example/factory/pull/42\\n"\n')
   chmodSync(fakeGh, 0o755)
   const previousPath = process.env.PATH
+  const previousGhRepo = process.env.GH_REPO
+  const previousGhHost = process.env.GH_HOST
   process.env.PATH = `${bin}:${previousPath}`
   try {
     for (const remote of [
@@ -86,6 +88,13 @@ test('a PR link appears only when gh finds a PR for the run branch', async () =>
         { kind: 'pr', label: 'Pull request #42', url: 'https://github.com/example/factory/pull/42' },
       ])
     }
+    process.env.GH_REPO = 'wrong/repository'
+    process.env.GH_HOST = 'github.enterprise.example'
+    writeFileSync(fakeGh, '#!/bin/sh\ncase " $* " in *" --repo github.com/example/factory "*) printf "https://github.com/example/factory/pull/42\\n";; *) exit 1;; esac\n')
+    expect(await gitArtifacts({ path: workdir, initialHead })).toEqual([
+      { kind: 'branch', label: 'factory-run-pr', url: null },
+      { kind: 'pr', label: 'Pull request #42', url: 'https://github.com/example/factory/pull/42' },
+    ])
     git(path, 'remote', 'set-url', 'origin', 'https://github.com/Example/Old-Name.git')
     writeFileSync(fakeGh, '#!/bin/sh\nprintf "https://github.com/new-owner/new-name/pull/42\\n"\n')
     expect(await gitArtifacts({ path: workdir, initialHead })).toEqual([
@@ -96,7 +105,13 @@ test('a PR link appears only when gh finds a PR for the run branch', async () =>
     expect(await gitArtifacts({ path: workdir, initialHead })).toEqual([{ kind: 'branch', label: 'factory-run-pr', url: null }])
     git(path, 'remote', 'set-url', 'origin', 'ssh://git@other.example/example/factory.git')
     expect(await gitArtifacts({ path: workdir, initialHead })).toEqual([{ kind: 'branch', label: 'factory-run-pr', url: null }])
-  } finally { process.env.PATH = previousPath }
+  } finally {
+    process.env.PATH = previousPath
+    if (previousGhRepo === undefined) delete process.env.GH_REPO
+    else process.env.GH_REPO = previousGhRepo
+    if (previousGhHost === undefined) delete process.env.GH_HOST
+    else process.env.GH_HOST = previousGhHost
+  }
 })
 
 test('a real result and git artifacts reach handoff; real logs survive restart', async () => {
@@ -342,6 +357,46 @@ test('restored logs keep the latest global lines across retained runs', () => {
   expect(loaded).toHaveLength(2000)
   expect(loaded[0].id).toBe(1001)
   expect(loaded.at(-1)?.id).toBe(3000)
+})
+
+test('restore reads all small retained logs but bounds aggregate bytes from full files', () => {
+  const dataDir = root()
+  const logs = fileRunLogs(dataDir)
+  const directory = join(dataDir, 'run-logs')
+  mkdirSync(directory)
+  const smallIds: RunId[] = []
+  for (let number = 1; number <= 200; number++) {
+    const runId = `run-small-${number}` as RunId
+    smallIds.push(runId)
+    logs.append({ id: number, ts: number, level: 'info', runId, agentId: null, msg: `line ${number}` })
+  }
+  const small = logs.load([...smallIds].reverse(), 2000)
+  expect(small).toHaveLength(200)
+  expect(small[0].id).toBe(1)
+  expect(small.at(-1)?.id).toBe(200)
+  for (let number = 201; number <= 260; number++) {
+    const runId = `run-small-${number}` as RunId
+    smallIds.push(runId)
+    logs.append({ id: number, ts: number, level: 'info', runId, agentId: null, msg: `line ${number}` })
+  }
+  const recentSmall = logs.load([...smallIds].reverse(), 2000)
+  expect(recentSmall).toHaveLength(256)
+  expect(recentSmall[0].id).toBe(5)
+  expect(recentSmall.at(-1)?.id).toBe(260)
+
+  const fullIds: RunId[] = []
+  for (let number = 1; number <= 30; number++) {
+    const runId = `run-full-${number}` as RunId
+    fullIds.push(runId)
+    const file = join(directory, `${runId}.jsonl`)
+    writeFileSync(file, `${JSON.stringify({ id: number, ts: number, level: 'info', runId, agentId: null, msg: 'x'.repeat(900_000) })}\n`)
+    const modified = new Date(1_000_000_000_000 + number * 1000)
+    utimesSync(file, modified, modified)
+  }
+  const full = logs.load(fullIds, 2000)
+  expect(full[0].id).toBeGreaterThan(1)
+  expect(full.at(-1)?.id).toBe(30)
+  expect(full.length).toBeLessThan(30)
 })
 
 test('reset during failed Git inspection does not add an orphaned warning', async () => {

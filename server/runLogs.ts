@@ -1,4 +1,4 @@
-import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readdirSync, readSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentId, LogLine, RunId } from '../src/domain/types'
 import { id } from './parse'
@@ -13,6 +13,8 @@ export type RunLogStore = {
 const MAX_RUN_LOG_BYTES = 1024 * 1024
 const ROTATED_LOG_BYTES = MAX_RUN_LOG_BYTES / 2
 const MAX_PERSISTED_MESSAGE_CHARS = 8192
+const MAX_RESTORED_LOG_BYTES = 24 * 1024 * 1024
+const MAX_RESTORED_LOG_FILES = 256
 
 /** Read only the end of a file, dropping the first row if the read began mid-row. */
 function readTail(file: string, maxBytes: number): { contents: string; size: number } {
@@ -63,14 +65,30 @@ export function fileRunLogs(dataDir: string, report: (message: string) => void =
     },
     load(runIds, maxLines) {
       const lines: LogLine[] = []
-      for (const runId of runIds) {
-        let file: string
+      // The world retains 200 completed runs. Prioritize recently written files,
+      // then bound total startup reads even when many runs remain active.
+      const files = runIds.flatMap((runId, index) => {
+        try {
+          const file = path(runId)
+          return [{ runId, file, modified: statSync(file).mtimeMs, index }]
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') report(`could not read run logs for ${runId}: ${error instanceof Error ? error.message : String(error)}`)
+          return []
+        }
+      }).sort((a, b) => b.modified - a.modified || a.index - b.index).slice(0, MAX_RESTORED_LOG_FILES)
+      let remainingBytes = MAX_RESTORED_LOG_BYTES
+      for (const { runId, file, modified } of files) {
+        if (remainingBytes === 0) break
         let contents: string
         try {
-          file = path(runId)
-          const tail = readTail(file, MAX_RUN_LOG_BYTES)
+          const readBytes = Math.min(MAX_RUN_LOG_BYTES, remainingBytes)
+          const tail = readTail(file, readBytes)
+          remainingBytes -= Math.min(tail.size, readBytes)
           contents = tail.contents
-          if (tail.size > MAX_RUN_LOG_BYTES) writeFileSync(file, contents)
+          if (tail.size > MAX_RUN_LOG_BYTES && readBytes === MAX_RUN_LOG_BYTES) {
+            writeFileSync(file, contents)
+            utimesSync(file, new Date(modified), new Date(modified))
+          }
         }
         catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
