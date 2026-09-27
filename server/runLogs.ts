@@ -87,7 +87,8 @@ export function fileRunLogs(dataDir: string, report: (message: string) => void =
           contents = tail.contents
           if (tail.size > MAX_RUN_LOG_BYTES && readBytes === MAX_RUN_LOG_BYTES) {
             writeFileSync(file, contents)
-            utimesSync(file, new Date(modified), new Date(modified))
+            try { utimesSync(file, new Date(modified), new Date(modified)) }
+            catch (error) { report(`could not preserve run log mtime for ${runId}: ${error instanceof Error ? error.message : String(error)}`) }
           }
         }
         catch (error) {
