@@ -1,9 +1,11 @@
 import { execFileSync } from 'node:child_process'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, test } from 'vitest'
 import { gitArtifacts, type Emit, type Runner, type RunInput } from '../server/runners'
+import { startFactoryServer } from '../server/http'
 import { fileRunLogs } from '../server/runLogs'
 import { MockServer } from '../server/simulation'
 import { fileStore } from '../server/worldFile'
@@ -73,10 +75,15 @@ test('a PR link appears only when gh finds a PR for the run branch', async () =>
   const previousPath = process.env.PATH
   process.env.PATH = `${bin}:${previousPath}`
   try {
-    expect(await gitArtifacts({ path: workdir, initialHead })).toEqual([
-      { kind: 'branch', label: 'factory-run-pr', url: null },
-      { kind: 'pr', label: 'Pull request #42', url: 'https://github.com/example/factory/pull/42' },
-    ])
+    for (const remote of ['git@github.com:example/factory.git', 'ssh://git@github.com:22/example/factory.git', 'https://github.com/example/factory.git']) {
+      git(path, 'remote', 'set-url', 'origin', remote)
+      expect(await gitArtifacts({ path: workdir, initialHead })).toEqual([
+        { kind: 'branch', label: 'factory-run-pr', url: null },
+        { kind: 'pr', label: 'Pull request #42', url: 'https://github.com/example/factory/pull/42' },
+      ])
+    }
+    git(path, 'remote', 'set-url', 'origin', 'ssh://git@other.example/example/factory.git')
+    expect(await gitArtifacts({ path: workdir, initialHead })).toEqual([{ kind: 'branch', label: 'factory-run-pr', url: null }])
   } finally { process.env.PATH = previousPath }
 })
 
@@ -153,7 +160,7 @@ test('shutdown waits for a successful result and its pending PR lookup', async (
   const dataDir = root()
   const bin = root()
   const fakeGh = join(bin, 'gh')
-  writeFileSync(fakeGh, '#!/bin/sh\nsleep 0.3\nprintf "https://github.com/example/factory/pull/42\\n"\n')
+  writeFileSync(fakeGh, '#!/bin/sh\nsleep 1\nprintf "https://github.com/example/factory/pull/42\\n"\n')
   chmodSync(fakeGh, 0o755)
   const previousPath = process.env.PATH
   process.env.PATH = `${bin}:${previousPath}`
@@ -169,6 +176,7 @@ test('shutdown waits for a successful result and its pending PR lookup', async (
   const options = { manual: true, localRunner: runner, localRoot: path, runLogs: fileRunLogs(dataDir), store: fileStore(join(dataDir, 'world.json')) }
   try {
     const first = new MockServer(options)
+    const running = await startFactoryServer(first, { port: 0, origins: ['http://localhost:5173'] })
     for (const trigger of Object.values(first.snapshot().triggers)) first.updateTrigger(trigger.id, { enabled: false })
     const planner = Object.values(first.snapshot().agents).find((agent) => agent.name === 'Planner')!
     const taskId = first.enqueueTask(planner.id, { title: 'plan', prompt: 'make a result', priority: 'normal' })
@@ -176,6 +184,23 @@ test('shutdown waits for a successful result and its pending PR lookup', async (
     await until(() => exited)
     const run = Object.values(first.snapshot().runs).find((item) => item.taskId === taskId)!
     expect(first.snapshot().runs[run.id].status).toBe('running')
+    const inFlight = request({ hostname: '127.0.0.1', port: running.port, path: '/command', method: 'POST', headers: { origin: 'http://localhost:5173', 'content-type': 'application/json' } })
+    inFlight.on('error', () => {})
+    const disconnected = new Promise<void>((resolve) => inFlight.once('close', resolve))
+    const connected = new Promise<void>((resolve) => inFlight.once('socket', (socket) => {
+      if (socket.connecting) socket.once('connect', () => resolve())
+      else resolve()
+    }))
+    inFlight.write('{"method":"sim.reset","args":[')
+    await connected
+    await running.close()
+    await disconnected
+    expect(first.snapshot().runs[run.id].status).toBe('running')
+    await expect(fetch(`http://127.0.0.1:${running.port}/command`, {
+      method: 'POST',
+      headers: { origin: 'http://localhost:5173', 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'sim.reset', args: [] }),
+    })).rejects.toThrow()
     await first.close()
     expect(first.snapshot().runs[run.id].output).toEqual({ summary: 'finished before shutdown', artifacts: [
       { kind: 'branch', label: `factory-${run.id}`, url: null },

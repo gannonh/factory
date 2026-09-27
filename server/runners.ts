@@ -105,10 +105,22 @@ export async function prepareWorkdir(root: string, runId: RunId): Promise<Prepar
 }
 
 function githubUrl(remote: string): string | null {
-  const ssh = /^git@github\.com:([^\s]+?)(?:\.git)?$/.exec(remote)
-  const https = /^https:\/\/github\.com\/([^\s]+?)(?:\.git)?$/.exec(remote)
-  const repository = ssh?.[1] ?? https?.[1]
-  return repository ? `https://github.com/${repository}` : null
+  let path = /^git@github\.com:([^\s]+)$/.exec(remote)?.[1]
+  if (!path) {
+    let url: URL
+    try { url = new URL(remote) } catch { return null }
+    if (url.hostname !== 'github.com' || (url.protocol !== 'https:' && url.protocol !== 'ssh:')
+      || (url.protocol === 'ssh:' && url.username !== 'git') || (url.protocol === 'https:' && url.username)
+      || url.password || url.search || url.hash) return null
+    path = url.pathname.slice(1)
+  }
+  const parts = path.split('/')
+  if (parts.length !== 2) return null
+  const [owner, name] = parts
+  const repository = name.endsWith('.git') ? name.slice(0, -4) : name
+  if (!/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(repository)
+    || owner === '.' || owner === '..' || repository === '.' || repository === '..') return null
+  return `https://github.com/${owner}/${repository}`
 }
 
 /** Git inspection happens after the agent exits, before the server completes the run. */
