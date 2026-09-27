@@ -29,7 +29,7 @@ export function TaskInputSection({ input }: { input: TaskInput }) {
   const shortId = input.runId.slice(-6)
   return (
     <Section title="Input">
-      <p className="text-xs leading-relaxed whitespace-pre-wrap text-ink-200">{input.summary}</p>
+      <p className="text-xs leading-relaxed whitespace-pre-wrap break-words text-ink-200">{input.summary}</p>
       <ArtifactList artifacts={input.artifacts} />
       {run
         ? <button onClick={() => select({ kind: 'run', id: run.id })} className="self-start text-[11px] text-cyan-300 hover:underline">from {world.agents[run.agentId]?.name ?? `Deleted agent (${run.agentId})`} run {shortId}</button>

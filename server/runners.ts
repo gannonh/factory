@@ -131,19 +131,23 @@ export async function gitArtifacts({ path, initialHead }: PreparedWorkdir): Prom
   const remote = await git('remote', 'get-url', 'origin').catch(() => null)
   const repository = remote ? githubUrl(remote) : null
   const artifacts: Artifact[] = []
-  if (branch) artifacts.push({ kind: 'branch', label: branch, url: null })
-  const history = await git('log', '--reverse', '--format=%H%x09%s', `${initialHead}..HEAD`)
-  for (const line of history.split('\n').filter(Boolean)) {
+  const boundedLabel = (value: string, limit: number) => Array.from(value).length > limit ? `${Array.from(value).slice(0, limit - 1).join('')}…` : value
+  if (branch) artifacts.push({ kind: 'branch', label: boundedLabel(branch, 256), url: null })
+  // Git limits both the number and width of returned subjects before Node receives them.
+  const history = await git('log', '--max-count=21', '--format=%H%x09%<(160,trunc)%s', `${initialHead}..HEAD`)
+  const lines = history.split('\n').filter(Boolean)
+  if (lines.length > 20) artifacts.push({ kind: 'note', label: 'Earlier commits omitted; showing 20 newest', url: null })
+  for (const line of lines.slice(0, 20).reverse()) {
     const separator = line.indexOf('\t')
     if (separator < 0) continue
     const hash = line.slice(0, separator)
-    artifacts.push({ kind: 'commit', label: `${hash.slice(0, 7)} ${line.slice(separator + 1)}`, url: null })
+    artifacts.push({ kind: 'commit', label: `${hash.slice(0, 7)} ${boundedLabel(line.slice(separator + 1).trimEnd(), 160)}`, url: null })
   }
   if (branch && repository) {
     const pr = await execFileAsync('gh', ['pr', 'view', branch, '--repo', repository.slice('https://'.length), '--json', 'url', '--jq', '.url'], { cwd: path, timeout: 5000 }).then(({ stdout }) => stdout.trim()).catch(() => null)
     // GitHub may return a canonical URL after a repository rename or transfer.
     const match = pr?.match(/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/([1-9]\d*)$/i)
-    if (match && pr) artifacts.push({ kind: 'pr', label: `Pull request #${match[1]}`, url: pr })
+    if (match && pr && pr.length <= 512) artifacts.push({ kind: 'pr', label: `Pull request #${match[1]}`, url: pr })
   }
   return artifacts
 }

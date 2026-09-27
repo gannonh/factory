@@ -50,8 +50,10 @@ const TICK_MS = 400
 const MAX_LOGS = 2000
 const MAX_EVENTS = 400
 const MAX_COMPLETED_RUNS = 200
-const MAX_RUN_SUMMARY_CHARS = 8192
+const MAX_REAL_MESSAGE_CHARS = 8192
 const RESULT_TRUNCATED = '\n… [result truncated]'
+const LOG_TRUNCATED = '\n… [log truncated]'
+const ERROR_TRUNCATED = '\n… [error truncated]'
 const SAVE_MS = 1000
 const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 }
 const ID_PREFIX: Record<NodeKind, string> = { agent: 'ag', sandbox: 'sb', trigger: 'tr' }
@@ -93,13 +95,13 @@ function createRunOutput(run: Pick<Run, 'id' | 'title'>, agent: Pick<Agent, 'rol
   }
 }
 
-function boundedRunSummary(result: string): string {
-  if (result.length <= MAX_RUN_SUMMARY_CHARS) return result
-  let end = MAX_RUN_SUMMARY_CHARS - RESULT_TRUNCATED.length
-  const last = result.charCodeAt(end - 1)
-  const next = result.charCodeAt(end)
+function boundedRunText(value: string, marker: string): string {
+  if (value.length <= MAX_REAL_MESSAGE_CHARS) return value
+  let end = MAX_REAL_MESSAGE_CHARS - marker.length
+  const last = value.charCodeAt(end - 1)
+  const next = value.charCodeAt(end)
   if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end--
-  return result.slice(0, end) + RESULT_TRUNCATED
+  return value.slice(0, end) + marker
 }
 
 type Listener = (world: World) => void
@@ -264,8 +266,9 @@ export class MockServer {
   }
 
   private log(level: LogLevel, msg: string, ref: { runId?: RunId; agentId?: AgentId } = {}, ts = ref.runId && this.world.runs[ref.runId]?.execution === 'local' ? Date.now() : this.world.now) {
-    const line = { id: ++this.seq, ts, level, runId: ref.runId ?? null, agentId: ref.agentId ?? null, msg }
-    if (ref.runId && this.world.runs[ref.runId]?.execution === 'local') this.runLogs?.append(line)
+    const local = ref.runId && this.world.runs[ref.runId]?.execution === 'local'
+    const line = { id: ++this.seq, ts, level, runId: ref.runId ?? null, agentId: ref.agentId ?? null, msg: local ? boundedRunText(msg, LOG_TRUNCATED) : msg }
+    if (local) this.runLogs?.append(line)
     const logs = this.world.logs.length >= MAX_LOGS ? this.world.logs.slice(-MAX_LOGS + 1) : this.world.logs.slice()
     logs.push(line)
     this.world.logs = logs
@@ -727,7 +730,7 @@ export class MockServer {
         this.localTimeouts.delete(run.id)
         if (event.result === null) this.finishRun(run, { status: 'failed', reason: 'agent returned no final result' })
         else {
-          const completion = this.completeLocalRun(run, agent, boundedRunSummary(event.result))
+          const completion = this.completeLocalRun(run, agent, boundedRunText(event.result, RESULT_TRUNCATED))
           this.pendingCompletions.set(run.id, completion)
           void completion.then(() => this.pendingCompletions.delete(run.id), () => this.pendingCompletions.delete(run.id))
         }
@@ -756,6 +759,7 @@ export class MockServer {
   private finishRun(run: Run, completion: RunCompletion) {
     if (run.status !== 'running' || this.world.runs[run.id]?.status !== 'running') return
     if (completion.status !== 'succeeded' && this.pendingCompletions.has(run.id)) return
+    if (run.execution === 'local' && completion.status !== 'succeeded') completion = { ...completion, reason: boundedRunText(completion.reason, ERROR_TRUNCATED) }
     const timeout = this.localTimeouts.get(run.id)
     if (timeout) clearTimeout(timeout)
     this.localTimeouts.delete(run.id)

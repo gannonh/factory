@@ -60,6 +60,28 @@ test('git artifacts show the run branch and only commits after its initial HEAD'
   expect(artifacts.some((artifact) => artifact.label.includes('preexisting'))).toBe(false)
 })
 
+test('git artifacts bound large histories and subjects before handoff', async () => {
+  const path = root()
+  repository(path)
+  const workdir = join(path, '.factory-runs', 'run-many')
+  git(path, 'worktree', 'add', '-b', 'factory-run-many', workdir, 'HEAD')
+  const initialHead = git(workdir, 'rev-parse', 'HEAD')
+  for (let index = 1; index <= 23; index++) {
+    writeFileSync(join(workdir, 'result.txt'), String(index))
+    git(workdir, 'add', 'result.txt')
+    git(workdir, 'commit', '-m', index === 23 ? `last ${'x'.repeat(10_000)}` : `change ${index}`)
+  }
+  const artifacts = await gitArtifacts({ path: workdir, initialHead })
+  expect(artifacts[0]).toEqual({ kind: 'branch', label: 'factory-run-many', url: null })
+  expect(artifacts[1]).toEqual({ kind: 'note', label: 'Earlier commits omitted; showing 20 newest', url: null })
+  expect(artifacts.filter((artifact) => artifact.kind === 'commit')).toHaveLength(20)
+  expect(artifacts.some((artifact) => artifact.label.includes('change 3'))).toBe(false)
+  expect(artifacts.some((artifact) => artifact.label.includes('change 4'))).toBe(true)
+  expect(artifacts.at(-1)?.label).toContain('last ')
+  expect(artifacts.at(-1)!.label.length).toBeLessThanOrEqual(168)
+  expect(artifacts.at(-1)?.label.endsWith('..')).toBe(true)
+})
+
 test('a PR link appears only when gh finds a PR for the run branch', async () => {
   const path = root()
   repository(path)
@@ -188,19 +210,28 @@ test('an oversized final result is visibly bounded before output, handoff, and s
   const prefix = 'x'.repeat(8192 - marker.length - 1)
   const result = `${prefix}😀${'y'.repeat(100_000)}`
   const expected = `${prefix}${marker}`
+  const logMarker = '\n… [log truncated]'
+  const expectedLog = `${result.slice(0, 8192 - logMarker.length)}${logMarker}`
   const runner: Runner = {
     execution: 'local',
-    start(_input, emit) { emit({ kind: 'complete', status: 'succeeded', result }) },
+    start(_input, emit) {
+      emit({ kind: 'log', level: 'info', message: result })
+      emit({ kind: 'complete', status: 'succeeded', result })
+    },
     kill() {},
   }
   const worldFile = join(dataDir, 'world.json')
-  const server = new MockServer({ manual: true, localRunner: runner, localRoot: path, store: fileStore(worldFile) })
+  const options = { manual: true, localRunner: runner, localRoot: path, runLogs: fileRunLogs(dataDir), store: fileStore(worldFile) }
+  const server = new MockServer(options)
   for (const trigger of Object.values(server.snapshot().triggers)) server.updateTrigger(trigger.id, { enabled: false })
   const planner = Object.values(server.snapshot().agents).find((agent) => agent.name === 'Planner')!
   const taskId = server.enqueueTask(planner.id, { title: 'large result', prompt: 'return a long message', priority: 'normal' })
   server.advance(1)
   await until(() => Object.values(server.snapshot().runs).some((run) => run.taskId === taskId && run.status === 'succeeded'))
   const run = Object.values(server.snapshot().runs).find((run) => run.taskId === taskId)!
+  const liveLog = server.snapshot().logs.find((line) => line.runId === run.id && line.msg.startsWith(prefix.slice(0, 100)))!
+  expect(liveLog.msg).toBe(expectedLog)
+  expect(liveLog.msg.length).toBeLessThanOrEqual(8192)
   expect(run.output?.summary).toBe(expected)
   expect(run.output!.summary.length).toBeLessThanOrEqual(8192)
   const handoff = Object.values(server.snapshot().tasks).find((task) => task.origin.kind === 'handoff' && task.origin.runId === run.id)!
@@ -208,7 +239,43 @@ test('an oversized final result is visibly bounded before output, handoff, and s
   expect(handoff.prompt).toContain(expected)
   server.flush()
   expect(readFileSync(worldFile, 'utf8')).not.toContain('y'.repeat(1024))
+  const logFile = join(dataDir, 'run-logs', `${run.id}.jsonl`)
+  const persistedLogs = readFileSync(logFile, 'utf8')
+  expect(persistedLogs.split('\n').filter(Boolean).map((row) => JSON.parse(row)).find((line) => line.id === liveLog.id).msg).toBe(expectedLog)
+  expect(persistedLogs).not.toContain('y'.repeat(1024))
   await server.close()
+  const restored = new MockServer(options)
+  expect(restored.snapshot().logs.find((line) => line.id === liveLog.id)?.msg).toBe(expectedLog)
+  await restored.close()
+})
+
+test('an oversized local failure reason is visibly bounded before save', async () => {
+  const path = root()
+  repository(path)
+  const dataDir = root()
+  const marker = '\n… [error truncated]'
+  const reason = `Recorded failure ${'x'.repeat(100_000)}`
+  const runner: Runner = {
+    execution: 'local',
+    start(_input, emit) { emit({ kind: 'complete', status: 'failed', result: null, reason }) },
+    kill() {},
+  }
+  const options = { manual: true, localRunner: runner, localRoot: path, store: fileStore(join(dataDir, 'world.json')) }
+  const server = new MockServer(options)
+  for (const trigger of Object.values(server.snapshot().triggers)) server.updateTrigger(trigger.id, { enabled: false })
+  const planner = Object.values(server.snapshot().agents).find((agent) => agent.name === 'Planner')!
+  const taskId = server.enqueueTask(planner.id, { title: 'large failure', prompt: 'fail', priority: 'normal' })
+  server.advance(1)
+  await until(() => Object.values(server.snapshot().runs).some((run) => run.taskId === taskId && run.status === 'failed'))
+  const failed = Object.values(server.snapshot().runs).find((run) => run.taskId === taskId)!
+  expect(failed.error).toBe(`${reason.slice(0, 8192 - marker.length)}${marker}`)
+  expect(failed.error!.length).toBe(8192)
+  server.flush()
+  expect(readFileSync(join(dataDir, 'world.json'), 'utf8')).not.toContain('x'.repeat(9000))
+  await server.close()
+  const restored = new MockServer(options)
+  expect(restored.snapshot().runs[failed.id].error).toBe(failed.error)
+  await restored.close()
 })
 
 test('shutdown waits for a successful result and its pending PR lookup', async () => {
