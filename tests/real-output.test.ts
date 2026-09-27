@@ -42,7 +42,7 @@ test('git artifacts show the run branch and only commits after its initial HEAD'
   const path = root()
   repository(path)
   const workdir = join(path, '.factory-runs', 'run-test')
-  git(path, 'worktree', 'add', '-b', 'factory/run-test', workdir, 'HEAD')
+  git(path, 'worktree', 'add', '-b', 'factory-run-test', workdir, 'HEAD')
   const initialHead = git(workdir, 'rev-parse', 'HEAD')
   for (const [name, title] of [['one', 'first change'], ['two', 'second change']]) {
     writeFileSync(join(workdir, `${name}.txt`), title)
@@ -51,7 +51,7 @@ test('git artifacts show the run branch and only commits after its initial HEAD'
   }
   const artifacts = await gitArtifacts({ path: workdir, initialHead })
   expect(artifacts).toEqual([
-    { kind: 'branch', label: 'factory/run-test', url: null },
+    { kind: 'branch', label: 'factory-run-test', url: null },
     { kind: 'commit', label: `${git(workdir, 'rev-list', '--reverse', `${initialHead}..HEAD`).split('\n')[0].slice(0, 7)} first change`, url: null },
     { kind: 'commit', label: `${git(workdir, 'rev-parse', 'HEAD').slice(0, 7)} second change`, url: null },
   ])
@@ -63,7 +63,7 @@ test('a PR link appears only when gh finds a PR for the run branch', async () =>
   repository(path)
   git(path, 'remote', 'add', 'origin', 'git@github.com:example/factory.git')
   const workdir = join(path, '.factory-runs', 'run-pr')
-  git(path, 'worktree', 'add', '-b', 'factory/run-pr', workdir, 'HEAD')
+  git(path, 'worktree', 'add', '-b', 'factory-run-pr', workdir, 'HEAD')
   const initialHead = git(workdir, 'rev-parse', 'HEAD')
   const bin = join(path, 'bin')
   mkdirSync(bin)
@@ -74,7 +74,7 @@ test('a PR link appears only when gh finds a PR for the run branch', async () =>
   process.env.PATH = `${bin}:${previousPath}`
   try {
     expect(await gitArtifacts({ path: workdir, initialHead })).toEqual([
-      { kind: 'branch', label: 'factory/run-pr', url: null },
+      { kind: 'branch', label: 'factory-run-pr', url: null },
       { kind: 'pr', label: 'Pull request #42', url: 'https://github.com/example/factory/pull/42' },
     ])
   } finally { process.env.PATH = previousPath }
@@ -126,6 +126,8 @@ test('a real result and git artifacts reach handoff; real logs survive restart',
   const before = first.snapshot().logs.filter((line) => line.runId === upstream.id)
   first.close()
   appendFileSync(logFile, `{"id":1e400,"ts":1e400,"level":"info","runId":"${upstream.id}","agentId":null,"msg":"invalid number"}\n`)
+  appendFileSync(logFile, `{"id":1e300,"ts":1,"level":"info","runId":"${upstream.id}","agentId":null,"msg":"unsafe id"}\n`)
+  appendFileSync(logFile, `{"id":1,"ts":1e300,"level":"info","runId":"${upstream.id}","agentId":null,"msg":"unsafe timestamp"}\n`)
   appendFileSync(logFile, '{truncated\n')
 
   const second = new MockServer(options)
@@ -175,7 +177,7 @@ test('shutdown waits for a successful result and its pending PR lookup', async (
     expect(first.snapshot().runs[run.id].status).toBe('running')
     await first.close()
     expect(first.snapshot().runs[run.id].output).toEqual({ summary: 'finished before shutdown', artifacts: [
-      { kind: 'branch', label: `factory/${run.id}`, url: null },
+      { kind: 'branch', label: `factory-${run.id}`, url: null },
       { kind: 'pr', label: 'Pull request #42', url: 'https://github.com/example/factory/pull/42' },
     ] })
     const second = new MockServer(options)

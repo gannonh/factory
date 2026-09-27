@@ -94,7 +94,7 @@ export async function prepareWorkdir(root: string, runId: RunId): Promise<Prepar
     }
     const initialHead = await execFileAsync('git', ['-C', rootPath, 'rev-parse', '--verify', 'HEAD']).then(({ stdout }) => stdout.trim()).catch(() => null)
     if (initialHead) {
-      await execFileAsync('git', ['-C', rootPath, 'worktree', 'add', '-b', `factory/${runId}`, workdir, initialHead])
+      await execFileAsync('git', ['-C', rootPath, 'worktree', 'add', '-b', `factory-${runId}`, workdir, initialHead])
       return { path: workdir, initialHead }
     }
     await mkdir(workdir)
