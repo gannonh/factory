@@ -523,6 +523,18 @@ test('a save goes through a temp file, so a failed save leaves the last document
   expect(lines[0]).toContain(path)
 })
 
+test('a saved event ID at the safe-integer limit cannot poison future sequence IDs', () => {
+  const store = memoryStore()
+  const world = retainWorld(seedWorld(1_000))
+  world.events = [{ id: Number.MAX_SAFE_INTEGER, ts: 1_000, kind: 'graph', subject: { kind: 'agent', id: 'ag-coder' as AgentId }, msg: 'corrupt event' }]
+  store.save(JSON.stringify(world))
+  const server = new MockServer({ manual: true, store })
+  expect(server.snapshot().events).toEqual([])
+  server.enqueueTask('ag-coder' as AgentId, { title: 'fresh task', prompt: 'p', priority: 'normal' })
+  expect(server.snapshot().events.at(-1)?.id).toBe(3)
+  server.close()
+})
+
 test('the world file lives in FACTORY_DATA_DIR, or .factory under the repo root', () => {
   expect(worldFilePath({ FACTORY_DATA_DIR: '/var/lib/factory' }, '/src/factory')).toBe('/var/lib/factory/world.json')
   expect(worldFilePath({}, '/src/factory')).toBe('/src/factory/.factory/world.json')

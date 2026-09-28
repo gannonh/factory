@@ -89,7 +89,7 @@ setTimeout(() => { console.log(JSON.stringify({ type: 'result', result: fail ? '
   server.close()
 })
 
-test('a repository root gives each run a detached git worktree', async () => {
+test('a repository root gives each run a named git branch at the starting commit', async () => {
   const root = temporaryRoot()
   execFileSync('git', ['init', root])
   execFileSync('git', ['-C', root, 'config', 'user.email', 'test@example.com'])
@@ -97,12 +97,16 @@ test('a repository root gives each run a detached git worktree', async () => {
   writeFileSync(join(root, 'README.md'), 'root\n')
   execFileSync('git', ['-C', root, 'add', 'README.md'])
   execFileSync('git', ['-C', root, 'commit', '-m', 'initial'])
+  execFileSync('git', ['-C', root, 'branch', 'factory'])
   const first = await prepareWorkdir(root, 'run-one' as RunId)
   const second = await prepareWorkdir(root, 'run-two' as RunId)
-  expect(readFileSync(join(first, 'README.md'), 'utf8')).toBe('root\n')
-  expect(readFileSync(join(second, 'README.md'), 'utf8')).toBe('root\n')
-  expect(first).not.toBe(second)
-  expect(execFileSync('git', ['-C', first, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()).toBe(first)
+  expect(readFileSync(join(first.path, 'README.md'), 'utf8')).toBe('root\n')
+  expect(readFileSync(join(second.path, 'README.md'), 'utf8')).toBe('root\n')
+  expect(first.path).not.toBe(second.path)
+  expect(first.initialHead).toBe(execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim())
+  expect(execFileSync('git', ['-C', first.path, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()).toBe(first.path)
+  expect(execFileSync('git', ['-C', first.path, 'branch', '--show-current'], { encoding: 'utf8' }).trim()).toBe('factory-run-one')
+  expect(execFileSync('git', ['-C', second.path, 'branch', '--show-current'], { encoding: 'utf8' }).trim()).toBe('factory-run-two')
   expect(execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('')
 })
 
@@ -110,7 +114,8 @@ test('an empty Git repository uses a plain run directory until it has a HEAD', a
   const root = temporaryRoot()
   execFileSync('git', ['init', root])
   const workdir = await prepareWorkdir(root, 'run-unborn' as RunId)
-  expect(existsSync(workdir)).toBe(true)
+  expect(existsSync(workdir.path)).toBe(true)
+  expect(workdir.initialHead).toBeNull()
   expect(execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('')
 })
 

@@ -4,7 +4,8 @@ import { dirname, join } from 'node:path'
 export type WorldStore = {
   /** The saved document parsed by `parse`, or null when there is none. A document that fails to read or parse is set aside and null is returned. */
   load<T>(parse: (text: string) => T | null): T | null
-  save(text: string): void
+  /** Whether the new document replaced the previous one on disk. */
+  save(text: string): boolean
   clear(): void
 }
 
@@ -41,8 +42,10 @@ export function fileStore(path: string, log: (line: string) => void = console.er
         mkdirSync(dirname(path), { recursive: true })
         writeFileSync(tmp, text)
         renameSync(tmp, path)
+        return true
       } catch (err) {
         log(`could not save world file ${path}: ${message(err)}`)
+        return false
       }
     },
     clear() {
