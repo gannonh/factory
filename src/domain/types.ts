@@ -173,7 +173,7 @@ export type Task = {
   blockedOn: string | null
 }
 
-export type RunStatus = 'running' | 'succeeded' | 'failed'
+export type RunStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 export type ArtifactKind = 'branch' | 'pr' | 'file' | 'note'
 

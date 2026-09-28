@@ -4,7 +4,7 @@ import { Badge, Dot, Section, fmtDuration } from '../ui'
 import { TaskInputSection } from './TaskInputSection'
 import { useWallNow } from '../../useWallNow'
 
-const RUN_STATUS_COLOR = { running: '#22d3ee', succeeded: '#34d399', failed: '#f87171' } as const
+const RUN_STATUS_COLOR = { running: '#22d3ee', succeeded: '#34d399', failed: '#f87171', cancelled: '#64748b' } as const
 
 export function TaskInspector({ task }: { task: Task }) {
   const world = useStore((state) => state.world)

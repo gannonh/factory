@@ -9,7 +9,7 @@ export function AgentsView() {
   const agents = Object.values(world.agents)
   const runs = Object.values(world.runs)
   const tasks = Object.values(world.tasks)
-  const done = runs.filter((r) => r.status !== 'running')
+  const done = runs.filter((r) => r.status === 'succeeded' || r.status === 'failed')
   const succeeded = done.filter((r) => r.status === 'succeeded')
   const avgMs = succeeded.length ? succeeded.reduce((a, r) => a + ((r.endedAt ?? r.startedAt) - r.startedAt), 0) / succeeded.length : 0
   const tokens = runs.reduce((a, r) => a + r.tokens, 0)

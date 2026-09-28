@@ -3,7 +3,7 @@ import { Badge, Dot, FlowBadge, fmtDuration, fmtTime } from '../ui'
 import { Empty } from './QueueTab'
 import { useWallNow } from '../../useWallNow'
 
-const COLOR = { running: '#22d3ee', succeeded: '#34d399', failed: '#f87171' } as const
+const COLOR = { running: '#22d3ee', succeeded: '#34d399', failed: '#f87171', cancelled: '#64748b' } as const
 
 export function RunsTab() {
   const world = useStore((s) => s.world)

@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, test } from 'vitest'
 import { ClaudeRunner, claudeArgs, prepareWorkdir } from '../server/runners'
-import type { Runner } from '../server/runners'
+import type { Emit, Runner } from '../server/runners'
+import { createApi } from '../server/api'
 import { MockServer } from '../server/simulation'
 import type { AgentId, RunId, SandboxId } from '../src/domain/types'
 
@@ -127,4 +128,122 @@ test('closing while a working directory is prepared never starts the process', a
   server.close()
   await new Promise((resolve) => setTimeout(resolve, 100))
   expect(starts).toBe(0)
+})
+
+function waitingProcess(timeoutMs = 120_000) {
+  const root = temporaryRoot()
+  const executable = join(root, 'fake-claude')
+  writeFileSync(executable, `#!/usr/bin/env node
+const fs = require('node:fs')
+const { spawn } = require('node:child_process')
+const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+fs.writeFileSync('pids.json', JSON.stringify({ parent: process.pid, child: child.pid }))
+setInterval(() => {}, 1000)
+`)
+  chmodSync(executable, 0o755)
+  const server = new MockServer({ manual: true, localRunner: new ClaudeRunner(executable), localRoot: root })
+  for (const trigger of Object.values(server.snapshot().triggers)) server.updateTrigger(trigger.id, { enabled: false })
+  const coder = server.snapshot().agents['ag-coder' as AgentId]
+  server.removeEdges(Object.values(server.snapshot().edges).filter((edge) => edge.kind === 'runs-in' && edge.source === coder.id).map((edge) => edge.id))
+  server.connect(coder.id, server.snapshot().sandboxes['sb-local-1' as SandboxId].id, 'runs-in')
+  server.updateAgent(coder.id, { timeoutMs, retry: { maxAttempts: 1 } })
+  const taskId = server.enqueueTask(coder.id, { title: 'waiting process', prompt: 'wait', priority: 'normal' })
+  server.advance(1)
+  const run = Object.values(server.snapshot().runs).find((item) => item.taskId === taskId)
+  if (!run) throw new Error('local run was not admitted')
+  const pidsFile = join(root, '.factory-runs', run.id, 'pids.json')
+  return { server, taskId, run, pidsFile }
+}
+
+function running(pid: number) {
+  try {
+    if (process.platform === 'linux') return readFileSync(`/proc/${pid}/stat`, 'utf8').split(' ')[2] !== 'Z'
+    process.kill(pid, 0)
+    return true
+  } catch { return false }
+}
+
+async function processIds(file: string): Promise<{ parent: number; child: number }> {
+  await until(() => existsSync(file))
+  const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
+  if (!parsed || typeof parsed !== 'object' || !('parent' in parsed) || !('child' in parsed)
+    || typeof parsed.parent !== 'number' || typeof parsed.child !== 'number') throw new Error('fake process did not write PIDs')
+  return { parent: parsed.parent, child: parsed.child }
+}
+
+test('cancelling a running local task kills its process tree and does not retry', async () => {
+  const { server, taskId, run, pidsFile } = waitingProcess()
+  try {
+    const pids = await processIds(pidsFile)
+    expect(running(pids.parent)).toBe(true)
+    expect(running(pids.child)).toBe(true)
+    createApi(server).tasks.cancel(taskId)
+    await until(() => !running(pids.parent) && !running(pids.child))
+    expect(server.snapshot().runs[run.id].status).toBe('cancelled')
+    expect(server.snapshot().runs[run.id].error).toBe('cancelled by operator')
+    expect(server.snapshot().tasks[taskId].status).toBe('cancelled')
+    expect(server.snapshot().sandboxes[run.sandboxId].leases).toEqual([])
+  } finally { server.close() }
+})
+
+for (const mode of ['paused', 'fast'] as const) {
+  test(`a local timeout uses wall time while simulation is ${mode} and kills the process tree`, async () => {
+    const { server, taskId, run, pidsFile } = waitingProcess(1200)
+    try {
+      const pids = await processIds(pidsFile)
+      if (mode === 'paused') server.setSim({ paused: true })
+      else server.setSim({ speed: 4 })
+      server.advance(100_000)
+      expect(server.snapshot().runs[run.id].status).toBe('running')
+      await until(() => server.snapshot().runs[run.id].status === 'failed')
+      await until(() => !running(pids.parent) && !running(pids.child))
+      expect(server.snapshot().runs[run.id].error).toBe('timeout')
+      expect((server.snapshot().runs[run.id].endedAt ?? 0) - run.startedAt).toBeGreaterThanOrEqual(1100)
+      expect(server.snapshot().tasks[taskId].status).toBe('failed')
+      expect(server.snapshot().sandboxes[run.sandboxId].leases).toEqual([])
+    } finally { server.close() }
+  })
+}
+
+test('cancelling during workdir preparation prevents spawn', async () => {
+  const root = temporaryRoot()
+  let starts = 0
+  const runner: Runner = { execution: 'local', start: () => { starts += 1 }, kill: () => {} }
+  const server = new MockServer({ manual: true, localRoot: root, localRunner: runner })
+  try {
+    for (const trigger of Object.values(server.snapshot().triggers)) server.updateTrigger(trigger.id, { enabled: false })
+    const coder = server.snapshot().agents['ag-coder' as AgentId]
+    server.removeEdges(Object.values(server.snapshot().edges).filter((edge) => edge.kind === 'runs-in' && edge.source === coder.id).map((edge) => edge.id))
+    server.connect(coder.id, server.snapshot().sandboxes['sb-local-1' as SandboxId].id, 'runs-in')
+    const taskId = server.enqueueTask(coder.id, { title: 'cancel during setup', prompt: 'wait', priority: 'normal' })
+    server.advance(1)
+    const run = Object.values(server.snapshot().runs).find((item) => item.taskId === taskId)
+    if (!run) throw new Error('local run was not admitted')
+    server.cancelTask(taskId)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(starts).toBe(0)
+    expect(server.snapshot().runs[run.id].status).toBe('cancelled')
+  } finally { server.close() }
+})
+
+test('a late runner completion cannot overwrite cancellation', async () => {
+  const root = temporaryRoot()
+  const state: { emit?: Emit } = {}
+  const runner: Runner = { execution: 'local', start: (_input, emit) => { state.emit = emit }, kill: () => {} }
+  const server = new MockServer({ manual: true, localRoot: root, localRunner: runner })
+  try {
+    for (const trigger of Object.values(server.snapshot().triggers)) server.updateTrigger(trigger.id, { enabled: false })
+    const coder = server.snapshot().agents['ag-coder' as AgentId]
+    server.removeEdges(Object.values(server.snapshot().edges).filter((edge) => edge.kind === 'runs-in' && edge.source === coder.id).map((edge) => edge.id))
+    server.connect(coder.id, server.snapshot().sandboxes['sb-local-1' as SandboxId].id, 'runs-in')
+    const taskId = server.enqueueTask(coder.id, { title: 'late event', prompt: 'wait', priority: 'normal' })
+    server.advance(1)
+    const run = Object.values(server.snapshot().runs).find((item) => item.taskId === taskId)
+    if (!run) throw new Error('local run was not admitted')
+    await until(() => state.emit !== undefined)
+    server.cancelTask(taskId)
+    state.emit?.({ kind: 'complete', status: 'succeeded', result: 'too late' })
+    expect(server.snapshot().runs[run.id].status).toBe('cancelled')
+    expect(server.snapshot().tasks[taskId].status).toBe('cancelled')
+  } finally { server.close() }
 })
