@@ -41,6 +41,8 @@ import {
   type World,
 } from '../src/domain/types'
 import type { WorldStore } from './worldFile'
+import { ClaudeRunner, SimulatedRunner, prepareWorkdir, type Runner, type RunnerEvent } from './runners'
+import { isAbsolute } from 'node:path'
 
 const TICK_MS = 400
 const MAX_LOGS = 2000
@@ -63,21 +65,6 @@ function connectable(world: World, source: NodeId, target: NodeId): { from: Node
 function edgeExists(world: World, source: NodeId, target: NodeId, kind: EdgeKind, exceptId?: EdgeId): boolean {
   return Object.values(world.edges).some((e) => e.id !== exceptId && e.source === source && e.target === target && e.kind === kind)
 }
-
-const RUN_LOG_LINES: Array<[LogLevel, string]> = [
-  ['debug', 'tool call read_file src/index.ts'],
-  ['debug', 'tool call bash: npm test -- --filter=unit'],
-  ['info', 'planning step complete, 3 sub-steps'],
-  ['info', 'wrote 42 lines to src/components/Form.tsx'],
-  ['info', 'tests passed (18/18)'],
-  ['debug', 'context window 38% used'],
-  ['warn', 'retrying tool call after transient error (ECONNRESET)'],
-  ['warn', 'lint reported 2 warnings, continuing'],
-  ['info', 'opened draft PR #412'],
-  ['debug', 'cache hit for prompt prefix'],
-  ['info', 'handoff payload prepared'],
-  ['error', 'tool call failed: permission denied on /etc/hosts'],
-]
 
 type RunCompletion =
   | { status: 'succeeded'; agent: Pick<Agent, 'role' | 'tools'> }
@@ -110,21 +97,28 @@ export class MockServer {
   private saveTimer: ReturnType<typeof setTimeout> | null = null
   private store: WorldStore | null
   private rng: () => number
+  private runners: Record<Run['execution'], Runner>
+  private localRunner: Runner
+  private seedOptions: { localRoot?: string; localCronEnabled?: boolean }
   private seq = 0
   private rev = 0
+  private closed = false
 
   /**
    * `manual` stops the automatic interval; tests then advance simulated time with
    * `advance(ms)`. `rng` makes run outcomes, durations, and metric noise repeatable.
    * `store` holds the saved world; without one the world lives in memory only.
    */
-  constructor(options: { manual?: boolean; rng?: () => number; store?: WorldStore } = {}) {
+  constructor(options: { manual?: boolean; rng?: () => number; store?: WorldStore; localRunner?: Runner; localRoot?: string; localCronEnabled?: boolean } = {}) {
     this.rng = options.rng ?? Math.random
+    this.localRunner = options.localRunner ?? new ClaudeRunner()
+    this.runners = { simulated: new SimulatedRunner(this.rng), local: this.localRunner }
+    this.seedOptions = { localRoot: options.localRoot, localCronEnabled: options.localCronEnabled }
     this.store = options.store ?? null
     this.rev = 1
-    this.world = seedWorld(Date.now())
+    this.world = seedWorld(Date.now(), this.seedOptions)
     if (!this.store?.load((text) => this.restore(text))) {
-      this.world = seedWorld(Date.now())
+      this.world = seedWorld(Date.now(), this.seedOptions)
       this.seq = 0
     }
     if (!options.manual) this.start()
@@ -134,6 +128,12 @@ export class MockServer {
   private restore(text: string): true | null {
     const restored = parseWorld(text)
     if (!restored) return null
+    const seededLocal = restored.sandboxes['sb-local-1' as SandboxId]
+    if (seededLocal?.host === 'localhost' && this.seedOptions.localRoot) {
+      seededLocal.host = this.seedOptions.localRoot
+      const seededCron = restored.triggers['tr-cron' as TriggerId]
+      if (seededCron) seededCron.enabled = false
+    }
     this.world = restored
     this.seq = restored.events.reduce((max, e) => Math.max(max, e.id), 0)
     const interrupted = Object.values(restored.runs).filter((run) => run.status === 'running')
@@ -151,8 +151,10 @@ export class MockServer {
 
   /** Stop the tick loop and write the world. */
   close() {
+    this.closed = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    for (const run of Object.values(this.world.runs)) if (run.status === 'running') this.runners[run.execution ?? 'simulated'].kill(run.id)
     this.flush()
   }
 
@@ -172,10 +174,6 @@ export class MockServer {
     return lo + this.rng() * (hi - lo)
   }
 
-  private pick<T>(xs: T[]) {
-    return xs[Math.floor(this.rng() * xs.length)]
-  }
-
   subscribe(fn: Listener): () => void {
     this.listeners.add(fn)
     fn(this.world)
@@ -188,7 +186,10 @@ export class MockServer {
 
   private start() {
     if (this.timer) return
-    this.timer = setInterval(() => this.tick(TICK_MS * this.world.sim.speed), TICK_MS)
+    this.timer = setInterval(() => {
+      this.tick(TICK_MS * this.world.sim.speed)
+      if (this.world.sim.paused && Object.values(this.world.runs).some((run) => run.status === 'running' && run.execution === 'local')) this.publish()
+    }, TICK_MS)
     // unref where available so a test process is not kept alive by the singleton
     ;(this.timer as unknown as { unref?: () => void }).unref?.()
   }
@@ -233,8 +234,8 @@ export class MockServer {
     this.world.runs = { ...this.world.runs, [id]: { ...cur, ...patch } }
   }
 
-  private log(level: LogLevel, msg: string, ref: { runId?: RunId; agentId?: AgentId } = {}) {
-    const line = { id: ++this.seq, ts: this.world.now, level, runId: ref.runId ?? null, agentId: ref.agentId ?? null, msg }
+  private log(level: LogLevel, msg: string, ref: { runId?: RunId; agentId?: AgentId } = {}, ts = this.world.now) {
+    const line = { id: ++this.seq, ts, level, runId: ref.runId ?? null, agentId: ref.agentId ?? null, msg }
     const logs = this.world.logs.length >= MAX_LOGS ? this.world.logs.slice(-MAX_LOGS + 1) : this.world.logs.slice()
     logs.push(line)
     this.world.logs = logs
@@ -530,10 +531,12 @@ export class MockServer {
     return id
   }
 
-  updateSandbox(id: SandboxId, patch: { capacity: number }) {
-    if (!isCapacity(patch.capacity)) return
-    if (!this.world.sandboxes[id]) return
-    this.patchSandbox(id, { capacity: patch.capacity })
+  updateSandbox(id: SandboxId, patch: { capacity?: number; host?: string }) {
+    const sandbox = this.world.sandboxes[id]
+    if (!sandbox) return
+    if (patch.capacity !== undefined && !isCapacity(patch.capacity)) return
+    if (patch.host !== undefined && (sandbox.kind !== 'local' || !isAbsolute(patch.host))) return
+    this.patchSandbox(id, patch)
     this.publish()
   }
 
@@ -553,8 +556,9 @@ export class MockServer {
   }
 
   reset() {
+    for (const run of Object.values(this.world.runs)) if (run.status === 'running') this.runners[run.execution ?? 'simulated'].kill(run.id)
     this.store?.clear()
-    this.world = seedWorld(Date.now())
+    this.world = seedWorld(Date.now(), this.seedOptions)
     this.publish()
   }
 
@@ -652,37 +656,40 @@ export class MockServer {
 
   private tickRuns(dt: number) {
     for (const run of Object.values(this.world.runs)) {
-      if (run.status !== 'running') continue
+      if (run.status !== 'running' || run.execution === 'local') continue
       const agent = this.world.agents[run.agentId]
-      if (!agent) continue
-      const progress = clamp(run.progress + dt / run.durationMs, 0, 1)
-      this.patchRun(run.id, { progress, tokens: run.tokens + Math.round(this.rand(80, 600) * (dt / 1000)) })
-      if (this.rng() < 0.28) {
-        const [level, msg] = this.pick(RUN_LOG_LINES)
-        if (level !== 'error') this.log(level, msg, { runId: run.id, agentId: run.agentId })
-      }
-      if (this.world.now - run.startedAt > agent.timeoutMs) {
-        this.log('error', `run exceeded timeout of ${Math.round(agent.timeoutMs / 1000)}s`, { runId: run.id, agentId: run.agentId })
-        this.finishRun(run, { status: 'failed', reason: 'timeout' })
-        continue
-      }
-      if (progress >= 1) {
-        const ok = this.rng() < 0.85
-        if (!ok) this.log('error', this.pick(RUN_LOG_LINES.filter(([l]) => l === 'error'))[1], { runId: run.id, agentId: run.agentId })
-        this.finishRun(run, ok ? { status: 'succeeded', agent } : { status: 'failed', reason: 'task error' })
-      }
+      const task = this.world.tasks[run.taskId]
+      if (!agent || !task) continue
+      const progress = this.runners.simulated.tick?.({ run, agent, task, workdir: '' }, dt, this.world.now, (event) => this.handleRunnerEvent(run.id, event))
+      if (typeof progress === 'number' && this.world.runs[run.id]?.status === 'running') this.patchRun(run.id, { progress })
     }
   }
 
+  private handleRunnerEvent(id: RunId, event: RunnerEvent) {
+    const run = this.world.runs[id]
+    if (!run || run.status !== 'running') return
+    if (event.kind === 'log') this.log(event.level, event.message, { runId: id, agentId: run.agentId }, run.execution === 'local' ? Date.now() : this.world.now)
+    else if (event.kind === 'tokens') this.patchRun(id, { tokens: event.count })
+    else {
+      const agent = this.world.agents[run.agentId]
+      this.finishRun(run, event.status === 'succeeded' && agent
+        ? { status: 'succeeded', agent }
+        : { status: 'failed', reason: event.reason ?? 'agent unavailable' })
+    }
+    if (run.execution === 'local') this.publish()
+  }
+
   private finishRun(run: Run, completion: RunCompletion) {
+    if (run.status !== 'running' || this.world.runs[run.id]?.status !== 'running') return
+    this.runners[run.execution ?? 'simulated'].kill(run.id)
     const w = this.world
     const agent = w.agents[run.agentId]
     const task = w.tasks[run.taskId]
-    const output = completion.status === 'succeeded' ? createRunOutput(run, completion.agent) : null
+    const output = completion.status === 'succeeded' && run.execution !== 'local' ? createRunOutput(run, completion.agent) : null
     this.patchRun(run.id, {
       status: completion.status,
-      endedAt: w.now,
-      progress: completion.status === 'succeeded' ? 1 : run.progress,
+      endedAt: run.execution === 'local' ? Date.now() : w.now,
+      progress: completion.status === 'succeeded' && run.execution !== 'local' ? 1 : run.progress,
       output,
       error: completion.status === 'failed' ? completion.reason : null,
     })
@@ -690,18 +697,20 @@ export class MockServer {
     if (sb && sb.leases.some((l) => l.runId === run.id)) {
       this.patchSandbox(sb.id, { leases: sb.leases.filter((l) => l.runId !== run.id) })
     }
-    if (output) {
+    if (completion.status === 'succeeded') {
       if (agent) this.patchAgent(agent.id, { completed: agent.completed + 1 })
       if (task) this.patchTask(task.id, { status: 'succeeded' })
       this.log('info', `run finished: ${run.title}`, { runId: run.id, agentId: run.agentId })
       this.event('run', { kind: 'run', id: run.id }, `${this.nameOf(run.agentId)} finished “${run.title}”`)
-      const prompt = [output.summary, ...output.artifacts.map((a) => `${a.kind}: ${a.label}${a.url ? ` (${a.url})` : ''}`)].join('\n')
-      for (const e of Object.values(w.edges)) {
-        if (e.kind === 'handoff' && e.source === run.agentId) {
-          this.enqueueTaskSilently(e.target as AgentId, {
-            title: `${run.title} → ${this.nameOf(e.target)}`, prompt, priority: task?.priority ?? 'normal',
-            origin: { kind: 'handoff', from: run.agentId, runId: run.id }, input: { ...output, runId: run.id },
-          }, task?.flowId ?? (this.uid('fl') as FlowId))
+      if (output) {
+        const prompt = [output.summary, ...output.artifacts.map((a) => `${a.kind}: ${a.label}${a.url ? ` (${a.url})` : ''}`)].join('\n')
+        for (const e of Object.values(w.edges)) {
+          if (e.kind === 'handoff' && e.source === run.agentId) {
+            this.enqueueTaskSilently(e.target as AgentId, {
+              title: `${run.title} → ${this.nameOf(e.target)}`, prompt, priority: task?.priority ?? 'normal',
+              origin: { kind: 'handoff', from: run.agentId, runId: run.id }, input: { ...output, runId: run.id },
+            }, task?.flowId ?? (this.uid('fl') as FlowId))
+          }
         }
       }
     } else if (completion.status === 'failed' && task && agent) {
@@ -824,14 +833,17 @@ export class MockServer {
 
   private startRun(agent: Agent, task: Task, sandbox: Sandbox) {
     const id = this.uid('run') as RunId
+    const runner = sandbox.kind === 'local' ? this.localRunner : this.runners.simulated
+    const execution = runner.execution
+    const startedAt = execution === 'local' ? Date.now() : this.world.now
     const run: Run = {
       id, taskId: task.id, agentId: agent.id, sandboxId: sandbox.id, title: task.title, attempt: task.attempts + 1,
-      status: 'running', progress: 0, durationMs: this.rand(7000, 18000), startedAt: this.world.now, endedAt: null, tokens: 0,
+      status: 'running', execution, progress: execution === 'local' ? null : 0, durationMs: execution === 'local' ? null : this.rand(7000, 18000), startedAt, endedAt: null, tokens: 0,
       output: null, error: null,
     }
     this.world.runs = { ...this.world.runs, [id]: run }
     this.patchTask(task.id, { status: 'running', attempts: task.attempts + 1, retryAt: null, blockedOn: null })
-    this.patchSandbox(sandbox.id, { leases: [...sandbox.leases, { agentId: agent.id, runId: id, since: this.world.now }] })
+    this.patchSandbox(sandbox.id, { leases: [...sandbox.leases, { agentId: agent.id, runId: id, since: startedAt }] })
     this.patchAgent(agent.id, { status: 'working' })
     this.log('info', `run started on ${sandbox.name} (attempt ${run.attempt}): ${task.title}`, { runId: id, agentId: agent.id })
     if (task.input) {
@@ -840,6 +852,14 @@ export class MockServer {
       this.log('info', `input: ${n} artifact${n === 1 ? '' : 's'} from ${upstream} run ${task.input.runId.slice(-6)}`, { runId: id, agentId: agent.id })
     }
     this.event('run', { kind: 'run', id }, `${agent.name} started “${task.title}” on ${sandbox.name}`)
+    if (execution === 'local') {
+      void prepareWorkdir(sandbox.host, id).then((workdir) => {
+        if (this.closed || this.world.runs[id]?.status !== 'running') return
+        this.log('info', `working directory: ${workdir}`, { runId: id, agentId: agent.id }, Date.now())
+        this.publish()
+        this.runners.local.start({ run, agent, task, workdir }, (event) => this.handleRunnerEvent(id, event))
+      }).catch((error: unknown) => this.handleRunnerEvent(id, { kind: 'complete', status: 'failed', result: null, reason: error instanceof Error ? error.message : String(error) }))
+    } else this.runners.simulated.start({ run, agent, task, workdir: '' }, (event) => this.handleRunnerEvent(id, event))
   }
 
   private nameOf(id: string): string {

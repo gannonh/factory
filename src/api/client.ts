@@ -123,7 +123,7 @@ export const api: Api = {
   sandboxes: {
     act: (id: SandboxId, action: SandboxAction) => call('sandboxes.act', [id, action]),
     create: (input: { name: string; kind: SandboxKind; host: string; image: string; capacity?: number }) => call<SandboxId>('sandboxes.create', [input]),
-    update: (id: SandboxId, patch: { capacity: number }) => call('sandboxes.update', [id, patch]),
+    update: (id: SandboxId, patch: { capacity?: number; host?: string }) => call('sandboxes.update', [id, patch]),
   },
   triggers: {
     update: (id: TriggerId, patch: Partial<Omit<Trigger, 'id' | 'position' | 'groupId'>>) => call('triggers.update', [id, patch]),

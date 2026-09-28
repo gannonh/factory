@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { MockServer, retainWorld } from '../server/simulation'
+import { SimulatedRunner } from '../server/runners'
 import { fileStore, worldFilePath } from '../server/worldFile'
 import { seedWorld } from '../src/domain/seed'
 import type { AgentId, FactoryEvent, FlowId, Run, RunId, Task, TaskId, TriggerId, World } from '../src/domain/types'
@@ -291,7 +292,7 @@ const VALID_EMPTY_SAVE = {
 test('a well-formed empty save loads as an empty world', () => {
   const store = memoryStore()
   store.text = JSON.stringify(VALID_EMPTY_SAVE)
-  const server = new MockServer({ manual: true, rng: RNG, store })
+  const server = new MockServer({ manual: true, rng: RNG, store, localRunner: new SimulatedRunner(RNG) })
   expect(Object.keys(server.snapshot().agents)).toEqual([])
   expect(server.snapshot().now).toBe(1)
 })
@@ -309,7 +310,7 @@ test('a malformed save is discarded instead of crashing the load', () => {
     const store = memoryStore()
     store.text = JSON.stringify({ ...VALID_EMPTY_SAVE, ...patch })
     let server: MockServer | undefined
-    expect(() => { server = new MockServer({ manual: true, rng: RNG, store }) }, label).not.toThrow()
+    expect(() => { server = new MockServer({ manual: true, rng: RNG, store, localRunner: new SimulatedRunner(RNG) }) }, label).not.toThrow()
     expect(Object.keys(server!.snapshot().agents), label).toHaveLength(4) // seed, not the malformed save
     expect(Object.keys(server!.snapshot().runs), label).toEqual([])
   }
@@ -319,7 +320,7 @@ test('retainWorld selects runs, tasks and events by the persistence rules', () =
   const w = seedWorld(1000)
   const run = (id: string, taskId: TaskId, startedAt: number, status: Run['status']): Run => ({
     id: id as RunId, taskId, agentId: 'ag-coder' as AgentId, sandboxId: sb('sb-docker-1'), title: id, attempt: 1,
-    status, progress: status === 'running' ? 0.5 : 1, durationMs: 10, startedAt, endedAt: status === 'running' ? null : startedAt + 10,
+    status, execution: 'simulated', progress: status === 'running' ? 0.5 : 1, durationMs: 10, startedAt, endedAt: status === 'running' ? null : startedAt + 10,
     tokens: 1, output: null, error: null,
   })
   const task = (id: string, flowId: string, status: Task['status']): Task => ({
@@ -401,7 +402,7 @@ test('a pipeline survives a restart through the world file', () => {
   ])
   expect(w.runs['run-mjuohs007' as RunId]).toEqual({
     id: 'run-mjuohs007', taskId: 'tk-mjuohs005', agentId: 'ag-planner', sandboxId: 'sb-local-1', title: 'plan', attempt: 1,
-    status: 'succeeded', progress: 1, durationMs: 12500, startedAt: 1767225600001, endedAt: 1767225612501, tokens: 4250,
+    status: 'succeeded', execution: 'simulated', progress: 1, durationMs: 12500, startedAt: 1767225600001, endedAt: 1767225612501, tokens: 4250,
     output: { summary: 'The tech lead completed "plan".', artifacts: [{ kind: 'note', label: 'Completion note for plan', url: null }] },
     error: null,
   })

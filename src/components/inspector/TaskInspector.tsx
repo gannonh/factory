@@ -2,11 +2,13 @@ import { TASK_STATUS_COLOR, taskOriginLabel, type Task } from '../../domain/type
 import { useStore } from '../../store'
 import { Badge, Dot, Section, fmtDuration } from '../ui'
 import { TaskInputSection } from './TaskInputSection'
+import { useWallNow } from '../../useWallNow'
 
 const RUN_STATUS_COLOR = { running: '#22d3ee', succeeded: '#34d399', failed: '#f87171' } as const
 
 export function TaskInspector({ task }: { task: Task }) {
   const world = useStore((state) => state.world)
+  const wallNow = useWallNow()
   const select = useStore((state) => state.select)
   const agent = world.agents[task.agentId]
   const runs = Object.values(world.runs).filter((run) => run.taskId === task.id).sort((a, b) => a.startedAt - b.startedAt)
@@ -56,7 +58,7 @@ export function TaskInspector({ task }: { task: Task }) {
                 <button key={run.id} onClick={() => select({ kind: 'run', id: run.id })} className="flex items-center gap-2 rounded-md border border-ink-700 bg-ink-850 px-2.5 py-2 text-xs text-left hover:border-cyan-400/40">
                   <Badge color={RUN_STATUS_COLOR[run.status]}><Dot color={RUN_STATUS_COLOR[run.status]} pulse={run.status === 'running'} />{run.status}</Badge>
                   <span className="text-ink-400">attempt {run.attempt}</span>
-                  <span className="ml-auto font-mono tabular-nums text-ink-300">{fmtDuration((run.endedAt ?? world.now) - run.startedAt)}</span>
+                  <span className="ml-auto font-mono tabular-nums text-ink-300">{fmtDuration(Math.max(0, (run.endedAt ?? (run.execution === 'local' ? wallNow : world.now)) - run.startedAt))}</span>
                 </button>
               ))}
             </div>}

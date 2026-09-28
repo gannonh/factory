@@ -34,7 +34,7 @@ export const createApi = (server: MockServer) => ({
   sandboxes: {
     act: (id: SandboxId, action: SandboxAction) => server.sandboxAction(id, action),
     create: (input: { name: string; kind: SandboxKind; host: string; image: string; capacity?: number }) => server.createSandbox(input),
-    update: (id: SandboxId, patch: { capacity: number }) => server.updateSandbox(id, patch),
+    update: (id: SandboxId, patch: { capacity?: number; host?: string }) => server.updateSandbox(id, patch),
   },
   triggers: {
     update: (id: TriggerId, patch: Partial<Omit<Trigger, 'id' | 'position' | 'groupId'>>) => server.updateTrigger(id, patch),

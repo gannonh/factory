@@ -198,8 +198,9 @@ export type Run = {
   title: string
   attempt: number
   status: RunStatus
-  progress: number
-  durationMs: number
+  execution: 'simulated' | 'local'
+  progress: number | null
+  durationMs: number | null
   startedAt: number
   endedAt: number | null
   tokens: number

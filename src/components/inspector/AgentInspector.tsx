@@ -5,9 +5,11 @@ import { TOOL_CATALOG } from '../../domain/seed'
 import { AGENT_STATUS_COLOR, MODELS, TASK_STATUS_COLOR, type Agent, type AgentPatch, type ModelName, type Priority } from '../../domain/types'
 import { history, useStore } from '../../store'
 import { Badge, Button, Dot, DraftInput, DraftTextarea, Field, Input, Section, Select, Textarea, cx, fmtDuration } from '../ui'
+import { useWallNow } from '../../useWallNow'
 
 export function AgentInspector({ agent }: { agent: Agent }) {
   const world = useStore((s) => s.world)
+  const wallNow = useWallNow()
   const setDockTab = useStore((s) => s.setDockTab)
   const update = (patch: AgentPatch) => history.updateAgent(agent.id, patch)
   const runs = Object.values(world.runs).filter((r) => r.agentId === agent.id)
@@ -42,8 +44,8 @@ export function AgentInspector({ agent }: { agent: Agent }) {
           <div className="flex flex-col gap-1.5">
             {active.map((r) => (
               <div key={r.id} className="rounded-md border border-ink-700 bg-ink-850 px-2 py-1.5">
-                <div className="flex justify-between text-[11px]"><span className="truncate">{r.title}</span><span className="text-ink-400 font-mono tabular-nums">{fmtDuration(world.now - r.startedAt)}</span></div>
-                <div className="mt-1 h-1 rounded-full bg-ink-700 overflow-hidden"><div className="h-full bg-cyan-400 transition-[width]" style={{ width: `${r.progress * 100}%` }} /></div>
+                <div className="flex justify-between text-[11px]"><span className="truncate">{r.title}</span><span className="text-ink-400 font-mono tabular-nums">{fmtDuration(Math.max(0, (r.execution === 'local' ? wallNow : world.now) - r.startedAt))}</span></div>
+                {r.progress === null ? <div className="mt-1 text-[10px] text-cyan-300 animate-pulse">running · progress unknown</div> : <div className="mt-1 h-1 rounded-full bg-ink-700 overflow-hidden"><div className="h-full bg-cyan-400 transition-[width]" style={{ width: `${r.progress * 100}%` }} /></div>}
                 <div className="text-[10px] text-ink-400 mt-1">on {world.sandboxes[r.sandboxId]?.name ?? '?'} · attempt {r.attempt} · {r.tokens.toLocaleString()} tok</div>
               </div>
             ))}

@@ -38,7 +38,7 @@ function sandbox(p: Partial<Sandbox> & Pick<Sandbox, 'id' | 'name' | 'kind' | 'h
   }
 }
 
-export function seedWorld(now: number): World {
+export function seedWorld(now: number, options: { localRoot?: string; localCronEnabled?: boolean } = {}): World {
   const agents: Agent[] = [
     agent({ id: a('ag-planner'), name: 'Planner', role: 'tech lead', model: 'claude-opus-5', position: { x: 320, y: 60 }, tools: ['read_file', 'search', 'linear'] }),
     agent({ id: a('ag-coder'), name: 'Coder', role: 'implementer', concurrency: 2, position: { x: 320, y: 260 } }),
@@ -46,7 +46,7 @@ export function seedWorld(now: number): World {
     agent({ id: a('ag-qa'), name: 'QA', role: 'test engineer', model: 'claude-haiku-4-5-20251001', position: { x: 640, y: 60 }, tools: ['bash', 'playwright'] }),
   ]
   const sandboxes: Sandbox[] = [
-    sandbox({ id: s('sb-local-1'), name: 'mac-studio', kind: 'local', host: 'localhost', capacity: 1, position: { x: 320, y: 470 } }),
+    sandbox({ id: s('sb-local-1'), name: 'mac-studio', kind: 'local', host: options.localRoot ?? 'localhost', capacity: 1, position: { x: 320, y: 470 } }),
     sandbox({ id: s('sb-docker-1'), name: 'builder-a', kind: 'docker', host: 'docker.internal', capacity: 2, position: { x: 640, y: 470 } }),
     sandbox({ id: s('sb-vps-1'), name: 'hetzner-cx32', kind: 'vps', host: '65.21.14.7', image: 'ubuntu-24.04', capacity: 4, position: { x: 960, y: 470 }, state: 'stopped', progress: 0 }),
   ]
@@ -54,6 +54,7 @@ export function seedWorld(now: number): World {
     { id: t('tr-cron'), name: 'Nightly sweep', kind: 'cron', intervalMs: 18_000, enabled: true, lastFiredAt: null, fired: 0, template: 'Sweep open issues and plan the next batch', position: { x: 40, y: 60 }, groupId: null },
     { id: t('tr-webhook'), name: 'GitHub PR opened', kind: 'webhook', intervalMs: 26_000, enabled: true, lastFiredAt: null, fired: 0, template: 'Review the newly opened pull request', position: { x: 40, y: 260 }, groupId: null },
   ]
+  if (options.localCronEnabled === false) triggers[0].enabled = false
   const edges: Edge[] = [
     { id: e('ed-1'), kind: 'triggers', source: t('tr-cron'), target: a('ag-planner') },
     { id: e('ed-2'), kind: 'handoff', source: a('ag-planner'), target: a('ag-coder') },

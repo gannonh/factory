@@ -9,6 +9,7 @@
  */
 import { createApi, type InProcessApi } from '../server/api'
 import { MockServer } from '../server/simulation'
+import { SimulatedRunner } from '../server/runners'
 import type { WorldStore } from '../server/worldFile'
 import type { AgentId, FactoryEvent, SandboxId, Task, TaskId, World } from '../src/domain/types'
 
@@ -40,7 +41,7 @@ export type Fixture = {
 }
 
 export function makeFixture(options: { isolate?: boolean; store?: WorldStore } = {}): Fixture {
-  const server = new MockServer({ manual: true, rng: RNG, store: options.store })
+  const server = new MockServer({ manual: true, rng: RNG, store: options.store, localRunner: new SimulatedRunner(RNG) })
   const api = createApi(server)
   let latest = server.snapshot()
   api.subscribe((w) => { latest = w })

@@ -110,9 +110,8 @@ export function createHistory(api: Api, getWorld: () => World) {
         return values && { target: 'trigger', id: write.id, values }
       }
       case 'sandbox': {
-        // the sandbox API writes capacity only
-        const capacity = w.sandboxes[write.id]?.capacity
-        return capacity === undefined ? null : { target: 'sandbox', id: write.id, values: { capacity } }
+        const values = pick(w.sandboxes[write.id], keys)
+        return values && { target: 'sandbox', id: write.id, values }
       }
       case 'group': {
         const name = w.groups[write.id]?.name
