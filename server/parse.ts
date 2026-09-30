@@ -46,6 +46,15 @@ export function array<T>(parser: Parser<T>): Parser<T[]> {
   return (value, path) => (Array.isArray(value) ? value.map((item, i) => parser(item, `${path}[${i}]`)) : fail(path, 'an array'))
 }
 
+export function record<K extends string, T>(key: Parser<K>, item: Parser<T>): Parser<Record<K, T>> {
+  return (value, path) => {
+    if (!isRecord(value)) return fail(path, 'an object')
+    return Object.fromEntries(Object.entries(value).map(([name, entry]) =>
+      [key(name, `${path} key`), item(entry, `${path}.${name}`)],
+    )) as Record<K, T>
+  }
+}
+
 /** Builds the output from the declared keys only, so unknown keys never reach the domain. */
 export function object<T>(shape: Shape<T>): Parser<T> {
   return (value, path) => {
