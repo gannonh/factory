@@ -1,93 +1,15 @@
+import type { AgentPatch, GraphFragment, NodeKind, NodeRef, RetryPolicy, SandboxAction, TaskId, Trigger, World } from '../src/domain/types'
+import { args, array, boolean, id, nullable, object, oneOf, optional, partial, string, tagged, type Parser } from './parse'
 import {
-  EDGE_KINDS, MODELS, SANDBOX_TRANSITIONS, isCapacity,
-  type Agent, type AgentId, type AgentPatch, type Edge, type EdgeId, type GraphFragment, type Group, type GroupId, type Lease, type Metrics, type NodeId, type NodeKind,
-  type NodeRef, type Position, type Priority, type RetryPolicy, type RunId, type Sandbox, type SandboxAction, type SandboxId, type SandboxKind, type SandboxState,
-  type TaskId, type Trigger, type TriggerId, type TriggerKind, type World,
-} from '../src/domain/types'
-import { args, array, boolean, id, nullable, number, object, oneOf, optional, partial, refine, string, tagged, type Parser } from './parse'
+  agent, agentFields, agentId, capacity, edge, edgeId, edgeKind, group, groupId, nodeId, position,
+  priority, retryFields, sandbox, sandboxId, sandboxKind, trigger, triggerFields, triggerId,
+} from './records'
 import type { MockServer } from './simulation'
 
-const nodeId = id<NodeId>()
-const agentId = id<AgentId>()
-const sandboxId = id<SandboxId>()
-const triggerId = id<TriggerId>()
-const edgeId = id<EdgeId>()
-const groupId = id<GroupId>()
-
 const nodeKind: Parser<NodeKind> = oneOf('agent', 'sandbox', 'trigger')
-const edgeKind = oneOf(...EDGE_KINDS)
-const priority: Parser<Priority> = oneOf('low', 'normal', 'high')
-const sandboxKind: Parser<SandboxKind> = oneOf('local', 'docker', 'vps', 'remote')
-const sandboxState = oneOf(...(Object.keys(SANDBOX_TRANSITIONS) as SandboxState[]))
 const sandboxAction: Parser<SandboxAction> = oneOf('start', 'stop', 'restart', 'rebuild', 'destroy')
-const triggerKind: Parser<TriggerKind> = oneOf('cron', 'webhook', 'manual', 'event')
-const capacity = refine(number, isCapacity, 'an integer of at least 1')
-
-const position = object<Position>({ x: number, y: number })
-
-const retryFields = { maxAttempts: number, backoffMs: number, backoff: oneOf('fixed', 'exponential') }
-
-const agentFields = {
-  name: string,
-  role: string,
-  model: oneOf(...MODELS),
-  temperature: number,
-  concurrency: number,
-  timeoutMs: number,
-  tools: array(string),
-  systemPrompt: string,
-  completed: number,
-  failed: number,
-}
-
-const agent = object<Agent>({
-  ...agentFields,
-  id: agentId,
-  retry: object<RetryPolicy>(retryFields),
-  status: oneOf('idle', 'working', 'paused', 'error'),
-  position,
-  groupId: nullable(groupId),
-})
-
 const agentPatch = partial<AgentPatch>({ ...agentFields, retry: partial<RetryPolicy>(retryFields) })
-
-const metrics = object<Metrics>({ cpu: number, mem: number, disk: number })
-
-const sandbox = object<Sandbox>({
-  id: sandboxId,
-  name: string,
-  kind: sandboxKind,
-  host: string,
-  image: string,
-  state: sandboxState,
-  stateSince: number,
-  progress: number,
-  metrics,
-  history: array(metrics),
-  leases: array(object<Lease>({ agentId, runId: id<RunId>(), since: number })),
-  capacity,
-  restartPending: boolean,
-  position,
-  groupId: nullable(groupId),
-})
-
-const triggerFields = {
-  name: string,
-  kind: triggerKind,
-  intervalMs: number,
-  enabled: boolean,
-  lastFiredAt: nullable(number),
-  fired: number,
-  template: string,
-}
-
-const trigger = object<Trigger>({ ...triggerFields, id: triggerId, position, groupId: nullable(groupId) })
-
 const triggerPatch = partial<Omit<Trigger, 'id' | 'position' | 'groupId'>>(triggerFields)
-
-const edge = object<Edge>({ id: edgeId, kind: edgeKind, source: nodeId, target: nodeId })
-
-const group = object<Group>({ id: groupId, name: string })
 
 const nodeRef = tagged<NodeRef>({
   agent: object({ kind: oneOf('agent'), node: agent }),

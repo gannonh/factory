@@ -372,14 +372,16 @@ const logger = () => {
 const fileServer = (path: string, log?: (line: string) => void) =>
   makeFixture({ store: fileStore(path, log), isolate: false })
 
-test.each([
+const malformedRecords: [string, 'agents' | 'sandboxes' | 'triggers' | 'edges' | 'tasks' | 'runs', string, unknown][] = [
   ['agent', 'agents', 'retry', undefined],
   ['sandbox', 'sandboxes', 'metrics', { cpu: 'busy', mem: 0, disk: 4 }],
   ['trigger', 'triggers', 'intervalMs', 'soon'],
   ['edge', 'edges', 'kind', 'unknown'],
   ['task', 'tasks', 'flowId', undefined],
   ['run', 'runs', 'startedAt', 'yesterday'],
-])('a malformed %s record is quarantined before the world can tick', (kind, collection, field, value) => {
+]
+
+test.each(malformedRecords)('a malformed %s record is quarantined before the world can tick', (kind, collection, field, value) => {
   const path = join(dir, 'world.json')
   const first = makeFixture({ store: fileStore(path), isolate: true })
   first.api.agents.update(first.agent('Planner'), { name: 'Saved planner' })
@@ -388,9 +390,9 @@ test.each([
   first.api.sim.advance(12_500)
   first.server.flush()
   const saved = JSON.parse(readFileSync(path, 'utf8'))
-  const record = Object.values(saved[collection!])[0]
+  const record = Object.values(saved[collection])[0]
   expect(record, `${kind} fixture`).toBeDefined()
-  Object.assign(record!, { [field!]: value })
+  Object.assign(record!, { [field]: value })
   const text = JSON.stringify(saved)
   writeFileSync(path, text)
 
@@ -410,6 +412,32 @@ test.each([
   expect(Object.values(second.world().runs).map((run) => [run.title, run.status])).toEqual([['after recovery', 'running']])
   second.server.flush()
   expect(readFileSync(`${path}.corrupt`, 'utf8')).toBe(text)
+})
+
+test('a server-saved file loads without changing its configuration or run history', () => {
+  const path = join(dir, 'world.json')
+  const first = makeFixture({ store: fileStore(path), isolate: true })
+  first.api.agents.update(first.agent('Planner'), { name: 'Saved planner', temperature: 0.7, tools: ['read_file'] })
+  first.api.agents.enqueue(first.agent('Saved planner'), { title: 'saved task', prompt: 'saved prompt', priority: 'high' })
+  first.api.sim.advance(1)
+  first.api.sim.advance(12_500)
+  first.api.sim.set({ paused: true, speed: 4 })
+  first.server.flush()
+  const text = readFileSync(path, 'utf8')
+  const { lines, log } = logger()
+
+  const second = fileServer(path, log)
+  expect(readFileSync(path, 'utf8')).toBe(text)
+  expect(existsSync(`${path}.corrupt`)).toBe(false)
+  expect(lines).toEqual([])
+  expect(second.world().sim).toEqual({ paused: true, speed: 4 })
+  expect(second.world().agents['ag-planner' as AgentId]).toMatchObject({ name: 'Saved planner', temperature: 0.7, tools: ['read_file'] })
+  expect(Object.values(second.world().tasks).map((task) => [task.title, task.prompt, task.priority, task.status])).toEqual([
+    ['saved task', 'saved prompt', 'high', 'succeeded'],
+  ])
+  expect(Object.values(second.world().runs).map((run) => [run.title, run.status, run.output])).toEqual([
+    ['saved task', 'succeeded', { summary: 'The tech lead completed "saved task".', artifacts: [{ kind: 'note', label: 'Completion note for saved task', url: null }] }],
+  ])
 })
 
 test('a pipeline survives a restart through the world file', () => {

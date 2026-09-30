@@ -43,7 +43,8 @@ import {
 import type { WorldStore } from './worldFile'
 import { ClaudeRunner, SimulatedRunner, gitArtifacts, prepareWorkdir, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
 import type { RunLogStore } from './runLogs'
-import { isRestorableInteger } from './storedNumber'
+import { array, boolean, id, number, object, oneOf, record } from './parse'
+import { agent, edge, event, group, run, sandbox, task, trigger } from './records'
 import { isAbsolute } from 'node:path'
 
 const TICK_MS = 400
@@ -979,29 +980,18 @@ export class MockServer {
 
 type Persisted = Pick<World, 'now' | 'agents' | 'sandboxes' | 'triggers' | 'edges' | 'groups' | 'sim' | 'tasks' | 'runs' | 'events'>
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-/** A record whose entries are all records; rejects arrays and null entries. */
-function isRecordMap(value: unknown): value is Record<string, Record<string, unknown>> {
-  return isRecord(value) && Object.values(value).every(isRecord)
-}
-
-/**
- * Shape check for a saved payload. Anything restoration consumes must be
- * present and the right kind; a malformed save is rejected whole so the caller
- * seeds a fresh world instead of crashing while restoring it.
- */
-function isPersisted(value: unknown): value is Persisted {
-  return isRecord(value)
-    && typeof value.now === 'number' && Number.isFinite(value.now)
-    && isRecordMap(value.agents) && isRecordMap(value.sandboxes) && isRecordMap(value.triggers)
-    && isRecordMap(value.edges) && isRecordMap(value.groups) && isRecordMap(value.tasks) && isRecordMap(value.runs)
-    && isRecord(value.sim) && typeof value.sim.paused === 'boolean'
-    && (value.sim.speed === 1 || value.sim.speed === 2 || value.sim.speed === 4)
-    && Array.isArray(value.events) && value.events.every((e) => isRecord(e) && isRestorableInteger(e.id))
-}
+const persisted = object<Persisted>({
+  now: number,
+  agents: record(id<AgentId>(), agent),
+  sandboxes: record(id<SandboxId>(), sandbox),
+  triggers: record(id<TriggerId>(), trigger),
+  edges: record(id<EdgeId>(), edge),
+  groups: record(id<GroupId>(), group),
+  tasks: record(id<TaskId>(), task),
+  runs: record(id<RunId>(), run),
+  sim: object({ paused: boolean, speed: oneOf(1, 2, 4) }),
+  events: array(event),
+})
 
 /**
  * The save payload for a world: what survives a restart. Logs never do. Every
@@ -1110,8 +1100,12 @@ function pastedNode(ref: NodeRef, id: string, offset: Position, now: number): No
 /** A saved world document ready to run, or null when it is not one. */
 function parseWorld(text: string): World | null {
   const parsed: unknown = JSON.parse(text)
-  if (!isPersisted(parsed)) return null
-  const p = parsed
+  let p: Persisted
+  try {
+    p = persisted(parsed, 'world')
+  } catch {
+    return null
+  }
   const now = p.now
   const agents = Object.fromEntries(Object.entries(p.agents).map(([id, a]) => [id, restoredAgent(a)])) as World['agents']
   const sandboxes = Object.fromEntries(Object.entries(p.sandboxes).map(([id, s]) => [id, restoredSandbox(s, now)])) as World['sandboxes']
