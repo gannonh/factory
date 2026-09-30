@@ -71,7 +71,7 @@ function pick<T extends object>(record: T | undefined, keys: string[]): Partial<
   return Object.fromEntries(keys.map((key) => [key, (record as Record<string, unknown>)[key]])) as Partial<T>
 }
 
-export function createHistory(api: Api, getWorld: () => World) {
+export function createHistory(api: Api, getWorld: () => World, prepareEdit?: () => () => void) {
   const entries: HistoryEntry[] = []
   let cursor = 0
   // true while the top entry is a patch that the next same-key patch may extend
@@ -131,7 +131,17 @@ export function createHistory(api: Api, getWorld: () => World) {
 
   let tail: Promise<void> = Promise.resolve()
   function enqueue<T>(op: () => Promise<T>): Promise<T> {
-    const run = tail.then(op, op)
+    let assertCurrent: (() => void) | undefined
+    try {
+      assertCurrent = prepareEdit?.()
+    } catch (error) {
+      return Promise.reject(error)
+    }
+    const runEdit = () => {
+      assertCurrent?.()
+      return op()
+    }
+    const run = tail.then(runEdit, runEdit)
     tail = run.then(() => undefined, () => undefined)
     return run
   }

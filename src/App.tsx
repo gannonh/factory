@@ -12,6 +12,8 @@ import { useShortcuts } from './shortcuts'
 export default function App() {
   const view = useStore((s) => s.view)
   const link = useStore((s) => s.link)
+  const commandError = useStore((s) => s.commandError)
+  const dismissCommandError = useStore((s) => s.dismissCommandError)
   useShortcuts({
     undo: () => { void history.undo(); return true },
     redo: () => { void history.redo(); return true },
@@ -22,7 +24,13 @@ export default function App() {
         <TopBar />
         {link === 'down' && (
           <div role="status" className="shrink-0 bg-red-950 text-red-100 text-sm px-3 py-2 border-b border-red-800">
-            disconnected from server
+            Disconnected from server. Showing the last world, which is stale. Reconnecting…
+          </div>
+        )}
+        {commandError && (
+          <div role="alert" className="shrink-0 flex items-center justify-between gap-3 bg-red-950 text-red-100 text-sm px-3 py-2 border-b border-red-800">
+            <span>{commandError}</span>
+            <button onClick={dismissCommandError} aria-label="Dismiss command error" className="underline text-xs">Dismiss</button>
           </div>
         )}
         <div className="flex-1 flex min-h-0">
