@@ -1,12 +1,15 @@
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import { defineConfig } from 'vite'
+import { configDefaults, defineConfig } from 'vitest/config'
 
 const worldPort = process.env.FACTORY_WORLD_PORT ?? process.env.FACTORY_PORT ?? '8787'
 const worldTarget = `http://127.0.0.1:${worldPort}`
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  test: {
+    exclude: [...configDefaults.exclude, '**/.factory-runs/**'],
+  },
   server: {
     host: '127.0.0.1',
     port: 5173,
