@@ -150,9 +150,11 @@ function TaskComposer({ agent }: { agent: Agent }) {
   const [title, setTitle] = useState('')
   const [prompt, setPrompt] = useState('')
   const [priority, setPriority] = useState<Priority>('normal')
+  const [pending, setPending] = useState(false)
   const setDockTab = useStore((s) => s.setDockTab)
   const submit = () => {
-    if (!title.trim()) return
+    if (pending || !title.trim()) return
+    setPending(true)
     Promise.resolve(api.agents.enqueue(agent.id, { title: title.trim(), prompt: prompt.trim() || title.trim(), priority }))
       .then(() => {
         setTitle('')
@@ -160,6 +162,7 @@ function TaskComposer({ agent }: { agent: Agent }) {
         setDockTab('queue')
       })
       .catch(() => {})
+      .finally(() => setPending(false))
   }
   return (
     <Section title="Compose task">
@@ -170,7 +173,7 @@ function TaskComposer({ agent }: { agent: Agent }) {
           <button key={p} onClick={() => setPriority(p)} className={cx('h-6 rounded-md px-2 text-[11px] border', priority === p ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-200' : 'border-ink-600 text-ink-300 hover:bg-ink-800')}>{p}</button>
         ))}
         <span className="flex-1" />
-        <Button variant="primary" onClick={submit} disabled={!title.trim()} title="⌘↵"><Send size={12} />Queue</Button>
+        <Button variant="primary" onClick={submit} disabled={pending || !title.trim()} title="⌘↵"><Send size={12} />{pending ? 'Queuing…' : 'Queue'}</Button>
       </div>
     </Section>
   )

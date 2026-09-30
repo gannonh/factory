@@ -25,6 +25,7 @@ let started = false
 const INITIAL_RETRY_MS = 500
 const MAX_RETRY_MS = 4000
 const DISCONNECTED_MESSAGE = 'Command rejected: disconnected from server. Nothing was queued.'
+const UNKNOWN_OUTCOME_MESSAGE = 'Connection lost after sending the command. Its outcome is unknown. Check the live world before retrying.'
 let retryMs = INITIAL_RETRY_MS
 
 function setLink(next: Link) {
@@ -46,9 +47,21 @@ function parseSnapshot(value: unknown): Snapshot | null {
   return { rev: value.rev, world: value.world as World }
 }
 
-async function command(method: string, args: unknown[]): Promise<unknown> {
+function currentConnection() {
   const connection = socket
   if (link !== 'up' || connection?.readyState !== WebSocket.OPEN) throw new Error(DISCONNECTED_MESSAGE)
+  return connection
+}
+
+export function captureConnection() {
+  const connection = currentConnection()
+  return () => {
+    if (socket !== connection || link !== 'up') throw new Error('Connection changed before this edit was sent. Nothing was queued.')
+  }
+}
+
+async function command(method: string, args: unknown[]): Promise<unknown> {
+  const connection = currentConnection()
   let response: Response
   try {
     response = await fetch(`${httpBase}/command`, {
@@ -61,10 +74,16 @@ async function command(method: string, args: unknown[]): Promise<unknown> {
       setLink('down')
       connection.close()
     }
-    throw new Error(DISCONNECTED_MESSAGE)
+    throw new Error(UNKNOWN_OUTCOME_MESSAGE)
   }
   if (response.status === 403) throw new Error('forbidden origin')
-  const body: unknown = await response.json()
+  let body: unknown
+  try {
+    body = await response.json()
+  } catch {
+    throw new Error(UNKNOWN_OUTCOME_MESSAGE)
+  }
+  if (socket !== connection || link !== 'up') throw new Error(UNKNOWN_OUTCOME_MESSAGE)
   if (typeof body !== 'object' || body === null || !('ok' in body)) throw new Error('bad response')
   if (body.ok !== true) {
     const error = 'error' in body && typeof body.error === 'string' ? body.error : 'command failed'
@@ -72,7 +91,7 @@ async function command(method: string, args: unknown[]): Promise<unknown> {
   }
   const snap = parseSnapshot(body)
   if (!snap) throw new Error('bad response')
-  if (socket === connection && link === 'up') apply(snap.rev, snap.world)
+  apply(snap.rev, snap.world)
   return 'result' in body ? body.result : undefined
 }
 

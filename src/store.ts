@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api, subscribeCommandError, subscribeLink, type Link } from './api/client'
+import { api, captureConnection, subscribeCommandError, subscribeLink, type Link } from './api/client'
 import { existingSubject, type EdgeKind, type LogLevel, type Subject, type World } from './domain/types'
 import { seedWorld } from './domain/seed'
 import { createClipboard } from './clipboard'
@@ -65,7 +65,7 @@ api.subscribe((world) => {
 subscribeLink((link) => useStore.setState({ link }))
 subscribeCommandError((commandError) => useStore.setState({ commandError }))
 
-export const history = createHistory(api, () => useStore.getState().world)
+export const history = createHistory(api, () => useStore.getState().world, captureConnection)
 export const clipboard = createClipboard(history, () => useStore.getState().world)
 
 export const useWorld = () => useStore((s) => s.world)
