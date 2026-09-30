@@ -17,10 +17,15 @@ type Snapshot = { rev: number; world: World }
 
 const listeners = new Set<(world: World) => void>()
 const linkListeners = new Set<(link: Link) => void>()
+const commandErrorListeners = new Set<(message: string) => void>()
 let latest: Snapshot | null = null
 let link: Link = 'connecting'
 let socket: WebSocket | null = null
 let started = false
+const INITIAL_RETRY_MS = 500
+const MAX_RETRY_MS = 4000
+const DISCONNECTED_MESSAGE = 'Command rejected: disconnected from server. Nothing was queued.'
+let retryMs = INITIAL_RETRY_MS
 
 function setLink(next: Link) {
   if (link === next) return
@@ -28,8 +33,8 @@ function setLink(next: Link) {
   for (const fn of linkListeners) fn(link)
 }
 
-function apply(rev: number, world: World) {
-  if (latest && rev < latest.rev) return
+function apply(rev: number, world: World, first = false) {
+  if (!first && latest && rev < latest.rev) return
   latest = { rev, world }
   for (const fn of listeners) fn(world)
 }
@@ -42,6 +47,8 @@ function parseSnapshot(value: unknown): Snapshot | null {
 }
 
 async function command(method: string, args: unknown[]): Promise<unknown> {
+  const connection = socket
+  if (link !== 'up' || connection?.readyState !== WebSocket.OPEN) throw new Error(DISCONNECTED_MESSAGE)
   let response: Response
   try {
     response = await fetch(`${httpBase}/command`, {
@@ -50,8 +57,11 @@ async function command(method: string, args: unknown[]): Promise<unknown> {
       body: JSON.stringify({ method, args }),
     })
   } catch {
-    setLink('down')
-    throw new Error('disconnected from server')
+    if (socket === connection) {
+      setLink('down')
+      connection.close()
+    }
+    throw new Error(DISCONNECTED_MESSAGE)
   }
   if (response.status === 403) throw new Error('forbidden origin')
   const body: unknown = await response.json()
@@ -62,7 +72,7 @@ async function command(method: string, args: unknown[]): Promise<unknown> {
   }
   const snap = parseSnapshot(body)
   if (!snap) throw new Error('bad response')
-  apply(snap.rev, snap.world)
+  if (socket === connection && link === 'up') apply(snap.rev, snap.world)
   return 'result' in body ? body.result : undefined
 }
 
@@ -72,21 +82,48 @@ export function subscribeLink(fn: (next: Link) => void) {
   return () => { linkListeners.delete(fn) }
 }
 
+export function subscribeCommandError(fn: (message: string) => void) {
+  commandErrorListeners.add(fn)
+  return () => { commandErrorListeners.delete(fn) }
+}
+
+function connect() {
+  const connection = new WebSocket(wsUrl)
+  socket = connection
+  let first = true
+  connection.addEventListener('message', (event) => {
+    if (socket !== connection) return
+    const snap = parseSnapshot(JSON.parse(String(event.data)))
+    if (!snap) return
+    apply(snap.rev, snap.world, first)
+    first = false
+    retryMs = INITIAL_RETRY_MS
+    setLink('up')
+  })
+  const disconnect = () => {
+    if (socket !== connection) return
+    socket = null
+    setLink('down')
+    connection.close()
+    setTimeout(connect, retryMs)
+    retryMs = Math.min(retryMs * 2, MAX_RETRY_MS)
+  }
+  connection.addEventListener('close', disconnect)
+  connection.addEventListener('error', disconnect)
+}
+
 export function startClient() {
   if (started) return
   started = true
-  socket = new WebSocket(wsUrl)
-  socket.addEventListener('open', () => setLink('up'))
-  socket.addEventListener('message', (event) => {
-    const snap = parseSnapshot(JSON.parse(String(event.data)))
-    if (snap) apply(snap.rev, snap.world)
-  })
-  socket.addEventListener('close', () => setLink('down'))
-  socket.addEventListener('error', () => setLink('down'))
+  connect()
 }
 
 function call<T>(method: string, args: unknown[]): Promise<T> {
-  return command(method, args) as Promise<T>
+  return command(method, args).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : 'Command failed'
+    for (const fn of commandErrorListeners) fn(message)
+    throw error
+  }) as Promise<T>
 }
 
 export const api: Api = {

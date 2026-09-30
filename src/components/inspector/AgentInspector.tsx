@@ -153,10 +153,13 @@ function TaskComposer({ agent }: { agent: Agent }) {
   const setDockTab = useStore((s) => s.setDockTab)
   const submit = () => {
     if (!title.trim()) return
-    api.agents.enqueue(agent.id, { title: title.trim(), prompt: prompt.trim() || title.trim(), priority })
-    setTitle('')
-    setPrompt('')
-    setDockTab('queue')
+    Promise.resolve(api.agents.enqueue(agent.id, { title: title.trim(), prompt: prompt.trim() || title.trim(), priority }))
+      .then(() => {
+        setTitle('')
+        setPrompt('')
+        setDockTab('queue')
+      })
+      .catch(() => {})
   }
   return (
     <Section title="Compose task">
