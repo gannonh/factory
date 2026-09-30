@@ -372,6 +372,46 @@ const logger = () => {
 const fileServer = (path: string, log?: (line: string) => void) =>
   makeFixture({ store: fileStore(path, log), isolate: false })
 
+test.each([
+  ['agent', 'agents', 'retry', undefined],
+  ['sandbox', 'sandboxes', 'metrics', { cpu: 'busy', mem: 0, disk: 4 }],
+  ['trigger', 'triggers', 'intervalMs', 'soon'],
+  ['edge', 'edges', 'kind', 'unknown'],
+  ['task', 'tasks', 'flowId', undefined],
+  ['run', 'runs', 'startedAt', 'yesterday'],
+])('a malformed %s record is quarantined before the world can tick', (kind, collection, field, value) => {
+  const path = join(dir, 'world.json')
+  const first = makeFixture({ store: fileStore(path), isolate: true })
+  first.api.agents.update(first.agent('Planner'), { name: 'Saved planner' })
+  first.api.agents.enqueue(first.agent('Saved planner'), { title: 'saved task', prompt: 'p', priority: 'normal' })
+  first.api.sim.advance(1)
+  first.api.sim.advance(12_500)
+  first.server.flush()
+  const saved = JSON.parse(readFileSync(path, 'utf8'))
+  const record = Object.values(saved[collection!])[0]
+  expect(record, `${kind} fixture`).toBeDefined()
+  Object.assign(record!, { [field!]: value })
+  const text = JSON.stringify(saved)
+  writeFileSync(path, text)
+
+  const { lines, log } = logger()
+  const second = fileServer(path, log)
+  expect(Object.values(second.world().agents).map((agent) => agent.name)).toEqual(['Planner', 'Coder', 'Reviewer', 'QA'])
+  expect(second.world().tasks).toEqual({})
+  expect(second.world().runs).toEqual({})
+  expect(second.world().events).toEqual([])
+  expect(second.world().agents['ag-planner' as AgentId].retry).toEqual({ maxAttempts: 3, backoffMs: 2000, backoff: 'exponential' })
+  expect(existsSync(path)).toBe(false)
+  expect(readFileSync(`${path}.corrupt`, 'utf8')).toBe(text)
+  expect(lines).toEqual([`world file ${path} could not be loaded (not a saved world); moved it to ${path}.corrupt and started from the seed`])
+
+  second.api.agents.enqueue(second.agent('Planner'), { title: 'after recovery', prompt: 'p', priority: 'normal' })
+  second.api.sim.advance(1)
+  expect(Object.values(second.world().runs).map((run) => [run.title, run.status])).toEqual([['after recovery', 'running']])
+  second.server.flush()
+  expect(readFileSync(`${path}.corrupt`, 'utf8')).toBe(text)
+})
+
 test('a pipeline survives a restart through the world file', () => {
   const path = join(dir, 'world.json')
   const first = makeFixture({ store: fileStore(path), isolate: true })
