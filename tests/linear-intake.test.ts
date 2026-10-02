@@ -441,10 +441,47 @@ test('the recommended states follow the team workflow by position', async () => 
 
   const f = makeFixture({ linear: client(), clock: wallClock().read })
   const catalog = await f.api.linear.catalog()
-  expect(catalog.teams.map((t) => [t.key, t.name, t.projects.map((p) => p.name)])).toEqual([['ENG', 'Engineering', ['Alpha', 'Beta']], ['OPS', 'Operations', []]])
+  expect(catalog.teams.map((t) => [t.key, t.name, t.projects.map((p) => p.name)]))
+    .toEqual([['ENG', 'Engineering', ['Alpha', 'Beta']], ['OPS', 'Operations', []], ['KAT', 'Kata', ['Gamma']]])
   expect(catalog.teams[0].states.map((s) => s.name)).toEqual(['Backlog', 'Todo', 'In Progress', 'In Review', 'Done', 'Canceled'])
   expect(recommendedStates(catalog.teams[0].states))
     .toEqual({ pickupState: 'state-eng-todo', startedState: 'state-eng-in-progress', finishedState: 'state-eng-in-review', failedState: null })
+  expect(catalog.teams[2].states.map((s) => s.name))
+    .toEqual(['Backlog', 'Todo', 'Start', 'In Progress', 'Agent Review', 'Human Review', 'Merging', 'Done', 'Canceled'])
+  expect(recommendedStates(catalog.teams[2].states))
+    .toEqual({ pickupState: 'state-kat-start', startedState: 'state-kat-in-progress', finishedState: 'state-kat-agent-review', failedState: null })
+})
+
+test('the recommended pickup is Start when the workflow has one, else the first unstarted state', () => {
+  const pickup = (states: WorkflowState[]) => recommendedStates(states).pickupState
+  expect(pickup([
+    { id: 's-backlog', name: 'Backlog', type: 'backlog', position: 0 },
+    { id: 's-start', name: 'Start', type: 'unstarted', position: 2 },
+    { id: 's-todo', name: 'Todo', type: 'unstarted', position: 1 },
+    { id: 's-doing', name: 'In Progress', type: 'started', position: 3 },
+  ])).toBe('s-start')
+  expect(pickup([
+    { id: 's-backlog', name: 'Backlog', type: 'backlog', position: 0 },
+    { id: 's-todo', name: 'Todo', type: 'unstarted', position: 1 },
+    { id: 's-restarted', name: 'Restarted', type: 'unstarted', position: 2 },
+    { id: 's-doing', name: 'In Progress', type: 'started', position: 3 },
+  ])).toBe('s-todo')
+  expect(pickup([
+    { id: 's-backlog', name: 'Backlog', type: 'backlog', position: 0 },
+    { id: 's-start', name: 'Start', type: 'started', position: 1 },
+    { id: 's-done', name: 'Done', type: 'completed', position: 2 },
+  ])).toBeNull()
+})
+
+test('a saved pickup other than the recommended one survives a restart', () => {
+  const store = memoryStore()
+  const settings: LinearSettings = { ...ENG, team: 'team-kat', pickupState: 'state-kat-todo' }
+  const first = makeFixture({ store, linear: client(), clock: wallClock().read })
+  const trigger = linearTrigger(first, first.agent('Coder'), settings)
+  first.server.flush()
+
+  const second = makeFixture({ store, isolate: false, linear: client(), clock: wallClock().read })
+  expect(second.world().triggers[trigger].linear).toEqual(settings)
 })
 
 test('a new Linear trigger starts disabled, and preview pages through every match', async () => {
