@@ -6,6 +6,8 @@ export type TaskId = string & { readonly __brand: 'TaskId' }
 export type RunId = string & { readonly __brand: 'RunId' }
 export type FlowId = string & { readonly __brand: 'FlowId' }
 export type GroupId = string & { readonly __brand: 'GroupId' }
+/** A work backend's own issue id, such as a Linear issue UUID. */
+export type IssueId = string & { readonly __brand: 'IssueId' }
 
 export type NodeId = AgentId | SandboxId | TriggerId
 export type Position = { x: number; y: number }
@@ -109,7 +111,13 @@ export type Sandbox = {
 /** The admission-limit rule for `Sandbox.capacity`. */
 export const isCapacity = (v: number) => Number.isInteger(v) && v >= 1
 
-export type TriggerKind = 'cron' | 'webhook' | 'manual' | 'event'
+export type TriggerKind = 'cron' | 'webhook' | 'manual' | 'event' | 'linear'
+
+/** Linear ids chosen in the trigger inspector. A null project takes every issue in the team. */
+export type LinearSettings = { team: string; project: string | null; pickupState: string }
+
+/** Intake polls each enabled Linear trigger on this wall-clock interval. */
+export const LINEAR_POLL_MS = 30_000
 
 export type Trigger = {
   id: TriggerId
@@ -121,8 +129,31 @@ export type Trigger = {
   lastFiredAt: number | null
   fired: number
   template: string
+  /** set only when `kind` is `linear`, and only once a team and pickup state are chosen */
+  linear: LinearSettings | null
   position: Position
   groupId: GroupId | null
+}
+
+export type IssueRef = { backend: 'linear'; id: IssueId; identifier: string; url: string; branchName: string }
+
+/** One issue taken by intake. Retention never prunes these, so an issue never starts a second flow. */
+export type IntakeRecord = { issue: IssueRef; trigger: TriggerId; flowId: FlowId; takenAt: number }
+
+export type IntakeError = { kind: 'missing-key' | 'auth' | 'network' | 'api'; message: string }
+
+/** The latest finished poll of one Linear trigger. Runtime only: not saved. `at` is wall-clock ms. */
+export type IntakePoll = { at: number; error: IntakeError | null }
+
+export type WorkflowStateType = 'triage' | 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled'
+export type WorkflowState = { id: string; name: string; type: WorkflowStateType; position: number }
+export type LinearTeam = { id: string; key: string; name: string; states: WorkflowState[]; projects: Array<{ id: string; name: string }> }
+export type LinearCatalog = { teams: LinearTeam[] }
+export type IntakePreview = { count: number; issues: Array<{ identifier: string; title: string; url: string }> }
+
+/** Epic decision 8: pickup defaults to the team's first `unstarted` state by position, such as Todo. */
+export function recommendedPickupState(states: readonly WorkflowState[]): string | null {
+  return states.filter((s) => s.type === 'unstarted').sort((a, b) => a.position - b.position)[0]?.id ?? null
 }
 
 export type Group = { id: GroupId; name: string }
@@ -163,7 +194,11 @@ export type Task = {
   prompt: string
   priority: Priority
   status: TaskStatus
-  origin: { kind: 'trigger'; id: TriggerId } | { kind: 'handoff'; from: AgentId; runId: RunId } | { kind: 'manual' }
+  origin:
+    | { kind: 'trigger'; id: TriggerId }
+    | { kind: 'issue'; trigger: TriggerId; issue: IssueRef }
+    | { kind: 'handoff'; from: AgentId; runId: RunId }
+    | { kind: 'manual' }
   input: TaskInput | null
   createdAt: number
   attempts: number
@@ -248,6 +283,10 @@ export type World = {
   groups: Record<GroupId, Group>
   tasks: Record<TaskId, Task>
   runs: Record<RunId, Run>
+  /** keyed by issue id; saved and never pruned */
+  intake: Record<IssueId, IntakeRecord>
+  /** keyed by Linear trigger id; runtime only */
+  intakePolls: Record<TriggerId, IntakePoll>
   logs: LogLine[]
   events: FactoryEvent[]
   sim: { paused: boolean; speed: 1 | 2 | 4 }
@@ -296,9 +335,15 @@ export function existingSubject(world: World, subject: Subject): Subject | null 
 export function taskOriginLabel(world: World, origin: Task['origin']): string {
   switch (origin.kind) {
     case 'trigger': return world.triggers[origin.id]?.name ?? 'trigger'
+    case 'issue': return origin.issue.identifier
     case 'handoff': return `handoff from ${world.agents[origin.from]?.name ?? 'agent'}`
     case 'manual': return 'manual'
   }
+}
+
+/** The issue a flow came from, so handoff tasks in an issue's flow show it too. */
+export function issueOfFlow(world: World, flowId: FlowId): IssueRef | null {
+  return Object.values(world.intake).find((r) => r.flowId === flowId)?.issue ?? null
 }
 
 export function edgeKindFor(from: NodeKind, to: NodeKind): EdgeKind[] {

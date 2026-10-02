@@ -51,8 +51,8 @@ export function seedWorld(now: number, options: { localRoot?: string; localCronE
     sandbox({ id: s('sb-vps-1'), name: 'hetzner-cx32', kind: 'vps', host: '65.21.14.7', image: 'ubuntu-24.04', capacity: 4, position: { x: 960, y: 470 }, state: 'stopped', progress: 0 }),
   ]
   const triggers: Trigger[] = [
-    { id: t('tr-cron'), name: 'Nightly sweep', kind: 'cron', intervalMs: 18_000, enabled: true, lastFiredAt: null, fired: 0, template: 'Sweep open issues and plan the next batch', position: { x: 40, y: 60 }, groupId: null },
-    { id: t('tr-webhook'), name: 'GitHub PR opened', kind: 'webhook', intervalMs: 26_000, enabled: true, lastFiredAt: null, fired: 0, template: 'Review the newly opened pull request', position: { x: 40, y: 260 }, groupId: null },
+    { id: t('tr-cron'), name: 'Nightly sweep', kind: 'cron', intervalMs: 18_000, enabled: true, lastFiredAt: null, fired: 0, template: 'Sweep open issues and plan the next batch', linear: null, position: { x: 40, y: 60 }, groupId: null },
+    { id: t('tr-webhook'), name: 'GitHub PR opened', kind: 'webhook', intervalMs: 26_000, enabled: true, lastFiredAt: null, fired: 0, template: 'Review the newly opened pull request', linear: null, position: { x: 40, y: 260 }, groupId: null },
   ]
   if (options.localCronEnabled === false) triggers[0].enabled = false
   const edges: Edge[] = [
@@ -77,6 +77,8 @@ export function seedWorld(now: number, options: { localRoot?: string; localCronE
     groups: {},
     tasks: {},
     runs: {},
+    intake: {},
+    intakePolls: {},
     logs: [],
     events: [],
     sim: { paused: false, speed: 1 },
