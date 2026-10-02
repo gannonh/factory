@@ -10,7 +10,7 @@ Each term is marked **built** when it exists in code today, or **planned** when 
 
 - **Graph.** The agents, sandboxes and triggers on the canvas and the edges between them. The graph is configuration. It says what may happen, and nothing in it is a piece of work. **Built.**
 - **Node.** An agent, a sandbox or a trigger. **Built.**
-- **Agent.** A configured worker: name, role, model, system prompt, tools, concurrency, timeout and retry policy. It runs tasks. An agent is a definition, not a running process. **Built.**
+- **Agent.** A configured worker: name, role, model, system prompt, tools, concurrency, timeout, retry policy and delivery. It runs tasks. An agent is a definition, not a running process. **Built.**
 - **Sandbox.** A place where runs execute, with a capacity of concurrent runs. A `local` sandbox runs a real agent process in a git worktree on the server's machine. Every other sandbox kind is simulated. **Built.**
 - **Trigger.** A node that starts work on the agent it joins. A cron or webhook trigger fires on an interval in the simulation. A manual trigger fires on request. A Linear trigger polls Linear and takes issues. **Built.**
 - **Edge.** A typed connection between two nodes. There are four kinds. **Built.**
@@ -29,6 +29,7 @@ Each term is marked **built** when it exists in code today, or **planned** when 
 - **Output.** A succeeded run's summary and artifacts. **Built.**
 - **Artifact.** A typed reference that a run produced: a branch, a commit, a pull request, a file or a note. **Built.**
 - **Input.** The upstream run's output that a handoff passes to the downstream task. **Built.**
+- **Delivery.** What Factory does with a succeeded real run's commits, set per agent. `none` does nothing. `pull-request` makes Factory push the run's branch and open a pull request, which becomes a `pr` artifact. A run with no commits opens nothing, and a failed push or PR creation fails the run. ADR 0009. **Built.**
 - **Retry policy.** How many attempts an agent's task gets and how long it waits between them. A failed run with attempts left schedules a retry. The task stays open, and so does its flow. **Built.**
 
 ## Issues and Linear
@@ -40,8 +41,9 @@ Each term is marked **built** when it exists in code today, or **planned** when 
 - **Intake record.** Factory's saved record of an issue it has taken: the issue, the trigger, its flows and the writes it has made to the issue. It is never pruned, so an issue is never taken twice by mistake. **Built.**
 - **Pickup state.** The Linear state a Linear trigger takes issues from, such as Todo. **Built.**
 - **Started, finished and failed states.** The Linear states a Linear trigger moves an issue to when its flow's first run starts, when the flow finishes, and when the flow fails. Each can be left unset. **Built.**
-- **Write-back.** Factory's writes to an issue: state moves and notes. Each write is idempotent and retries until it lands. **Built.**
+- **Write-back.** Factory's writes to an issue: state moves, notes and pull request attachments. Each write is idempotent and retries until it lands. **Built.**
 - **Note.** A comment Factory posts on an issue when a flow ends. It lists each task's summary and artifacts or the failure reason, and it is signed with the runs and agents. **Built.**
+- **Attachment.** A link Factory adds to an issue when its flow ends, one per pull request the flow's real runs produced. Factory keys it by URL, so it lands once. **Built.**
 
 ## The pipeline
 
@@ -56,7 +58,7 @@ ADR 0008 defines these terms. Gate 4 builds them. `docs/pipeline.html` draws the
 ## Execution
 
 - **Simulation.** Factory's simulated execution for every sandbox kind except `local`. Simulated runs have made-up durations and outputs. They exist so the control plane can be built and tested before every backend is real. **Built.**
-- **Real run.** A run on a `local` sandbox, which spawns the agent CLI (Claude Code) in a git worktree. **Built.**
+- **Real run.** A run on a `local` sandbox, which spawns the agent CLI (Claude Code) in a git worktree. A delivering agent's worktree is cut from origin's default branch, on the issue's branch name for an issue task. **Built.**
 - **World.** The server's whole state: graph, tasks, runs, intake records, logs and events. Every tab receives it over a websocket, and the server saves it to `world.json`. It holds no secrets. **Built.**
 
 ## Planning terms

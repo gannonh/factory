@@ -6,7 +6,7 @@
 
 The command always sets `--permission-mode dontAsk` and `--permission-prompts none`. `--allowedTools` contains only mapped agent tools. File reads map to `Read`, file writes to `Edit` and `Write`, search to `Glob` and `Grep`, and shell tools to their named `Bash` patterns. An unmapped tool produces a warning in the run log and grants no permission. The process never receives a bypass mode or an interactive permission prompt.
 
-Each local sandbox's host field stores its absolute root directory. A run gets a unique `.factory-runs/<run-id>` directory beneath it. If the root is a Git repository, the directory is a detached Git worktree. The `.factory-runs/` path is ignored by Git.
+Each local sandbox's host field stores its absolute root directory. A run gets a unique `.factory-runs/<run-id>` directory beneath it. If the root is the top of a Git repository, the directory is a Git worktree on a new branch, `factory-<run-id>`, cut from the root's HEAD. ADR 0009 cuts a delivering agent's worktree from origin's default branch instead. The `.factory-runs/` path is ignored by Git.
 
 ## Reason
 
