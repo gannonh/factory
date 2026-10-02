@@ -2,6 +2,7 @@ import { LOG_LEVEL_COLOR, issueOfFlow, type Run } from '../../domain/types'
 import { useStore } from '../../store'
 import { Badge, Dot, IssueLink, Section, fmtDuration, fmtTime } from '../ui'
 import { ArtifactList, TaskInputSection } from './TaskInputSection'
+import { WriteBackSection } from './WriteBackSection'
 import { useWallNow } from '../../useWallNow'
 
 const STATUS_COLOR = { running: '#22d3ee', succeeded: '#34d399', failed: '#f87171', cancelled: '#64748b' } as const
@@ -14,6 +15,7 @@ export function RunInspector({ run }: { run: Run }) {
   const task = world.tasks[run.taskId]
   const input = task?.input ?? null
   const issue = task ? issueOfFlow(world, task.flowId) : null
+  const intake = task ? Object.values(world.intake).find((record) => record.flowId === task.flowId) : undefined
   const logs = world.logs.filter((line) => line.runId === run.id)
   const elapsedMs = Math.max(0, (run.endedAt ?? (run.execution === 'local' ? wallNow : world.now)) - run.startedAt)
 
@@ -64,6 +66,8 @@ export function RunInspector({ run }: { run: Run }) {
           <ArtifactList artifacts={run.output.artifacts} />
         </Section>
       )}
+
+      {intake && <WriteBackSection record={intake} />}
 
       <Section title="Logs" right={<span className="font-mono text-[10px] text-ink-500">{logs.length} lines</span>}>
         {logs.length === 0
