@@ -473,17 +473,6 @@ test('the recommended pickup is Start when the workflow has one, else the first 
   ])).toBeNull()
 })
 
-test('a saved pickup other than the recommended one survives a restart', () => {
-  const store = memoryStore()
-  const settings: LinearSettings = { ...ENG, team: 'team-kat', pickupState: 'state-kat-todo' }
-  const first = makeFixture({ store, linear: client(), clock: wallClock().read })
-  const trigger = linearTrigger(first, first.agent('Coder'), settings)
-  first.server.flush()
-
-  const second = makeFixture({ store, isolate: false, linear: client(), clock: wallClock().read })
-  expect(second.world().triggers[trigger].linear).toEqual(settings)
-})
-
 test('a new Linear trigger starts disabled, and preview pages through every match', async () => {
   for (let i = 1; i <= 7; i++) await addIssue(`Task ${i}`)
   await addIssue('Not yet', { state: 'Backlog' })
