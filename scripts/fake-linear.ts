@@ -15,7 +15,7 @@ type Team = { id: string; key: string; name: string; states: State[]; projects: 
 type Comment = { id: string; body: string }
 type Issue = {
   id: string; identifier: string; title: string; description: string; url: string; branchName: string
-  team: string; state: string; project: string | null; comments: Comment[]
+  team: string; state: string; project: string | null; comments: Comment[]; deleted: boolean
 }
 
 export type FakeLinear = { url: string; controlUrl: string; close: () => Promise<void> }
@@ -39,7 +39,7 @@ const slug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, '-').
 
 type Eq = { id?: { eq?: string } } | undefined
 type Variables = {
-  filter?: { team?: Eq; state?: Eq; project?: Eq }; first?: number; after?: string | null
+  filter?: { team?: Eq; state?: Eq; project?: Eq; id?: { in?: string[] } }; first?: number; after?: string | null
   id?: string; stateId?: string; commentId?: string; input?: { id?: string; issueId?: string; body?: string }
 }
 
@@ -83,6 +83,7 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
         state: stateByName(team, String(body.state ?? 'Todo')).id,
         project: project?.id ?? null,
         comments: [],
+        deleted: false,
       }
       issues.push(issue)
       return view(issue)
@@ -91,6 +92,12 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       const issue = issueBy(String(body.identifier))
       const team = teams.find((t) => t.id === issue.team)!
       issue.state = stateByName(team, String(body.state)).id
+      return view(issue)
+    },
+    /** Moves the issue to the trash: lists leave it out, but it still answers by id, as Linear's API does. */
+    deleteIssue(body) {
+      const issue = issueBy(String(body.identifier))
+      issue.deleted = true
       return view(issue)
     },
     issue: (body) => view(issueBy(String(body.identifier))),
@@ -114,26 +121,33 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
     },
   }
 
+  const page = <T>({ filter = {}, first = 50, after = null }: Variables, node: (issue: Issue) => T) => {
+    const matches = issues.filter((i) =>
+      !i.deleted
+      && (filter.team?.id?.eq === undefined || i.team === filter.team.id.eq)
+      && (filter.state?.id?.eq === undefined || i.state === filter.state.id.eq)
+      && (filter.project?.id?.eq === undefined || i.project === filter.project.id.eq)
+      && (filter.id?.in === undefined || filter.id.in.includes(i.id)))
+    const at = after === null ? -1 : matches.findIndex((i) => i.id === after)
+    if (after !== null && at === -1) throw new Error(`invalid cursor ${after}`)
+    const start = at + 1
+    const nodes = matches.slice(start, start + first)
+    return { nodes: nodes.map(node), pageInfo: { hasNextPage: start + first < matches.length, endCursor: nodes.at(-1)?.id ?? null } }
+  }
+
   const operations: Record<string, (variables: Variables) => unknown> = {
     FactoryCatalog: () => ({
       teams: { nodes: teams.map((t) => ({ id: t.id, key: t.key, name: t.name, states: { nodes: t.states }, projects: { nodes: t.projects } })) },
     }),
-    FactoryIssues: ({ filter = {}, first = 50, after = null }) => {
-      const matches = issues.filter((i) =>
-        (filter.team?.id?.eq === undefined || i.team === filter.team.id.eq)
-        && (filter.state?.id?.eq === undefined || i.state === filter.state.id.eq)
-        && (filter.project?.id?.eq === undefined || i.project === filter.project.id.eq))
-      const at = after === null ? -1 : matches.findIndex((i) => i.id === after)
-      if (after !== null && at === -1) throw new Error(`invalid cursor ${after}`)
-      const start = at + 1
-      const page = matches.slice(start, start + first)
-      return {
-        issues: {
-          nodes: page.map(({ id, identifier, title, description, url, branchName }) => ({ id, identifier, title, description: description || null, url, branchName })),
-          pageInfo: { hasNextPage: start + first < matches.length, endCursor: page.at(-1)?.id ?? null },
-        },
-      }
-    },
+    FactoryIssues: (variables) => ({
+      issues: page(variables, ({ id, identifier, title, description, url, branchName }) => ({ id, identifier, title, description: description || null, url, branchName })),
+    }),
+    FactoryIssueStates: (variables) => ({
+      issues: page(variables, (issue) => {
+        const state = teams.find((t) => t.id === issue.team)!.states.find((s) => s.id === issue.state)!
+        return { id: issue.id, state: { id: state.id, name: state.name, type: state.type } }
+      }),
+    }),
     FactoryIssueState: ({ id }) => {
       const issue = issueById(id)
       return { issue: { id: issue.id, state: { id: issue.state } } }

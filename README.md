@@ -104,11 +104,19 @@ Factory writes the flow's progress back to the issue. The decision is recorded i
 - The first run in the issue's flow moves the issue to the started state. Later runs in the flow do not move it again.
 - When every task in the flow has finished, the issue moves to the finished state and gets one comment. The comment lists each task in flow order with its agent, run id, summary and artifacts, and names Factory, the runs and the agents.
 - When every task in the flow has ended and one failed with no retries left, the issue moves to the failed state and gets one comment with the failure reasons. A failed attempt that will retry, or a failed task whose siblings are still running, writes nothing yet.
-- Cancelling in Factory writes nothing yet.
-- The task inspector and the run inspector list each write and whether it landed, is pending or failed. A failed write shows its reason and retries on the next poll. A failed move holds back later moves but not the note. Task state does not change.
+- Cancelling one of the flow's tasks in Factory cancels the whole flow. The issue moves to the failed state and gets one comment naming the cancelled task.
+- Factory moves an issue only out of its trigger's pickup and started states. A move that finds the issue somewhere else, because a person moved it, is dropped.
+- The task inspector and the run inspector list each write and whether it landed, is pending, failed or was dropped. A failed write shows its reason and retries on the next poll. A failed move holds back later moves but not the note. Task state does not change.
 - The server saves each comment's id before it posts the comment and checks for that id before posting, so a restart never posts a second comment. Issues taken before write-back existed are never written to.
 
-`scripts/fake-linear.ts` is a fake Linear API for tests and local trials. `npm run fake-linear -- --port 8790` starts it and prints its URL. Point the server at it with `FACTORY_LINEAR_URL=http://127.0.0.1:8790/graphql LINEAR_API_KEY=lin_api_fake`. It answers the write-back operations too and keeps each issue's comments. `POST /control` with a JSON body adds issues (`{"op":"addIssue","title":"...","state":"Todo","project":"Alpha"}`), moves them (`{"op":"moveIssue","identifier":"ENG-1","state":"Done"}`), shows one with its state name and comments (`{"op":"issue","identifier":"ENG-1"}`), forces a 401 (`{"op":"failAuth","on":true}`), makes the next requests of one operation answer an error (`{"op":"failNext","operation":"FactoryMoveIssue","times":1,"message":"rate limited"}`), counts requests by operation (`{"op":"stats"}`) and resets (`{"op":"reset"}`).
+Linear stays the source of truth for an issue Factory has taken. The decision is recorded in `docs/adr/0009-linear-changes-cancel-the-flow.md`.
+
+- Each poll also reads the current state of every issue whose flow is still open, in one batched query. A failed query shows its error on the trigger, like a failed poll.
+- When the issue is canceled, deleted, or moved out of the trigger's pickup and started states, Factory cancels the flow within one poll. Queued tasks are cancelled and running processes are killed. A cancelled run does not retry.
+- The issue then gets one comment saying why, such as "canceled in Linear" or "moved to Backlog in Linear". Factory does not move it.
+- The issue keeps its intake record, so moving it back to the pickup state does not start a new flow.
+
+`scripts/fake-linear.ts` is a fake Linear API for tests and local trials. `npm run fake-linear -- --port 8790` starts it and prints its URL. Point the server at it with `FACTORY_LINEAR_URL=http://127.0.0.1:8790/graphql LINEAR_API_KEY=lin_api_fake`. It answers the write-back operations too and keeps each issue's comments. `POST /control` with a JSON body adds issues (`{"op":"addIssue","title":"...","state":"Todo","project":"Alpha"}`), moves them (`{"op":"moveIssue","identifier":"ENG-1","state":"Done"}`), deletes one (`{"op":"deleteIssue","identifier":"ENG-1"}`), shows one with its state name and comments (`{"op":"issue","identifier":"ENG-1"}`), forces a 401 (`{"op":"failAuth","on":true}`), makes the next requests of one operation answer an error (`{"op":"failNext","operation":"FactoryMoveIssue","times":1,"message":"rate limited"}`), counts requests by operation (`{"op":"stats"}`) and resets (`{"op":"reset"}`).
 
 ## Real runs
 

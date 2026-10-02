@@ -39,7 +39,7 @@ Run `with-env npm run dev` when a change needs secrets such as `LINEAR_API_KEY`.
 
 - `src/domain/types.ts` is the whole domain, shared by the server and the page. It holds the branded ids, the discriminated unions, `SANDBOX_TRANSITIONS` and `EDGE_RULES`. Validation and rendering both read `EDGE_RULES`.
 - `server/simulation.ts` (`MockServer`) owns the world, the tick loop, triggers, the scheduler, retries and handoff fan-out.
-- `server/linear.ts` is the only code that speaks Linear's GraphQL API. `MockServer` polls enabled Linear triggers and takes issues into flows (ADR 0006), then writes each flow's progress back to its issue (ADR 0007). `server/writeBack.ts` derives the write-back phase and note from a flow's tasks. `scripts/fake-linear.ts` is a fake Linear server for tests and local trials.
+- `server/linear.ts` is the only code that speaks Linear's GraphQL API. `MockServer` polls enabled Linear triggers and takes issues into flows (ADR 0006), then writes each flow's progress back to its issue (ADR 0007). `server/writeBack.ts` derives the write-back phase and note from a flow's tasks, and decides when a change in Linear cancels a flow (ADR 0009). `scripts/fake-linear.ts` is a fake Linear server for tests and local trials.
 - `server/runners.ts` runs `local` sandboxes with Claude Code headless. Other sandbox kinds use the simulated runner. See ADRs 0003 to 0005.
 - `server/http.ts` serves `POST /command` and the `/world` websocket on `127.0.0.1`. `server/commands.ts` maps command names to `MockServer` methods, and `server/parse.ts` validates their arguments.
 - `server/worldFile.ts` and `server/records.ts` save and parse the world. `server/runLogs.ts` stores real run logs.

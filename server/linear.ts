@@ -1,4 +1,4 @@
-import type { IntakeError, IssueFilter, IssueId, IssueRef, LinearCatalog, LinearTeam, WorkflowState } from '../src/domain/types'
+import type { IntakeError, IssueFilter, IssueId, IssueRef, LinearCatalog, LinearTeam, WorkflowState, WorkflowStateType } from '../src/domain/types'
 import { array, boolean, nullable, number, object, oneOf, optional, string, type Parser } from './parse'
 
 export const LINEAR_URL = 'https://api.linear.app/graphql'
@@ -7,13 +7,21 @@ const PAGE_SIZE = 50
 
 export type LinearIssue = { ref: IssueRef; title: string; description: string }
 
+/** The workflow state an issue sits in now. */
+export type IssueState = { id: string; name: string; type: WorkflowStateType }
+
 /** The write methods converge: each checks Linear first, so repeating one after a lost answer changes nothing. */
 export type LinearClient = {
   catalog(): Promise<LinearCatalog>
   /** Every issue matching the settings, across all pages. */
   issues(filter: IssueFilter): Promise<LinearIssue[]>
-  /** Leaves the issue in `stateId`, moving it only when it is elsewhere. */
-  ensureState(issueId: IssueId, stateId: string): Promise<void>
+  /** The current state of each listed issue that still exists. A deleted or archived issue is absent from the map. */
+  issueStates(ids: readonly IssueId[]): Promise<Map<IssueId, IssueState>>
+  /**
+   * Leaves the issue in `stateId`, moving it only when it is elsewhere. With `from`, it moves only an issue in one of
+   * those states and resolves false for any other, so Factory never undoes a move a person made in Linear.
+   */
+  ensureState(issueId: IssueId, stateId: string, from: readonly string[] | null): Promise<boolean>
   /** Leaves exactly one comment with id `commentId` on the issue, creating it only when it is missing. */
   ensureComment(issueId: IssueId, commentId: string, body: string): Promise<void>
 }
@@ -47,6 +55,13 @@ export const ISSUES_QUERY = `query FactoryIssues($filter: IssueFilter!, $first: 
   }
 }`
 
+export const ISSUE_STATES_QUERY = `query FactoryIssueStates($filter: IssueFilter!, $first: Int!, $after: String) {
+  issues(filter: $filter, first: $first, after: $after) {
+    nodes { id state { id name type } }
+    pageInfo { hasNextPage endCursor }
+  }
+}`
+
 export const ISSUE_STATE_QUERY = `query FactoryIssueState($id: String!) {
   issue(id: $id) { id state { id } }
 }`
@@ -66,12 +81,8 @@ export const CREATE_COMMENT_MUTATION = `mutation FactoryCreateComment($input: Co
 
 const nodes = <T>(item: Parser<T>) => object<{ nodes: T[] }>({ nodes: array(item) })
 
-const workflowState = object<WorkflowState>({
-  id: string,
-  name: string,
-  type: oneOf('triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled'),
-  position: number,
-})
+const stateType = oneOf('triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled')
+const workflowState = object<WorkflowState>({ id: string, name: string, type: stateType, position: number })
 
 const team = object<{ id: string; key: string; name: string; states: { nodes: WorkflowState[] }; projects: { nodes: Array<{ id: string; name: string }> } }>({
   id: string,
@@ -84,13 +95,15 @@ const team = object<{ id: string; key: string; name: string; states: { nodes: Wo
 const catalogData = object({ teams: nodes(team) })
 
 type IssueNode = { id: string; identifier: string; title: string; description: string | null; url: string; branchName: string }
+type StateNode = { id: string; state: IssueState }
+type Page<T> = { nodes: T[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } }
 
-const issuesData = object({
-  issues: object<{ nodes: IssueNode[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } }>({
-    nodes: array(object<IssueNode>({ id: string, identifier: string, title: string, description: nullable(string), url: string, branchName: string })),
-    pageInfo: object({ hasNextPage: boolean, endCursor: nullable(string) }),
-  }),
+const issuePage = <T>(node: Parser<T>) => object({
+  issues: object<Page<T>>({ nodes: array(node), pageInfo: object({ hasNextPage: boolean, endCursor: nullable(string) }) }),
 })
+
+const issuesData = issuePage(object<IssueNode>({ id: string, identifier: string, title: string, description: nullable(string), url: string, branchName: string }))
+const issueStatesData = issuePage(object<StateNode>({ id: string, state: object<IssueState>({ id: string, name: string, type: stateType }) }))
 
 const issueStateData = object({ issue: object({ id: string, state: object({ id: string }) }) })
 const issueCommentData = object({ issue: object({ id: string, comments: nodes(object({ id: string })) }) })
@@ -153,6 +166,18 @@ export function createLinearClient(options: {
     }
   }
 
+  async function pages<T>(operationName: string, query: string, filter: object, data: Parser<{ issues: Page<T> }>): Promise<T[]> {
+    const found: T[] = []
+    let after: string | null = null
+    for (;;) {
+      const { issues }: { issues: Page<T> } = await request(operationName, query, { filter, first: pageSize, after }, data)
+      found.push(...issues.nodes)
+      if (!issues.pageInfo.hasNextPage || issues.pageInfo.endCursor === null) return found
+      if (issues.pageInfo.endCursor === after) return fail('api', 'Linear repeated a pagination cursor')
+      after = issues.pageInfo.endCursor
+    }
+  }
+
   return {
     async catalog() {
       const { teams } = await request('FactoryCatalog', CATALOG_QUERY, {}, catalogData)
@@ -166,28 +191,25 @@ export function createLinearClient(options: {
         state: { id: { eq: settings.pickupState } },
         ...(settings.project === null ? {} : { project: { id: { eq: settings.project } } }),
       }
-      const found: LinearIssue[] = []
-      let after: string | null = null
-      for (;;) {
-        const { issues }: { issues: { nodes: IssueNode[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } =
-          await request('FactoryIssues', ISSUES_QUERY, { filter, first: pageSize, after }, issuesData)
-        for (const n of issues.nodes) {
-          found.push({
-            ref: { backend: 'linear', id: n.id as IssueId, identifier: n.identifier, url: n.url, branchName: n.branchName },
-            title: n.title,
-            description: n.description ?? '',
-          })
-        }
-        if (!issues.pageInfo.hasNextPage || issues.pageInfo.endCursor === null) return found
-        if (issues.pageInfo.endCursor === after) return fail('api', 'Linear repeated a pagination cursor')
-        after = issues.pageInfo.endCursor
-      }
+      const nodes = await pages('FactoryIssues', ISSUES_QUERY, filter, issuesData)
+      return nodes.map((n) => ({
+        ref: { backend: 'linear', id: n.id as IssueId, identifier: n.identifier, url: n.url, branchName: n.branchName },
+        title: n.title,
+        description: n.description ?? '',
+      }))
     },
-    async ensureState(issueId, stateId) {
+    async issueStates(ids) {
+      if (ids.length === 0) return new Map()
+      const nodes = await pages('FactoryIssueStates', ISSUE_STATES_QUERY, { id: { in: ids } }, issueStatesData)
+      return new Map(nodes.map((n) => [n.id as IssueId, n.state]))
+    },
+    async ensureState(issueId, stateId, from) {
       const { issue } = await request('FactoryIssueState', ISSUE_STATE_QUERY, { id: issueId }, issueStateData)
-      if (issue.state.id === stateId) return
+      if (issue.state.id === stateId) return true
+      if (from && !from.includes(issue.state.id)) return false
       const { issueUpdate } = await request('FactoryMoveIssue', MOVE_ISSUE_MUTATION, { id: issueId, stateId }, object({ issueUpdate: success }))
       if (!issueUpdate.success) fail('api', 'Linear did not move the issue')
+      return true
     },
     async ensureComment(issueId, commentId, body) {
       const { issue } = await request('FactoryIssueComment', ISSUE_COMMENT_QUERY, { id: issueId, commentId }, issueCommentData)

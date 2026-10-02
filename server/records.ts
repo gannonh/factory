@@ -1,7 +1,7 @@
 import {
   EDGE_KINDS, MODELS, SANDBOX_TRANSITIONS, isCapacity,
   type Agent, type AgentId, type Artifact, type Edge, type EdgeId, type FactoryEvent, type FlowId, type Group, type GroupId,
-  type IntakeRecord, type IssueFilter, type IssueId, type IssueWrite, type IssueRef, type Lease, type LinearSettings, type Metrics, type NodeId, type Position, type Priority, type RetryPolicy, type Run, type RunId,
+  type FlowCancel, type IntakeRecord, type IssueFilter, type IssueId, type IssueWrite, type IssueRef, type Lease, type LinearSettings, type Metrics, type NodeId, type Position, type Priority, type RetryPolicy, type Run, type RunId,
   type RunOutput, type Sandbox, type SandboxId, type SandboxKind, type SandboxState, type Subject,
   type Task, type TaskId, type TaskInput, type Trigger, type TriggerId, type TriggerKind, type WriteStatus,
 } from '../src/domain/types'
@@ -153,14 +153,15 @@ const writeStatuses: { [S in WriteStatus['state']]: Parser<Extract<WriteStatus, 
   pending: object({ state: oneOf('pending') }),
   landed: object({ state: oneOf('landed'), at: number }),
   failed: object({ state: oneOf('failed'), at: number, error: string }),
+  dropped: object({ state: oneOf('dropped') }),
 }
-const writeState = oneOf('pending', 'landed', 'failed')
+const writeState = oneOf('pending', 'landed', 'failed', 'dropped')
 const writeStatus: Parser<WriteStatus> = (value, path) =>
   writeStatuses[writeState((value as { state?: unknown } | null)?.state, `${path}.state`)](value, path)
 
 const issueWrite = tagged<IssueWrite>({
   move: object({ kind: oneOf('move'), step: oneOf('started', 'finished', 'failed'), stateId: string, status: writeStatus }),
-  note: object({ kind: oneOf('note'), outcome: oneOf('finished', 'failed'), commentId: string, body: nullable(string), status: writeStatus }),
+  note: object({ kind: oneOf('note'), outcome: oneOf('finished', 'failed', 'cancelled'), commentId: string, body: nullable(string), status: writeStatus }),
 })
 
 // A record saved before write-back counts as ended with nothing to write, so upgrading never posts notes for older flows.
@@ -171,6 +172,10 @@ export const intakeRecord = object<IntakeRecord>({
   takenAt: number,
   phase: defaulted(oneOf('taken', 'started', 'ended'), () => 'ended' as const),
   writes: defaulted(array(issueWrite), () => []),
+  cancel: defaulted(nullable(tagged<FlowCancel>({
+    linear: object({ kind: oneOf('linear'), reason: string }),
+    factory: object({ kind: oneOf('factory'), task: string }),
+  })), () => null),
 })
 
 const subject = tagged<Subject>({

@@ -55,8 +55,8 @@ import { ClaudeRunner, SimulatedRunner, gitArtifacts, prepareWorkdir, type Prepa
 import type { RunLogStore } from './runLogs'
 import { array, boolean, defaulted, id, number, object, oneOf, record } from './parse'
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
-import { LINEAR_URL, createLinearClient, intakeErrorOf, type LinearClient, type LinearIssue } from './linear'
-import { landed, nextWrite, reconcileRecord } from './writeBack'
+import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type LinearClient, type LinearIssue } from './linear'
+import { cancelRecord, flowAction, flowOutcome, landed, nextWrite, reconcileRecord } from './writeBack'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 
@@ -583,10 +583,16 @@ export class MockServer {
   cancelTask(id: TaskId) {
     const t = this.world.tasks[id]
     if (!t) return
+    const record = this.openRecord(t.flowId)
+    if (record && (t.status === 'queued' || t.status === 'waiting' || this.cancellableRun(id))) {
+      this.world.intake = { ...this.world.intake, [record.issue.id]: cancelRecord(record, { kind: 'factory', task: t.title }) }
+      this.cancelFlow(t.flowId, 'cancelled by operator')
+      this.publish()
+      return
+    }
     if (t.status === 'running') {
-      const run = Object.values(this.world.runs).find((candidate) => candidate.taskId === id && candidate.status === 'running' && candidate.execution === 'local')
+      const run = this.cancellableRun(id)
       if (!run) return
-      if (this.pendingCompletions.has(run.id)) return
       this.finishRun(run, { status: 'cancelled', reason: 'cancelled by operator' })
       this.publish()
       return
@@ -595,6 +601,30 @@ export class MockServer {
     this.patchTask(id, { status: 'cancelled', blockedOn: null })
     this.event('task', { kind: 'task', id }, `Cancelled “${t.title}”`)
     this.publish()
+  }
+
+  /** The task's running local run, unless it is already finishing. An operator cannot stop a simulated run. */
+  private cancellableRun(taskId: TaskId): Run | undefined {
+    const run = Object.values(this.world.runs).find((candidate) => candidate.taskId === taskId && candidate.status === 'running' && candidate.execution === 'local')
+    return run && !this.pendingCompletions.has(run.id) ? run : undefined
+  }
+
+  /** Cancels every task of the flow that can still run, killing running processes. A killed run ends cancelled, so nothing retries. */
+  private cancelFlow(flowId: FlowId, reason: string) {
+    for (const task of Object.values(this.world.tasks)) {
+      if (task.flowId !== flowId) continue
+      if (task.status === 'running') {
+        const run = Object.values(this.world.runs).find((r) => r.taskId === task.id && r.status === 'running')
+        if (run) this.finishRun(run, { status: 'cancelled', reason })
+      } else if (task.status === 'queued' || task.status === 'waiting') {
+        this.patchTask(task.id, { status: 'cancelled', retryAt: null, blockedOn: null })
+        this.event('task', { kind: 'task', id: task.id }, `Cancelled “${task.title}”: ${reason}`)
+      }
+    }
+  }
+
+  private openRecord(flowId: FlowId): IntakeRecord | undefined {
+    return Object.values(this.world.intake).find((r) => r.flowId === flowId && r.phase !== 'ended')
   }
 
   sandboxAction(id: SandboxId, action: SandboxAction) {
@@ -803,17 +833,24 @@ export class MockServer {
     if (!this.pollable(tr)) return Promise.resolve()
     const settings = tr.linear
     this.pollStarted.set(id, this.clock())
-    const done = this.linear.issues(settings)
-      .then((issues) => this.finishPoll(id, settings, issues, null), (err: unknown) => this.finishPoll(id, settings, [], intakeErrorOf(err)))
+    const open = Object.values(this.world.intake).filter((r) => r.trigger === id && r.phase !== 'ended' && r.cancel === null).map((r) => r.issue.id)
+    const done = Promise.all([this.linear.issues(settings), this.linear.issueStates(open)])
+      .then(
+        ([issues, states]) => this.finishPoll(id, settings, issues, open, states, null),
+        (err: unknown) => this.finishPoll(id, settings, [], [], new Map(), intakeErrorOf(err)),
+      )
       .finally(() => this.polls.delete(id))
     this.polls.set(id, done)
     return done
   }
 
-  private finishPoll(id: TriggerId, settings: LinearSettings, issues: LinearIssue[], error: IntakeError | null) {
+  private finishPoll(
+    id: TriggerId, settings: LinearSettings, issues: LinearIssue[], refreshed: IssueId[], states: Map<IssueId, IssueState>, error: IntakeError | null,
+  ) {
     const tr = this.world.triggers[id]
     if (!this.pollable(tr) || !sameSettings(tr.linear, settings)) return
     this.world.intakePolls = { ...this.world.intakePolls, [id]: { at: this.clock(), error } }
+    for (const issueId of refreshed) this.followIssue(issueId, states.get(issueId) ?? null, settings)
     const feed = Object.values(this.world.edges).find((e) => e.kind === 'triggers' && e.source === id && this.world.agents[e.target as AgentId])
     if (!feed) {
       this.publish()
@@ -831,7 +868,7 @@ export class MockServer {
         origin: { kind: 'issue', trigger: id, issue: issue.ref },
         input: null,
       }, flowId)
-      const record: IntakeRecord = { issue: issue.ref, trigger: id, flowId, takenAt: this.clock(), phase: 'taken', writes: [] }
+      const record: IntakeRecord = { issue: issue.ref, trigger: id, flowId, takenAt: this.clock(), phase: 'taken', writes: [], cancel: null }
       this.world.intake = { ...this.world.intake, [issue.ref.id]: record }
       taken.push(issue.ref.identifier)
     }
@@ -840,6 +877,18 @@ export class MockServer {
       this.event('trigger', { kind: 'trigger', id }, `${tr.name} took ${taken.join(', ')}`)
     }
     this.publish()
+  }
+
+  /** Cancels the issue's flow when the issue has left the trigger's states in Linear. */
+  private followIssue(issueId: IssueId, state: IssueState | null, settings: LinearSettings) {
+    const record = this.world.intake[issueId]
+    if (!record || record.phase === 'ended' || record.cancel !== null) return
+    const tasks = Object.values(this.world.tasks).filter((t) => t.flowId === record.flowId)
+    const action = flowAction(state, flowOutcome(tasks) === null, settings)
+    if (action.kind === 'none') return
+    this.world.intake = { ...this.world.intake, [issueId]: cancelRecord(record, { kind: 'linear', reason: action.reason }) }
+    this.cancelFlow(record.flowId, action.reason)
+    this.event('trigger', { kind: 'trigger', id: record.trigger }, `${record.issue.identifier} ${action.reason}: cancelled its flow`)
   }
 
   /** Moves each open intake record along with its flow, and returns the issues that gained writes. */
@@ -866,7 +915,10 @@ export class MockServer {
     this.drains.set(issueId, done)
   }
 
-  /** Lands an issue's due writes. A failed move holds back later moves, not notes, until the next poll retries it. Task state is never touched. */
+  /**
+   * Lands an issue's due writes. A failed move holds back later moves, not notes, until the next poll retries it.
+   * A move is dropped when the issue has left the trigger's states. Task state is never touched.
+   */
   private async drainWrites(issueId: IssueId) {
     for (;;) {
       const record: IntakeRecord | undefined = this.world.intake[issueId]
@@ -875,9 +927,10 @@ export class MockServer {
       const write = record.writes[index]
       let status: WriteStatus
       try {
-        if (write.kind === 'move') await this.linear.ensureState(issueId, write.stateId)
+        let moved = true
+        if (write.kind === 'move') moved = await this.linear.ensureState(issueId, write.stateId, this.ownStates(record))
         else await this.linear.ensureComment(issueId, write.commentId, write.body ?? '')
-        status = { state: 'landed', at: this.clock() }
+        status = moved ? { state: 'landed', at: this.clock() } : { state: 'dropped' }
       } catch (err) {
         status = { state: 'failed', at: this.clock(), error: intakeErrorOf(err).message }
       }
@@ -888,6 +941,12 @@ export class MockServer {
         this.publish()
       }
     }
+  }
+
+  /** The states a record's trigger works in. Factory moves its issue only out of these, or anywhere once the trigger is gone. */
+  private ownStates(record: IntakeRecord): string[] | null {
+    const settings = this.world.triggers[record.trigger]?.linear
+    return settings ? [settings.pickupState, ...(settings.startedState ? [settings.startedState] : [])] : null
   }
 
   private forgetPolls(ids: TriggerId[]) {
@@ -984,7 +1043,8 @@ export class MockServer {
       if (task) this.patchTask(task.id, { status: 'succeeded' })
       this.log('info', `run finished: ${run.title}`, { runId: run.id, agentId: run.agentId })
       this.event('run', { kind: 'run', id: run.id }, `${this.nameOf(run.agentId)} finished “${run.title}”`)
-      if (output) {
+      // A local run that was already finishing when its flow was cancelled still succeeds, but hands nothing on.
+      if (output && !(task && this.openRecord(task.flowId)?.cancel)) {
         const prompt = [output.summary, ...output.artifacts.map((a) => `${a.kind}: ${a.label}${a.url ? ` (${a.url})` : ''}`)].join('\n')
         for (const e of Object.values(w.edges)) {
           if (e.kind === 'handoff' && e.source === run.agentId) {
