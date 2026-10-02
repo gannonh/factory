@@ -1,6 +1,6 @@
-import { LOG_LEVEL_COLOR, type Run } from '../../domain/types'
+import { LOG_LEVEL_COLOR, issueOfFlow, type Run } from '../../domain/types'
 import { useStore } from '../../store'
-import { Badge, Dot, Section, fmtDuration, fmtTime } from '../ui'
+import { Badge, Dot, IssueLink, Section, fmtDuration, fmtTime } from '../ui'
 import { ArtifactList, TaskInputSection } from './TaskInputSection'
 import { useWallNow } from '../../useWallNow'
 
@@ -11,7 +11,9 @@ export function RunInspector({ run }: { run: Run }) {
   const wallNow = useWallNow()
   const agent = world.agents[run.agentId]
   const sandbox = world.sandboxes[run.sandboxId]
-  const input = world.tasks[run.taskId]?.input ?? null
+  const task = world.tasks[run.taskId]
+  const input = task?.input ?? null
+  const issue = task ? issueOfFlow(world, task.flowId) : null
   const logs = world.logs.filter((line) => line.runId === run.id)
   const elapsedMs = Math.max(0, (run.endedAt ?? (run.execution === 'local' ? wallNow : world.now)) - run.startedAt)
 
@@ -29,6 +31,12 @@ export function RunInspector({ run }: { run: Run }) {
         <dl className="grid grid-cols-[88px_1fr] gap-x-3 gap-y-2 text-xs">
           <dt className="text-ink-400">Agent</dt>
           <dd>{agent?.name ?? `Deleted agent (${run.agentId})`}</dd>
+          {issue && (
+            <>
+              <dt className="text-ink-400">Issue</dt>
+              <dd><IssueLink issue={issue} /></dd>
+            </>
+          )}
           <dt className="text-ink-400">Sandbox</dt>
           <dd>{sandbox?.name ?? `Deleted sandbox (${run.sandboxId})`}</dd>
           <dt className="text-ink-400">Attempt</dt>
