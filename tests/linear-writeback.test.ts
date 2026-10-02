@@ -230,7 +230,6 @@ test.each([
     first.api.sim.advance(12_500)
   }
   await died
-  first.server.flush()
   expect(writeSteps(first).some(([, state]) => state === 'pending')).toBe(true)
 
   const second = makeFixture({ store, isolate: false, linear: client(), clock: wall.read })

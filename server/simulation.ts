@@ -273,8 +273,10 @@ export class MockServer {
     this.rev += 1
     this.world = { ...this.world }
     for (const fn of this.listeners) fn(this.world)
+    // A queued write, with its comment id, must be on disk before it can reach Linear, or a restart would mint a new id and post twice.
+    if (grown.length > 0) this.flush()
     for (const issueId of grown) this.drain(issueId)
-    if (!this.store || this.saveTimer) return
+    if (!this.store || this.saveTimer || grown.length > 0) return
     this.saveTimer = setTimeout(() => this.flush(), SAVE_MS)
   }
 
