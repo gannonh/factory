@@ -72,4 +72,6 @@ Automated drags do not create React Flow connections, because the handles listen
 
 ## Docs
 
+`docs/domain.md` defines the domain vocabulary, and `docs/domain.html` diagrams it. Use those terms in code, tickets and ADRs. When a term changes or a planned term gets built, update both files in the same PR.
+
 When a change alters behavior that `README.md` or an ADR describes, update that document in the same PR.

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factory domain: from issue lifecycle to run</title>
+<!-- Keep in step with docs/domain.md, which holds the definitions. -->
+<style>
+  :root {
+    --ink-950: #07090f; --ink-900: #0b0f19; --ink-850: #0f1522; --ink-800: #141b2b; --ink-700: #1c2538;
+    --ink-500: #3b475f; --ink-400: #64748b; --ink-300: #94a3b8; --ink-200: #cbd5e1; --ink-100: #e2e8f0;
+    --lifecycle: #94a3b8; --round: #a78bfa; --flow: #22d3ee; --task: #34d399; --run: #fbbf24; --turn: #64748b; --gate: #f87171;
+    --sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --mono: ui-monospace, 'JetBrains Mono', SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ink-950); color: var(--ink-200); font: 14px/1.5 var(--sans); }
+  main { max-width: 1120px; margin: 0 auto; padding: 32px 20px 48px; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 28px; }
+  header { grid-column: 1 / -1; }
+  h1 { margin: 0 0 4px; font-size: 20px; color: var(--ink-100); font-weight: 600; }
+  header p { margin: 0; color: var(--ink-400); }
+
+  .box { border: 1px solid var(--c); border-left-width: 3px; border-radius: 8px; padding: 10px 12px 12px; margin-top: 10px; background: color-mix(in srgb, var(--c) 5%, var(--ink-900)); }
+  .box > .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+  .kind { font: 600 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--c); }
+  .name { color: var(--ink-100); font-weight: 600; }
+  .why { color: var(--ink-400); font-size: 12px; }
+  .lifecycle { --c: var(--lifecycle); margin-top: 0; }
+  .round { --c: var(--round); }
+  .flow { --c: var(--flow); }
+  .task { --c: var(--task); }
+  .run { --c: var(--run); }
+  .turns { --c: var(--turn); border-style: dashed; padding: 6px 10px; }
+  .gate { --c: var(--gate); border-style: dashed; }
+  .step { margin: 10px 0 0 2px; font: 12px var(--mono); color: var(--ink-300); }
+  .step::before { content: "→ "; color: var(--ink-500); }
+  .ok { color: #34d399; } .bad { color: #f87171; }
+
+  aside h2 { margin: 0 0 10px; font-size: 13px; color: var(--ink-100); text-transform: uppercase; letter-spacing: .08em; font-weight: 600; }
+  dl { margin: 0; }
+  dt { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: var(--ink-100); font-weight: 600; }
+  dt::before { content: ""; width: 10px; height: 10px; border-radius: 3px; background: var(--c); flex: none; }
+  dt .tag { margin-left: auto; font: 500 10px var(--mono); color: var(--ink-400); border: 1px solid var(--ink-700); border-radius: 4px; padding: 1px 5px; }
+  dd { margin: 2px 0 0 18px; color: var(--ink-300); font-size: 13px; }
+  aside .foot { margin-top: 22px; padding-top: 12px; border-top: 1px solid var(--ink-700); color: var(--ink-400); font-size: 12px; }
+  code { font-family: var(--mono); font-size: 12px; color: var(--ink-200); }
+
+  @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>From issue lifecycle to run</h1>
+    <p>One issue, ENG-7, traced through every level of Factory's domain. Each level contains the one below it.</p>
+  </header>
+
+  <section aria-label="Example">
+    <div class="box lifecycle">
+      <div class="head"><span class="kind">Issue lifecycle</span><span class="name">ENG-7</span><span class="why">Linear owns it. Todo to Done, can take days.</span></div>
+
+      <div class="box round">
+        <div class="head"><span class="kind">Round 1</span><span class="name">stage "Build"</span><span class="why">ENG-7 entered Todo</span></div>
+        <div class="box flow">
+          <div class="head"><span class="kind">Flow</span><span class="name">fl-a</span><span class="why">one pass of work through the graph</span></div>
+          <div class="box task">
+            <div class="head"><span class="kind">Task</span><span class="name">Implementer</span></div>
+            <div class="box run">
+              <div class="head"><span class="kind">Run</span><span class="name">attempt 1</span><span class="why bad">failed, retry scheduled</span></div>
+              <div class="box turns"><div class="head"><span class="kind">Turns</span><span class="why">inside the Claude process. Factory does not see them.</span></div></div>
+            </div>
+            <div class="box run">
+              <div class="head"><span class="kind">Run</span><span class="name">attempt 2</span><span class="why ok">succeeded</span></div>
+            </div>
+          </div>
+          <div class="box task">
+            <div class="head"><span class="kind">Task</span><span class="name">Verifier</span><span class="why">created by the handoff from Implementer</span></div>
+            <div class="box run">
+              <div class="head"><span class="kind">Run</span><span class="name">attempt 1</span><span class="why ok">succeeded</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="step">flow ends, Factory moves ENG-7 to Agent Review</div>
+      </div>
+
+      <div class="box round">
+        <div class="head"><span class="kind">Round 2</span><span class="name">stage "Agent Review"</span><span class="why">ENG-7 entered Agent Review</span></div>
+        <div class="box flow"><div class="head"><span class="kind">Flow</span><span class="name">fl-b</span><span class="why">tasks and runs as above</span></div></div>
+        <div class="step">flow ends, Factory moves ENG-7 to Human Review</div>
+      </div>
+
+      <div class="box gate">
+        <div class="head"><span class="kind">Human gate</span><span class="name">Human Review</span><span class="why">no trigger, so no round. A person rejects and moves ENG-7 back to Todo.</span></div>
+      </div>
+
+      <div class="box round">
+        <div class="head"><span class="kind">Round 3</span><span class="name">stage "Build"</span><span class="why">re-entry to Todo is rework</span></div>
+        <div class="box flow"><div class="head"><span class="kind">Flow</span><span class="name">fl-c</span><span class="why">a new flow, with context from the issue and its PR</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <aside>
+    <h2>Levels</h2>
+    <dl>
+      <dt style="--c: var(--lifecycle)">Issue lifecycle <span class="tag">Linear</span></dt>
+      <dd>The issue's path through the team's Linear states. One per issue.</dd>
+      <dt style="--c: var(--round)">Round <span class="tag">planned</span></dt>
+      <dd>One entry of the issue into a stage's state. Not a turn, not an attempt.</dd>
+      <dt style="--c: var(--flow)">Flow <span class="tag">built</span></dt>
+      <dd>One starting task plus every task its handoffs create. Exactly one per round.</dd>
+      <dt style="--c: var(--task)">Task <span class="tag">built</span></dt>
+      <dd>One unit of work for one agent. Waits in the queue until a run starts.</dd>
+      <dt style="--c: var(--run)">Run <span class="tag">built</span></dt>
+      <dd>One attempt at a task in a sandbox. A retry is another run.</dd>
+      <dt style="--c: var(--turn)">Turn <span class="tag">agent only</span></dt>
+      <dd>One exchange inside the agent process. Factory does not track it.</dd>
+      <dt style="--c: var(--gate)">Human gate <span class="tag">planned</span></dt>
+      <dd>A Linear state with no trigger. A person releases the issue by moving it.</dd>
+    </dl>
+    <p class="foot">Definitions: <code>docs/domain.md</code>. Decision: <code>docs/adr/0008-linear-state-drives-stages.md</code>. Update all three together.</p>
+  </aside>
+</main>
+</body>
+</html>
