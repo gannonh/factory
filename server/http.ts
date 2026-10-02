@@ -106,7 +106,7 @@ export function startFactoryServer(
       return
     }
     try {
-      const result = runCommand(simulation, method, args)
+      const result = await runCommand(simulation, method, args)
       sendJson(res, 200, { ok: true, result, rev: simulation.revision(), world: simulation.snapshot() })
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'bad request'

@@ -11,6 +11,7 @@ import { createApi, type InProcessApi } from '../server/api'
 import { MockServer } from '../server/simulation'
 import { SimulatedRunner } from '../server/runners'
 import type { WorldStore } from '../server/worldFile'
+import type { LinearClient } from '../server/linear'
 import type { AgentId, FactoryEvent, SandboxId, Task, TaskId, World } from '../src/domain/types'
 
 export const RNG = () => 0.5
@@ -40,8 +41,8 @@ export type Fixture = {
   runs: () => World['runs']
 }
 
-export function makeFixture(options: { isolate?: boolean; store?: WorldStore } = {}): Fixture {
-  const server = new MockServer({ manual: true, rng: RNG, store: options.store, localRunner: new SimulatedRunner(RNG) })
+export function makeFixture(options: { isolate?: boolean; store?: WorldStore; linear?: LinearClient; clock?: () => number } = {}): Fixture {
+  const server = new MockServer({ manual: true, rng: RNG, store: options.store, localRunner: new SimulatedRunner(RNG), linear: options.linear, clock: options.clock })
   const api = createApi(server)
   let latest = server.snapshot()
   api.subscribe((w) => { latest = w })

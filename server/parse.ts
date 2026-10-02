@@ -42,6 +42,11 @@ export function optional<T>(parser: Parser<T>): Parser<T | undefined> {
   return (value, path) => (value === undefined ? undefined : parser(value, path))
 }
 
+/** A field older documents lack: missing reads as `fallback()`, present must parse. */
+export function defaulted<T>(parser: Parser<T>, fallback: () => T): Parser<T> {
+  return (value, path) => (value === undefined ? fallback() : parser(value, path))
+}
+
 export function array<T>(parser: Parser<T>): Parser<T[]> {
   return (value, path) => (Array.isArray(value) ? value.map((item, i) => parser(item, `${path}[${i}]`)) : fail(path, 'an array'))
 }

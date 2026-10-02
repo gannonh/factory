@@ -3,6 +3,7 @@ import { MockServer } from './simulation'
 import { startFactoryServer } from './http'
 import { fileStore, worldFilePath } from './worldFile'
 import { fileRunLogs } from './runLogs'
+import { LINEAR_URL, createLinearClient } from './linear'
 
 const port = Number(process.env.FACTORY_PORT ?? 8787)
 // the default page answers on both loopback spellings, and the browser sends whichever the operator typed
@@ -14,7 +15,11 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) {
 }
 
 const worldFile = worldFilePath(process.env, join(import.meta.dirname, '..'))
-const simulation = new MockServer({ store: fileStore(worldFile), runLogs: fileRunLogs(dirname(worldFile)), localRoot: process.env.FACTORY_LOCAL_ROOT ?? process.cwd(), localCronEnabled: false })
+// the key stays in this process: it never enters the world, which every tab and the world file receive
+const linear = createLinearClient({ url: process.env.FACTORY_LINEAR_URL || LINEAR_URL, apiKey: process.env.LINEAR_API_KEY || undefined })
+const simulation = new MockServer({
+  store: fileStore(worldFile), runLogs: fileRunLogs(dirname(worldFile)), localRoot: process.env.FACTORY_LOCAL_ROOT ?? process.cwd(), localCronEnabled: false, linear,
+})
 const running = await startFactoryServer(simulation, { port, origins })
 console.log(`factory server listening on 127.0.0.1:${running.port} for ${origins.join(', ')}, world file ${worldFile}`)
 

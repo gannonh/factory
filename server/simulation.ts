@@ -1,6 +1,7 @@
 import { seedWorld } from '../src/domain/seed'
 import {
   EDGE_RULES,
+  LINEAR_POLL_MS,
   SANDBOX_TIMED,
   SANDBOX_TRANSITIONS,
   attachedEdges,
@@ -20,6 +21,11 @@ import {
   type GraphFragment,
   type Group,
   type GroupId,
+  type IntakeError,
+  type IntakePreview,
+  type IssueId,
+  type LinearCatalog,
+  type LinearSettings,
   type LogLevel,
   type NodeId,
   type NodeKind,
@@ -38,13 +44,15 @@ import {
   type TaskId,
   type Trigger,
   type TriggerId,
+  type TriggerKind,
   type World,
 } from '../src/domain/types'
 import type { WorldStore } from './worldFile'
 import { ClaudeRunner, SimulatedRunner, gitArtifacts, prepareWorkdir, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
 import type { RunLogStore } from './runLogs'
-import { array, boolean, id, number, object, oneOf, record } from './parse'
-import { agent, edge, event, group, run, sandbox, task, trigger } from './records'
+import { array, boolean, defaulted, id, number, object, oneOf, record } from './parse'
+import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
+import { LINEAR_URL, createLinearClient, intakeErrorOf, type LinearClient, type LinearIssue } from './linear'
 import { isAbsolute } from 'node:path'
 
 const TICK_MS = 400
@@ -58,6 +66,9 @@ const ERROR_TRUNCATED = '\n… [error truncated]'
 const SAVE_MS = 1000
 const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 }
 const ID_PREFIX: Record<NodeKind, string> = { agent: 'ag', sandbox: 'sb', trigger: 'tr' }
+const FIRES_ON_INTERVAL: Record<TriggerKind, boolean> = { cron: true, webhook: true, event: true, manual: false, linear: false }
+const PREVIEW_ISSUES = 5
+const ONE_AGENT = 'A Linear trigger feeds one agent. Join more agents with a handoff edge.'
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 
@@ -72,6 +83,21 @@ function connectable(world: World, source: NodeId, target: NodeId): { from: Node
 function edgeExists(world: World, source: NodeId, target: NodeId, kind: EdgeKind, exceptId?: EdgeId): boolean {
   return Object.values(world.edges).some((e) => e.id !== exceptId && e.source === source && e.target === target && e.kind === kind)
 }
+
+/**
+ * Why the graph refuses one more edge of `kind` out of `source`, or null. Each
+ * issue becomes one flow, so a Linear trigger joins exactly one agent; handoff
+ * edges carry that flow further.
+ */
+function fanOutRefusal(world: World, source: NodeId, kind: EdgeKind): string | null {
+  if (kind !== 'triggers' || world.triggers[source as TriggerId]?.kind !== 'linear') return null
+  return Object.values(world.edges).some((e) => e.kind === 'triggers' && e.source === source) ? ONE_AGENT : null
+}
+
+const sameSettings = (a: LinearSettings | null, b: LinearSettings | null) =>
+  a?.team === b?.team && a?.project === b?.project && a?.pickupState === b?.pickupState
+
+type Pollable = Trigger & { kind: 'linear'; linear: LinearSettings }
 
 type RunCompletion =
   | { status: 'succeeded'; agent: Pick<Agent, 'role' | 'tools'>; output?: RunOutput }
@@ -121,6 +147,12 @@ export class MockServer {
   private workdirs = new Map<RunId, PreparedWorkdir>()
   private pendingCompletions = new Map<RunId, Promise<void>>()
   private seedOptions: { localRoot?: string; localCronEnabled?: boolean }
+  private linear: LinearClient
+  private clock: () => number
+  /** One in-flight poll per Linear trigger. */
+  private polls = new Map<TriggerId, Promise<void>>()
+  /** Wall-clock start of each trigger's latest poll. */
+  private pollStarted = new Map<TriggerId, number>()
   private seq = 0
   private rev = 0
   private closed = false
@@ -129,9 +161,16 @@ export class MockServer {
    * `manual` stops the automatic interval; tests then advance simulated time with
    * `advance(ms)`. `rng` makes run outcomes, durations, and metric noise repeatable.
    * `store` holds the saved world; without one the world lives in memory only.
+   * `linear` defaults to a client with no key, which never makes a request.
+   * `clock` is the wall clock that paces Linear polls.
    */
-  constructor(options: { manual?: boolean; rng?: () => number; store?: WorldStore; runLogs?: RunLogStore; localRunner?: Runner; localRoot?: string; localCronEnabled?: boolean } = {}) {
+  constructor(options: {
+    manual?: boolean; rng?: () => number; store?: WorldStore; runLogs?: RunLogStore; localRunner?: Runner; localRoot?: string; localCronEnabled?: boolean
+    linear?: LinearClient; clock?: () => number
+  } = {}) {
     this.rng = options.rng ?? Math.random
+    this.linear = options.linear ?? createLinearClient({ url: LINEAR_URL, apiKey: undefined })
+    this.clock = options.clock ?? Date.now
     this.localRunner = options.localRunner ?? new ClaudeRunner()
     this.runners = { simulated: new SimulatedRunner(this.rng), local: this.localRunner }
     this.seedOptions = { localRoot: options.localRoot, localCronEnabled: options.localCronEnabled }
@@ -187,7 +226,13 @@ export class MockServer {
       if (run.status === 'running' && !this.pendingCompletions.has(run.id)) this.runners[run.execution ?? 'simulated'].kill(run.id)
     }
     if (this.pendingCompletions.size) await Promise.all(this.pendingCompletions.values())
+    if (this.polls.size) await this.settled()
     this.flush()
+  }
+
+  /** Resolves once no Linear poll is in flight. */
+  async settled() {
+    while (this.polls.size > 0) await Promise.all(this.polls.values())
   }
 
   /** Monotonic count of publishes. The initial seed is revision 1. */
@@ -328,7 +373,7 @@ export class MockServer {
     const id = this.uid('tr') as TriggerId
     const tr: Trigger = {
       id, name: `Trigger ${n}`, kind: 'manual', intervalMs: 30_000, enabled: true, lastFiredAt: w.now, fired: 0,
-      template: 'Do the thing', position, groupId: null,
+      template: 'Do the thing', linear: null, position, groupId: null,
     }
     w.triggers = { ...w.triggers, [id]: tr }
     this.event('graph', { kind: 'trigger', id }, `Trigger ${tr.name} created`)
@@ -354,6 +399,7 @@ export class MockServer {
     const attached = new Set<string>(attachedEdges(w, ids).map((e) => e.id))
     w.agents = Object.fromEntries(Object.entries(w.agents).filter(([id]) => !gone.has(id))) as World['agents']
     w.triggers = Object.fromEntries(Object.entries(w.triggers).filter(([id]) => !gone.has(id))) as World['triggers']
+    this.forgetPolls(ids as TriggerId[])
     for (const id of ids) if (w.sandboxes[id as SandboxId]) this.removeSandbox(id as SandboxId)
     w.edges = Object.fromEntries(Object.entries(w.edges).filter(([id]) => !attached.has(id))) as World['edges']
     this.event('graph', subject, `Deleted ${ids.length} node${ids.length === 1 ? '' : 's'}`)
@@ -375,6 +421,7 @@ export class MockServer {
     if (w.edges[edge.id]) return false
     if (!connectable(w, edge.source, edge.target)?.kinds.includes(edge.kind)) return false
     if (edgeExists(w, edge.source, edge.target, edge.kind)) return false
+    if (fanOutRefusal(w, edge.source, edge.kind)) return false
     w.edges = { ...w.edges, [edge.id]: edge }
     return true
   }
@@ -428,6 +475,8 @@ export class MockServer {
     if (join.kinds.length === 0) return { ok: false, reason: `${join.from} → ${join.to} is not a valid connection` }
     const kind = preferred && join.kinds.includes(preferred) ? preferred : join.kinds[0]
     if (edgeExists(w, source, target, kind)) return { ok: false, reason: 'edge already exists' }
+    const refusal = fanOutRefusal(w, source, kind)
+    if (refusal) return { ok: false, reason: refusal }
     const id = this.uid('ed') as EdgeId
     w.edges = { ...w.edges, [id]: { id, kind, source, target } }
     this.event('graph', { kind: 'edge', id }, `Connected ${this.nameOf(source)} → ${this.nameOf(target)} (${EDGE_RULES[kind].label})`)
@@ -589,14 +638,49 @@ export class MockServer {
     this.publish()
   }
 
+  /**
+   * A Linear trigger starts disabled and cannot be enabled until it has
+   * settings, so choosing the kind never takes issues before the operator
+   * has seen the preview.
+   */
   updateTrigger(id: TriggerId, patch: Partial<Omit<Trigger, 'id' | 'position' | 'groupId'>>) {
-    this.patchTrigger(id, patch)
+    const cur = this.world.triggers[id]
+    if (!cur) return
+    const next: Trigger = { ...cur, ...patch }
+    if (next.kind !== 'linear') {
+      next.linear = null
+      this.forgetPolls([id])
+    } else if (cur.kind !== 'linear') {
+      if (Object.values(this.world.edges).filter((e) => e.kind === 'triggers' && e.source === id).length > 1) {
+        throw new Error('A Linear trigger feeds one agent. Remove all but one triggers edge first.')
+      }
+      next.enabled = false
+    } else if (next.enabled && next.linear === null) {
+      if (patch.enabled) throw new Error('Choose a team and pickup state before enabling a Linear trigger.')
+      next.enabled = false
+    }
+    if (next.kind === 'linear' && (next.enabled !== cur.enabled || !sameSettings(next.linear, cur.linear))) this.pollStarted.delete(id)
+    this.world.triggers = { ...this.world.triggers, [id]: next }
     this.publish()
   }
 
-  fireTrigger(id: TriggerId) {
+  /** A Linear trigger polls now instead of firing, and resolves when that poll is done. */
+  async fireTrigger(id: TriggerId) {
+    if (this.world.triggers[id]?.kind === 'linear') return this.poll(id)
     this.fire(id)
     this.publish()
+  }
+
+  linearCatalog(): Promise<LinearCatalog> {
+    return this.linear.catalog()
+  }
+
+  async linearPreview(settings: LinearSettings): Promise<IntakePreview> {
+    const issues = await this.linear.issues(settings)
+    return {
+      count: issues.length,
+      issues: issues.slice(0, PREVIEW_ISSUES).map((issue) => ({ identifier: issue.ref.identifier, title: issue.title, url: issue.ref.url })),
+    }
   }
 
   setSim(patch: Partial<World['sim']>) {
@@ -610,6 +694,7 @@ export class MockServer {
     this.workdirs.clear()
     for (const run of Object.values(this.world.runs)) if (run.status === 'running') this.runners[run.execution ?? 'simulated'].kill(run.id)
     this.store?.clear()
+    this.pollStarted.clear()
     this.world = seedWorld(Date.now(), this.seedOptions)
     this.runLogs?.prune([])
     this.publish()
@@ -623,6 +708,7 @@ export class MockServer {
     w.now += dt
     this.tickSandboxes()
     this.tickTriggers()
+    this.tickIntake()
     this.tickRuns(dt)
     this.schedule()
     this.publish()
@@ -678,7 +764,7 @@ export class MockServer {
 
   private tickTriggers() {
     for (const tr of Object.values(this.world.triggers)) {
-      if (!tr.enabled || tr.kind === 'manual') continue
+      if (!tr.enabled || !FIRES_ON_INTERVAL[tr.kind]) continue
       if (tr.lastFiredAt === null) {
         this.patchTrigger(tr.id, { lastFiredAt: this.world.now - tr.intervalMs * 0.6 })
         continue
@@ -697,6 +783,73 @@ export class MockServer {
     for (const e of targets) {
       this.enqueueTaskSilently(e.target as AgentId, { title: tr.template, prompt: `${tr.template}\n\nTriggered by ${tr.name}.`, priority: tr.kind === 'webhook' ? 'high' : 'normal', origin: { kind: 'trigger', id }, input: null }, flowId)
     }
+  }
+
+  private pollable(tr: Trigger | undefined): tr is Pollable {
+    return !!tr && tr.kind === 'linear' && tr.enabled && tr.linear !== null && !this.world.sim.paused && !this.closed
+  }
+
+  private tickIntake() {
+    const now = this.clock()
+    for (const tr of Object.values(this.world.triggers)) {
+      if (!this.pollable(tr) || this.polls.has(tr.id)) continue
+      const last = this.pollStarted.get(tr.id)
+      if (last === undefined || now - last >= LINEAR_POLL_MS) void this.poll(tr.id)
+    }
+  }
+
+  private poll(id: TriggerId): Promise<void> {
+    const inFlight = this.polls.get(id)
+    if (inFlight) return inFlight
+    const tr = this.world.triggers[id]
+    if (!this.pollable(tr)) return Promise.resolve()
+    const settings = tr.linear
+    this.pollStarted.set(id, this.clock())
+    const done = this.linear.issues(settings)
+      .then((issues) => this.finishPoll(id, settings, issues, null), (err: unknown) => this.finishPoll(id, settings, [], intakeErrorOf(err)))
+      .finally(() => this.polls.delete(id))
+    this.polls.set(id, done)
+    return done
+  }
+
+  /** Take every issue without an intake record. A result that no longer matches the trigger is dropped; the next poll converges. */
+  private finishPoll(id: TriggerId, settings: LinearSettings, issues: LinearIssue[], error: IntakeError | null) {
+    const tr = this.world.triggers[id]
+    if (!this.pollable(tr) || !sameSettings(tr.linear, settings)) return
+    this.world.intakePolls = { ...this.world.intakePolls, [id]: { at: this.clock(), error } }
+    const feed = Object.values(this.world.edges).find((e) => e.kind === 'triggers' && e.source === id && this.world.agents[e.target as AgentId])
+    // without a joined agent nothing is taken, so a later poll still finds these issues
+    if (!feed) {
+      this.publish()
+      return
+    }
+    const agentId = feed.target as AgentId
+    const taken: string[] = []
+    for (const issue of issues) {
+      if (this.world.intake[issue.ref.id]) continue
+      const flowId = this.uid('fl') as FlowId
+      this.enqueueTaskSilently(agentId, {
+        title: `${issue.ref.identifier} ${issue.title}`,
+        prompt: [issue.title, issue.description, issue.ref.url].filter((part) => part !== '').join('\n\n'),
+        priority: 'normal',
+        origin: { kind: 'issue', trigger: id, issue: issue.ref },
+        input: null,
+      }, flowId)
+      this.world.intake = { ...this.world.intake, [issue.ref.id]: { issue: issue.ref, trigger: id, flowId, takenAt: this.clock() } }
+      taken.push(issue.ref.identifier)
+    }
+    if (taken.length > 0) {
+      this.patchTrigger(id, { lastFiredAt: this.world.now, fired: tr.fired + taken.length })
+      this.event('trigger', { kind: 'trigger', id }, `${tr.name} took ${taken.join(', ')}`)
+    }
+    this.publish()
+  }
+
+  private forgetPolls(ids: TriggerId[]) {
+    for (const id of ids) this.pollStarted.delete(id)
+    if (!ids.some((id) => id in this.world.intakePolls)) return
+    const gone = new Set<string>(ids)
+    this.world.intakePolls = Object.fromEntries(Object.entries(this.world.intakePolls).filter(([id]) => !gone.has(id))) as World['intakePolls']
   }
 
   private enqueueTaskSilently(agentId: AgentId, fields: Pick<Task, 'title' | 'prompt' | 'priority' | 'origin' | 'input'>, flowId: FlowId) {
@@ -978,7 +1131,7 @@ export class MockServer {
   }
 }
 
-type Persisted = Pick<World, 'now' | 'agents' | 'sandboxes' | 'triggers' | 'edges' | 'groups' | 'sim' | 'tasks' | 'runs' | 'events'>
+type Persisted = Pick<World, 'now' | 'agents' | 'sandboxes' | 'triggers' | 'edges' | 'groups' | 'sim' | 'tasks' | 'runs' | 'intake' | 'events'>
 
 const persisted = object<Persisted>({
   now: number,
@@ -989,6 +1142,7 @@ const persisted = object<Persisted>({
   groups: record(id<GroupId>(), group),
   tasks: record(id<TaskId>(), task),
   runs: record(id<RunId>(), run),
+  intake: defaulted(record(id<IssueId>(), intakeRecord), () => ({})),
   sim: object({ paused: boolean, speed: oneOf(1, 2, 4) }),
   events: array(event),
 })
@@ -998,8 +1152,10 @@ const persisted = object<Persisted>({
  * running run is kept plus the newest MAX_COMPLETED_RUNS finished runs; tasks
  * are kept when they are pending, referenced by a kept run, or share a flow
  * with a kept queued/waiting task, so post-restart dependency evaluation sees
- * the same prerequisites. Returned slices alias the live world and must be
- * serialized or copied before the world mutates.
+ * the same prerequisites. The intake map is kept whole: it is what stops an
+ * issue from starting a second flow after its tasks are pruned. Returned
+ * slices alias the live world and must be serialized or copied before the
+ * world mutates.
  */
 export function retainWorld(w: World): Persisted {
   const runs: World['runs'] = {}
@@ -1036,6 +1192,7 @@ export function retainWorld(w: World): Persisted {
     sim: w.sim,
     tasks,
     runs,
+    intake: w.intake,
     events: w.events.slice(-MAX_EVENTS),
   }
 }
@@ -1091,8 +1248,14 @@ function pastedNode(ref: NodeRef, id: string, offset: Position, now: number): No
       }
     }
     case 'trigger': {
-      const { name, kind, intervalMs, enabled, template } = ref.node
-      return { kind: 'trigger', node: { id: id as TriggerId, name, kind, intervalMs, enabled, template, lastFiredAt: null, fired: 0, position, groupId: null } }
+      const { name, kind, intervalMs, enabled, template, linear } = ref.node
+      return {
+        kind: 'trigger',
+        node: {
+          id: id as TriggerId, name, kind, intervalMs, enabled: kind === 'linear' ? false : enabled, template, linear: linear && { ...linear },
+          lastFiredAt: null, fired: 0, position, groupId: null,
+        },
+      }
     }
   }
 }
@@ -1119,6 +1282,8 @@ function parseWorld(text: string): World | null {
     groups: p.groups,
     tasks: p.tasks,
     runs: p.runs,
+    intake: p.intake,
+    intakePolls: {},
     logs: [],
     events: p.events,
     sim: p.sim,
