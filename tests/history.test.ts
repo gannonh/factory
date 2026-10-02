@@ -7,7 +7,9 @@
  */
 import { expect, test } from 'vitest'
 import { createHistory } from '../src/history'
-import type { AgentId, Edge, EdgeId, SandboxId } from '../src/domain/types'
+import type { Api } from '../src/api/types'
+import { seedWorld } from '../src/domain/seed'
+import type { AgentId, Edge, EdgeId, SandboxId, Trigger, TriggerId } from '../src/domain/types'
 import { makeFixture, sb, type Fixture } from './fixture'
 
 function setup() {
@@ -552,4 +554,28 @@ test('restoreNodes skips an id that already exists and logs nothing for it', asy
   fixture.api.graph.restoreNodes([{ kind: 'agent', node: { ...planner, name: 'Impostor' } }])
   expect(fixture.world().agents[planner.id]).toEqual(planner)
   expect(fixture.events()).toHaveLength(events)
+})
+
+test('undo and redo restore a Linear trigger patch with its object value', async () => {
+  let world = seedWorld(0)
+  const id = Object.keys(world.triggers)[0] as TriggerId
+  const api = {
+    triggers: {
+      update: (_: TriggerId, patch: Partial<Trigger>) => {
+        world = { ...world, triggers: { ...world.triggers, [id]: { ...world.triggers[id], ...patch } } }
+        return Promise.resolve()
+      },
+    },
+  } as unknown as Api
+  const history = createHistory(api, () => world)
+  const linear = { team: 'team-1', project: null, pickupState: 'state-todo' }
+
+  await history.updateTrigger(id, { kind: 'linear', linear })
+  expect(world.triggers[id]).toMatchObject({ kind: 'linear', linear })
+
+  await history.undo()
+  expect(world.triggers[id]).toMatchObject({ kind: 'cron', linear: null })
+
+  await history.redo()
+  expect(world.triggers[id]).toMatchObject({ kind: 'linear', linear })
 })
