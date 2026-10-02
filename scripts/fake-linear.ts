@@ -24,15 +24,20 @@ const STATES: Array<[string, WorkflowStateType]> = [
   ['Backlog', 'backlog'], ['Todo', 'unstarted'], ['In Progress', 'started'], ['In Review', 'started'], ['Done', 'completed'], ['Canceled', 'canceled'],
 ]
 
+const START_STATES: Array<[string, WorkflowStateType]> = [
+  ['Backlog', 'backlog'], ['Todo', 'unstarted'], ['Start', 'unstarted'], ['In Progress', 'started'], ['Agent Review', 'started'],
+  ['Human Review', 'started'], ['Merging', 'started'], ['Done', 'completed'], ['Canceled', 'canceled'],
+]
+
 function seedTeams(): Team[] {
-  const team = (key: string, name: string, projects: string[]): Team => ({
+  const team = (key: string, name: string, projects: string[], states = STATES): Team => ({
     id: `team-${key.toLowerCase()}`,
     key,
     name,
-    states: STATES.map(([state, type], i) => ({ id: `state-${key.toLowerCase()}-${state.toLowerCase().replace(/\s+/g, '-')}`, name: state, type, position: i })),
+    states: states.map(([state, type], i) => ({ id: `state-${key.toLowerCase()}-${state.toLowerCase().replace(/\s+/g, '-')}`, name: state, type, position: i })),
     projects: projects.map((project) => ({ id: `project-${project.toLowerCase()}`, name: project })),
   })
-  return [team('ENG', 'Engineering', ['Alpha', 'Beta']), team('OPS', 'Operations', [])]
+  return [team('ENG', 'Engineering', ['Alpha', 'Beta']), team('OPS', 'Operations', []), team('KAT', 'Kata', ['Gamma'], START_STATES)]
 }
 
 const slug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)

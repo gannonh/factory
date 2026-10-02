@@ -100,7 +100,7 @@ A trigger of kind `linear` turns Linear issues into flows. The decision is recor
 
 Factory writes the flow's progress back to the issue. The decision is recorded in `docs/adr/0007-linear-write-back.md`.
 
-- The trigger also stores a started, a finished and a failed state. Each can be left unset, which leaves the issue where it is. Choosing a team fills the recommended states: the first started-type state, the first started-type state named like review, and unset for failed.
+- The trigger also stores a started, a finished and a failed state. Each can be left unset, which leaves the issue where it is. Choosing a team fills the recommended states. Pickup is the first unstarted-type state whose name has the word Start, or the first unstarted-type state when no name has it. Started is the first started-type state, finished is the first started-type state named like review, and failed is unset.
 - The first run in the issue's flow moves the issue to the started state. Later runs in the flow do not move it again.
 - When every task in the flow has finished, the issue moves to the finished state and gets one comment. The comment lists each task in flow order with its agent, run id, summary and artifacts, and names Factory, the runs and the agents.
 - When every task in the flow has ended and one failed with no retries left, the issue moves to the failed state and gets one comment with the failure reasons. A failed attempt that will retry, or a failed task whose siblings are still running, writes nothing yet.
