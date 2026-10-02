@@ -5,25 +5,32 @@ import { Button, Field, IssueLink, Section, Select } from '../ui'
 
 type Loaded<T> = { status: 'loading' } | { status: 'ready'; value: T } | { status: 'error'; message: string }
 
-function useLoaded<T>(load: () => T | PromiseLike<T>): Loaded<T> {
+/** Loads on mount and when `load` changes, then again every `refreshMs` while mounted, keeping the shown value until the next one arrives. */
+function useLoaded<T>(load: () => T | PromiseLike<T>, refreshMs?: number): Loaded<T> {
   const [result, setResult] = useState<{ load: typeof load; state: Loaded<T> } | null>(null)
   useEffect(() => {
     let current = true
-    Promise.resolve(load()).then(
+    const run = () => Promise.resolve(load()).then(
       (value) => { if (current) setResult({ load, state: { status: 'ready', value } }) },
       (error: unknown) => { if (current) setResult({ load, state: { status: 'error', message: error instanceof Error ? error.message : 'Linear request failed' } }) },
     )
-    return () => { current = false }
-  }, [load])
+    void run()
+    const timer = refreshMs === undefined ? undefined : setInterval(() => void run(), refreshMs)
+    return () => {
+      current = false
+      clearInterval(timer)
+    }
+  }, [load, refreshMs])
   return result?.load === load ? result.state : { status: 'loading' }
 }
 
 const loadCatalog = () => api.linear.catalog()
+const PREVIEW_REFRESH_MS = 5000
 
 function Preview({ settings }: { settings: LinearSettings }) {
   const { team, project, pickupState } = settings
   const load = useCallback(() => api.linear.preview({ team, project, pickupState }), [team, project, pickupState])
-  const preview = useLoaded<IntakePreview>(load)
+  const preview = useLoaded<IntakePreview>(load, PREVIEW_REFRESH_MS)
   if (preview.status === 'loading') return <div className="text-[11px] text-ink-400">Checking Linear…</div>
   if (preview.status === 'error') return <div className="text-[11px] text-red-300 break-words">{preview.message}</div>
   const { count, issues } = preview.value
