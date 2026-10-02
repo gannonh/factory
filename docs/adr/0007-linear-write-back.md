@@ -8,7 +8,7 @@ Each intake record holds a phase and an ordered write queue. The phase is `taken
 
 A write reads the trigger's states when it becomes due. The note's body and comment id are fixed then and saved with the record. The body lists each task in flow order with its agent, its latest run id, and its summary and artifacts or its failure reason. A signature line names Factory, every run listed and every agent.
 
-The server drains each issue's queue in order, one drain per issue. `server/linear.ts` makes each write converge. `ensureState` reads the issue's state and moves it only when it differs. `ensureComment` looks for a comment with the saved id and creates it under that id only when it is missing. A landed write records its time. A failed write records its time and error, stops the queue, and retries once a poll interval has passed. Writes never change task state, and they run whether or not the trigger is enabled.
+The server drains each issue's queue, one drain per issue. Moves go in order, so a failed move holds back the moves after it, but a note is independent and goes out whatever happened to the moves. `server/linear.ts` makes each write converge. `ensureState` reads the issue's state and moves it only when it differs. `ensureComment` looks for a comment with the saved id and creates it under that id only when it is missing. A landed write records its time. A failed write records its time and error and retries once a poll interval has passed. A landed note drops its text from the record, since only a pending or failed note is sent again. Writes never change task state, and they run whether or not the trigger is enabled.
 
 Records saved before this decision load as `ended` with no writes.
 

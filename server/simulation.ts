@@ -56,7 +56,7 @@ import type { RunLogStore } from './runLogs'
 import { array, boolean, defaulted, id, number, object, oneOf, record } from './parse'
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
 import { LINEAR_URL, createLinearClient, intakeErrorOf, type LinearClient, type LinearIssue } from './linear'
-import { reconcileRecord } from './writeBack'
+import { landed, nextWrite, reconcileRecord } from './writeBack'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 
@@ -792,8 +792,7 @@ export class MockServer {
       if (last === undefined || now - last >= LINEAR_POLL_MS) void this.poll(tr.id)
     }
     for (const record of Object.values(this.world.intake)) {
-      const next = record.writes.find((w) => w.status.state !== 'landed')
-      if (next && (next.status.state === 'pending' || now - next.status.at >= LINEAR_POLL_MS)) this.drain(record.issue.id)
+      if (nextWrite(record.writes, now, LINEAR_POLL_MS) !== -1) this.drain(record.issue.id)
     }
   }
 
@@ -861,32 +860,33 @@ export class MockServer {
 
   private drain(issueId: IssueId) {
     if (this.closed || this.drains.has(issueId)) return
-    const done = this.drainWrites(issueId).finally(() => this.drains.delete(issueId))
+    const done = this.drainWrites(issueId)
+      .catch((err: unknown) => console.error(`write-back for ${issueId} stopped: ${intakeErrorOf(err).message}`))
+      .finally(() => this.drains.delete(issueId))
     this.drains.set(issueId, done)
   }
 
-  /** Lands an issue's writes in order. A failed write stops the queue until the next poll retries it. Task state is never touched. */
+  /** Lands an issue's due writes. A failed move holds back later moves, not notes, until the next poll retries it. Task state is never touched. */
   private async drainWrites(issueId: IssueId) {
     for (;;) {
       const record: IntakeRecord | undefined = this.world.intake[issueId]
-      const index = record?.writes.findIndex((w) => w.status.state !== 'landed') ?? -1
+      const index = record ? nextWrite(record.writes, this.clock(), LINEAR_POLL_MS) : -1
       if (this.closed || !record || index === -1) return
       const write = record.writes[index]
       let status: WriteStatus
       try {
         if (write.kind === 'move') await this.linear.ensureState(issueId, write.stateId)
-        else await this.linear.ensureComment(issueId, write.commentId, write.body)
+        else await this.linear.ensureComment(issueId, write.commentId, write.body ?? '')
         status = { state: 'landed', at: this.clock() }
       } catch (err) {
         status = { state: 'failed', at: this.clock(), error: intakeErrorOf(err).message }
       }
       const current = this.world.intake[issueId]
       if (current) {
-        const writes = current.writes.map((w, i) => (i === index ? { ...w, status } : w))
+        const writes = current.writes.map((w, i) => (i === index ? landed(w, status) : w))
         this.world.intake = { ...this.world.intake, [issueId]: { ...current, writes } }
         this.publish()
       }
-      if (status.state === 'failed') return
     }
   }
 

@@ -243,7 +243,7 @@ test.each([
   expect(await requests()).toMatchObject({ FactoryMoveIssue: 2, FactoryCreateComment: 1 })
 })
 
-test('a failed write shows its reason, leaves the task alone, and lands on the next poll', async () => {
+test('a failed move shows its reason, leaves the task alone, does not hold back the note, and lands on the next poll', async () => {
   await addIssue('Fix login')
   const wall = wallClock()
   const f = makeFixture({ linear: client(), clock: wall.read })
@@ -258,9 +258,12 @@ test('a failed write shows its reason, leaves the task alone, and lands on the n
   expect(f.world().intake[ENG_1].writes.map((w) => w.status)).toEqual([
     { state: 'landed', at: 1_000_000 },
     { state: 'failed', at: 1_000_000, error: 'Linear error: rate limited' },
-    { state: 'pending' },
+    { state: 'landed', at: 1_000_000 },
   ])
-  expect(await issue('ENG-1')).toMatchObject({ state: 'In Progress', comments: [] })
+  const stuck = await issue('ENG-1')
+  expect(stuck.state).toBe('In Progress')
+  expect(stuck.comments).toHaveLength(1)
+  expect(f.world().intake[ENG_1].writes[2]).toMatchObject({ kind: 'note', body: null })
 
   wall.now += LINEAR_POLL_MS - 1
   await step(f, 0)

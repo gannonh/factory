@@ -1,7 +1,8 @@
-import type { IntakeRecord, IssueWrite, WriteStatus } from '../../domain/types'
+import { api } from '../../api/client'
+import type { IntakeRecord, IssueWrite, LinearCatalog, WriteStatus } from '../../domain/types'
 import { useWallNow } from '../../useWallNow'
 import { Badge, Section, fmtAgo } from '../ui'
-import { loadCatalog, useLoaded } from './useLoaded'
+import { useLoaded } from './useLoaded'
 
 const STATUS_COLOR: Record<WriteStatus['state'], string> = { pending: '#94a3b8', landed: '#34d399', failed: '#f87171' }
 
@@ -10,9 +11,22 @@ function writeLabel(write: IssueWrite, stateName: (id: string) => string): strin
   return write.outcome === 'finished' ? 'Completion note' : 'Failure note'
 }
 
+const CATALOG_TTL_MS = 60_000
+const NO_CATALOG = () => Promise.resolve<LinearCatalog>({ teams: [] })
+let cached: { at: number; catalog: Promise<LinearCatalog> } | null = null
+
+/** One catalog request per minute is shared by every selection, and a failed one is not kept. */
+function loadStateNames(): Promise<LinearCatalog> {
+  if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached.catalog
+  const entry = { at: Date.now(), catalog: Promise.resolve(api.linear.catalog()) }
+  entry.catalog.catch(() => { if (cached === entry) cached = null })
+  cached = entry
+  return entry.catalog
+}
+
 /** What Factory has written to the flow's Linear issue, in order, with each write's status. */
 export function WriteBackSection({ record }: { record: IntakeRecord }) {
-  const catalog = useLoaded(loadCatalog)
+  const catalog = useLoaded(record.writes.some((w) => w.kind === 'move') ? loadStateNames : NO_CATALOG)
   const wallNow = useWallNow()
   const states = catalog.status === 'ready' ? catalog.value.teams.flatMap((t) => t.states) : []
   const stateName = (id: string) => states.find((s) => s.id === id)?.name ?? id

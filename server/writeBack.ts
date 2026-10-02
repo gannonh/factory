@@ -1,4 +1,4 @@
-import type { Artifact, IntakePhase, IntakeRecord, IssueWrite, Run, Task, World } from '../src/domain/types'
+import type { Artifact, IntakePhase, IntakeRecord, IssueWrite, Run, Task, World, WriteStatus } from '../src/domain/types'
 
 type Outcome = 'finished' | 'failed' | 'cancelled'
 
@@ -75,4 +75,27 @@ export function reconcileRecord(
     }
   }
   return phase === record.phase ? record : { ...record, phase, writes }
+}
+
+/**
+ * The index of the next write to send, or -1. A write is due when it is pending or failed at least `retryMs` ago.
+ * Moves go in order, so a stuck move holds back later moves (a late started move would undo a finished one),
+ * but never a note: the note reports the result whatever happened to the issue's state.
+ */
+export function nextWrite(writes: readonly IssueWrite[], now: number, retryMs: number): number {
+  let movesOpen = false
+  for (let i = 0; i < writes.length; i++) {
+    const write = writes[i]
+    const { status } = write
+    if (status.state === 'landed' || (write.kind === 'note' && write.body === null)) continue
+    if (write.kind === 'move' && movesOpen) continue
+    if (write.kind === 'move') movesOpen = true
+    if (status.state === 'pending' || now - status.at >= retryMs) return i
+  }
+  return -1
+}
+
+/** The write with its note text dropped once it has landed: only a pending or failed note is sent again. */
+export function landed(write: IssueWrite, status: WriteStatus): IssueWrite {
+  return write.kind === 'note' && status.state === 'landed' ? { ...write, body: null, status } : { ...write, status }
 }

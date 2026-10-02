@@ -160,7 +160,7 @@ const writeStatus: Parser<WriteStatus> = (value, path) =>
 
 const issueWrite = tagged<IssueWrite>({
   move: object({ kind: oneOf('move'), step: oneOf('started', 'finished', 'failed'), stateId: string, status: writeStatus }),
-  note: object({ kind: oneOf('note'), outcome: oneOf('finished', 'failed'), commentId: string, body: string, status: writeStatus }),
+  note: object({ kind: oneOf('note'), outcome: oneOf('finished', 'failed'), commentId: string, body: nullable(string), status: writeStatus }),
 })
 
 // A record saved before write-back counts as ended with nothing to write, so upgrading never posts notes for older flows.
