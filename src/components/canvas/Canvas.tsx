@@ -13,6 +13,7 @@ import { ShortcutHelpButton, ShortcutsOverlay } from './ShortcutsOverlay'
 import { EdgeLegend, edgeTypes, type FactoryEdgeType } from './FactoryEdge'
 import { groupFrame, membersOf, sharedGroupId } from './groups'
 import { autoLayout, SIZE } from './layout'
+import { intakeStatus } from '../linearIntake'
 import { nodeTypes, type FactoryNode } from './nodes'
 
 function buildNodes(world: World): FactoryNode[] {
@@ -20,8 +21,8 @@ function buildNodes(world: World): FactoryNode[] {
   const tasks = Object.values(world.tasks)
   const out: FactoryNode[] = []
   for (const t of Object.values(world.triggers)) {
-    const nextIn = t.enabled && t.kind !== 'manual' && t.lastFiredAt !== null ? t.lastFiredAt + t.intervalMs - world.now : null
-    out.push({ id: t.id, type: 'trigger', position: t.position, data: { trigger: t, nextIn } })
+    const nextIn = t.enabled && t.kind !== 'manual' && t.kind !== 'linear' && t.lastFiredAt !== null ? t.lastFiredAt + t.intervalMs - world.now : null
+    out.push({ id: t.id, type: 'trigger', position: t.position, data: { trigger: t, nextIn, intake: t.kind === 'linear' ? intakeStatus(world, t) : null } })
   }
   for (const a of Object.values(world.agents)) {
     out.push({

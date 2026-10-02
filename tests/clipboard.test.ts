@@ -164,7 +164,7 @@ test('a leased sandbox and a fired trigger paste idle', async () => {
   })
   expect(w.triggers[tr(newTrigger)]).toEqual({
     id: newTrigger, name: 'Nightly sweep', kind: 'cron', intervalMs: 18_000, enabled: false, lastFiredAt: null, fired: 0,
-    template: 'Sweep open issues and plan the next batch', position: { x: 80, y: 100 }, groupId: null,
+    template: 'Sweep open issues and plan the next batch', linear: null, position: { x: 80, y: 100 }, groupId: null,
   })
   expect(newSandbox).toMatch(/^sb-/)
   expect(newTrigger).toMatch(/^tr-/)

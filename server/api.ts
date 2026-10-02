@@ -1,9 +1,9 @@
 import type { MockServer } from './simulation'
 import type {
-  AgentId, AgentPatch, Edge, EdgeId, EdgeKind, GraphFragment, Group, GroupId, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
+  AgentId, AgentPatch, Edge, EdgeId, EdgeKind, GraphFragment, Group, GroupId, LinearSettings, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
 } from '../src/domain/types'
 
-/** In-process binding for tests. `advance` stays here and is not a network command. */
+/** In-process binding for tests. `advance` and `settled` stay here and are not network commands. */
 export const createApi = (server: MockServer) => ({
   subscribe: (fn: (world: World) => void) => server.subscribe(fn),
   graph: {
@@ -40,9 +40,14 @@ export const createApi = (server: MockServer) => ({
     update: (id: TriggerId, patch: Partial<Omit<Trigger, 'id' | 'position' | 'groupId'>>) => server.updateTrigger(id, patch),
     fire: (id: TriggerId) => server.fireTrigger(id),
   },
+  linear: {
+    catalog: () => server.linearCatalog(),
+    preview: (settings: LinearSettings) => server.linearPreview(settings),
+  },
   sim: {
     set: (patch: Partial<World['sim']>) => server.setSim(patch),
     advance: (ms: number) => server.advance(ms),
+    settled: () => server.settled(),
     reset: () => server.reset(),
   },
 })

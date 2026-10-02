@@ -25,6 +25,17 @@ To reset the world, click Reset in the top bar. That deletes the file and loads 
 
 If the file cannot be read or is not a valid world, the server starts from the seed world. It renames the bad file to `world.json.corrupt` and logs one error line with the path.
 
+### Environment variables
+
+| Variable | Sets |
+| --- | --- |
+| `FACTORY_PORT` | The server port. The default is `8787`. |
+| `FACTORY_ORIGIN` | The one page origin the server accepts. |
+| `FACTORY_DATA_DIR` | Where `world.json` and run logs live. The default is `.factory/`. |
+| `FACTORY_LOCAL_ROOT` | The seeded local sandbox's root directory. The default is the current directory. |
+| `LINEAR_API_KEY` | The Linear personal API key for intake. Without it, Linear triggers record `LINEAR_API_KEY is not set`. |
+| `FACTORY_LINEAR_URL` | The Linear GraphQL endpoint. The default is `https://api.linear.app/graphql`. |
+
 ## MVP features
 
 Canvas (React Flow v12)
@@ -58,7 +69,7 @@ Runs, logs, events
 
 Simulation
 
-- Cron and webhook triggers fire on an interval and enqueue tasks on connected agents.
+- Cron and webhook triggers fire on an interval and enqueue tasks on connected agents. A Linear trigger takes issues instead (see Linear intake).
 - The scheduler respects concurrency, depends-on edges, and sandbox leases. Runs emit logs, succeed or fail, retry per policy, and hand off downstream.
 - Pause, 1x/2x/4x speed, and reset to seed data from the top bar.
 
@@ -75,6 +86,20 @@ Simulation
 - `src/clipboard.ts` holds the copied graph fragment and pastes it through the history, which calls `api.graph.paste`.
 - `src/components/canvas` is the React Flow graph, `inspector` the right panel, `agents` and `sandboxes` the list views, `dock` the bottom panel.
 
+## Linear intake
+
+A trigger of kind `linear` turns Linear issues into flows. The decision is recorded in `docs/adr/0006-work-backends-as-polled-triggers.md`.
+
+- The trigger stores a team, an optional project and a pickup state. It starts disabled and cannot be enabled until a team and a pickup state are set. `linear.preview` reports how many issues the settings match and lists the first five.
+- The server polls each enabled Linear trigger every 30 seconds of wall-clock time. Fire polls at once. Nothing polls while the trigger is disabled or the simulation is paused.
+- Each issue in the pickup state (and the project, when one is set) becomes one flow and one task on the agent the trigger joins. The task title is the issue identifier and title. The prompt is the issue title, description and URL.
+- A Linear trigger joins exactly one agent. The canvas refuses a second `triggers` edge from it. Handoff edges carry the issue's flow to more agents.
+- The server records every issue it takes and never prunes those records, so an issue never starts a second flow, across restarts and task pruning.
+- Each finished poll records its time and any error (missing key, rejected key, network, or API error) on the trigger. A failed poll does not stop other triggers or runs, and the next poll retries.
+- The key stays in the server's environment. It never enters the world that tabs receive or the world file.
+
+`scripts/fake-linear.ts` is a fake Linear API for tests and local trials. `npm run fake-linear -- --port 8790` starts it and prints its URL. Point the server at it with `FACTORY_LINEAR_URL=http://127.0.0.1:8790/graphql LINEAR_API_KEY=lin_api_fake`. `POST /control` with a JSON body adds issues (`{"op":"addIssue","title":"...","state":"Todo","project":"Alpha"}`), moves them (`{"op":"moveIssue","identifier":"ENG-1","state":"Done"}`), forces a 401 (`{"op":"failAuth","on":true}`), counts requests (`{"op":"stats"}`) and resets (`{"op":"reset"}`).
+
 ## Real runs
 
 A sandbox of kind `local` runs a real agent. Every other sandbox kind runs on the simulation.
@@ -87,7 +112,7 @@ A sandbox of kind `local` runs a real agent. Every other sandbox kind runs on th
 
 ## Not built yet
 
-- Work backends such as Linear (in progress), real triggers, and Docker, VPS and remote sandboxes.
+- Writing back to Linear, other work backends, real webhook triggers, and Docker, VPS and remote sandboxes.
 - Running the server on a remote host, auth, teams, multiple projects.
 
 ## License

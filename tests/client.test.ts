@@ -193,3 +193,23 @@ test.each(['fetch', 'body'])('a post-send %s failure reports an unknown outcome'
   expect(fetch).toHaveBeenCalledTimes(1)
   expect(useStore.getState().commandError).toBe('Connection lost after sending the command. Its outcome is unknown. Check the live world before retrying.')
 })
+
+test('the Linear catalog and preview post their commands and return the result', async () => {
+  const { api, startClient } = await import('../src/api/client')
+  const world = seedWorld(0)
+  startClient()
+  Socket.instances[0]!.open()
+  Socket.instances[0]!.snapshot(1, world)
+  const catalog = { teams: [{ id: 'team-1', key: 'KAT', name: 'Kata', states: [], projects: [] }] }
+  const preview = { count: 1, issues: [{ identifier: 'KAT-1', title: 'First', url: 'https://linear.app/kata/issue/KAT-1' }] }
+  vi.mocked(fetch)
+    .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, rev: 2, world, result: catalog })))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, rev: 3, world, result: preview })))
+  const settings = { team: 'team-1', project: null, pickupState: 'state-1' }
+  expect(await api.linear.catalog()).toEqual(catalog)
+  expect(await api.linear.preview(settings)).toEqual(preview)
+  expect(vi.mocked(fetch).mock.calls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+    { method: 'linear.catalog', args: [] },
+    { method: 'linear.preview', args: [settings] },
+  ])
+})

@@ -1,11 +1,11 @@
 import {
   EDGE_KINDS, MODELS, SANDBOX_TRANSITIONS, isCapacity,
   type Agent, type AgentId, type Artifact, type Edge, type EdgeId, type FactoryEvent, type FlowId, type Group, type GroupId,
-  type Lease, type Metrics, type NodeId, type Position, type Priority, type RetryPolicy, type Run, type RunId,
+  type IntakeRecord, type IssueId, type IssueRef, type Lease, type LinearSettings, type Metrics, type NodeId, type Position, type Priority, type RetryPolicy, type Run, type RunId,
   type RunOutput, type Sandbox, type SandboxId, type SandboxKind, type SandboxState, type Subject,
   type Task, type TaskId, type TaskInput, type Trigger, type TriggerId, type TriggerKind,
 } from '../src/domain/types'
-import { array, boolean, id, nullable, number, object, oneOf, refine, string, tagged, type Parser } from './parse'
+import { array, boolean, defaulted, id, nullable, number, object, oneOf, refine, string, tagged, type Parser } from './parse'
 import { isRestorableInteger } from './storedNumber'
 
 export const nodeId = id<NodeId>()
@@ -19,7 +19,7 @@ export const edgeKind = oneOf(...EDGE_KINDS)
 export const priority: Parser<Priority> = oneOf('low', 'normal', 'high')
 export const sandboxKind: Parser<SandboxKind> = oneOf('local', 'docker', 'vps', 'remote')
 const sandboxState = oneOf(...(Object.keys(SANDBOX_TRANSITIONS) as SandboxState[]))
-const triggerKind: Parser<TriggerKind> = oneOf('cron', 'webhook', 'manual', 'event')
+const triggerKind: Parser<TriggerKind> = oneOf('cron', 'webhook', 'manual', 'event', 'linear')
 export const capacity = refine(number, isCapacity, 'an integer of at least 1')
 
 export const position = object<Position>({ x: number, y: number })
@@ -68,6 +68,8 @@ export const sandbox = object<Sandbox>({
   groupId: nullable(groupId),
 })
 
+export const linearSettings = object<LinearSettings>({ team: string, project: nullable(string), pickupState: string })
+
 export const triggerFields = {
   name: string,
   kind: triggerKind,
@@ -76,13 +78,17 @@ export const triggerFields = {
   lastFiredAt: nullable(number),
   fired: number,
   template: string,
+  linear: nullable(linearSettings),
 }
 
-export const trigger = object<Trigger>({ ...triggerFields, id: triggerId, position, groupId: nullable(groupId) })
+// `linear` arrived after worlds were first saved; ADR 0002 has no migrations, so it defaults.
+export const trigger = object<Trigger>({ ...triggerFields, linear: defaulted(triggerFields.linear, () => null), id: triggerId, position, groupId: nullable(groupId) })
 
 export const edge = object<Edge>({ id: edgeId, kind: edgeKind, source: nodeId, target: nodeId })
 
 export const group = object<Group>({ id: groupId, name: string })
+
+export const issueRef = object<IssueRef>({ backend: oneOf('linear'), id: id<IssueId>(), identifier: string, url: string, branchName: string })
 
 const taskId = id<TaskId>()
 const runId = id<RunId>()
@@ -94,6 +100,7 @@ const origin = tagged<Task['origin']>({
   manual: object({ kind: oneOf('manual') }),
   trigger: object({ kind: oneOf('trigger'), id: triggerId }),
   handoff: object({ kind: oneOf('handoff'), from: agentId, runId }),
+  issue: object({ kind: oneOf('issue'), trigger: triggerId, issue: issueRef }),
 })
 
 export const task = object<Task>({
@@ -129,6 +136,8 @@ export const run = object<Run>({
   output: nullable(output),
   error: nullable(string),
 })
+
+export const intakeRecord = object<IntakeRecord>({ issue: issueRef, trigger: triggerId, flowId: id<FlowId>(), takenAt: number })
 
 const subject = tagged<Subject>({
   agent: object({ kind: oneOf('agent'), id: agentId }),

@@ -1,6 +1,7 @@
-import { TASK_STATUS_COLOR, taskOriginLabel, type Task } from '../../domain/types'
+import { TASK_STATUS_COLOR, type Task } from '../../domain/types'
 import { useStore } from '../../store'
 import { Badge, Dot, Section, fmtDuration } from '../ui'
+import { TaskOrigin } from '../TaskOrigin'
 import { TaskInputSection } from './TaskInputSection'
 import { useWallNow } from '../../useWallNow'
 
@@ -32,7 +33,7 @@ export function TaskInspector({ task }: { task: Task }) {
           <dt className="text-ink-400">Priority</dt>
           <dd>{task.priority}</dd>
           <dt className="text-ink-400">Origin</dt>
-          <dd>{taskOriginLabel(world, task.origin)}</dd>
+          <dd><TaskOrigin world={world} task={task} /></dd>
           {task.blockedOn && (
             <>
               <dt className="text-ink-400">Waiting on</dt>

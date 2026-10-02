@@ -34,6 +34,20 @@ export function FlowBadge({ flowId }: { flowId: string }) {
   )
 }
 
+export function IssueLink({ issue }: { issue: { identifier: string; url: string } }) {
+  return (
+    <a
+      href={issue.url}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(event) => event.stopPropagation()}
+      className="font-mono text-cyan-300 hover:underline"
+    >
+      {issue.identifier}
+    </a>
+  )
+}
+
 type Variant = 'default' | 'primary' | 'danger' | 'ghost'
 const VARIANT: Record<Variant, string> = {
   default: 'bg-ink-800 hover:bg-ink-700 border-ink-600 text-ink-100',

@@ -1,5 +1,5 @@
 import type {
-  AgentId, AgentPatch, Edge, EdgeId, EdgeKind, GraphFragment, Group, GroupId, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
+  AgentId, AgentPatch, Edge, EdgeId, EdgeKind, GraphFragment, Group, GroupId, IntakePreview, LinearCatalog, LinearSettings, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
 } from '../domain/types'
 
 export type MaybePromise<T> = T | PromiseLike<T>
@@ -41,6 +41,10 @@ export type Api = {
   triggers: {
     update: (id: TriggerId, patch: Partial<Omit<Trigger, 'id' | 'position' | 'groupId'>>) => MaybePromise<void>
     fire: (id: TriggerId) => MaybePromise<void>
+  }
+  linear: {
+    catalog: () => MaybePromise<LinearCatalog>
+    preview: (settings: LinearSettings) => MaybePromise<IntakePreview>
   }
   sim: {
     set: (patch: Partial<World['sim']>) => MaybePromise<void>

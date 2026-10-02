@@ -1,8 +1,9 @@
 import { X } from 'lucide-react'
 import { api } from '../../api/client'
-import { TASK_STATUS_COLOR, taskOriginLabel, type Task } from '../../domain/types'
+import { TASK_STATUS_COLOR, type Task } from '../../domain/types'
 import { useStore } from '../../store'
 import { Badge, Dot, FlowBadge, fmtAgo } from '../ui'
+import { TaskOrigin } from '../TaskOrigin'
 
 const RANK: Record<Task['priority'], number> = { high: 0, normal: 1, low: 2 }
 
@@ -38,7 +39,7 @@ export function QueueTab() {
                 <td className="px-3 py-1.5"><button className="text-cyan-300 hover:underline" onClick={(event) => { event.stopPropagation(); if (agent) select({ kind: 'agent', id: agent.id }) }}>{agent?.name ?? '?'}</button></td>
                 <td className="px-3 py-1.5"><FlowBadge flowId={t.flowId} /></td>
                 <td className="px-3 py-1.5" style={{ color: t.priority === 'high' ? '#f87171' : t.priority === 'low' ? '#64748b' : undefined }}>{t.priority}</td>
-                <td className="px-3 py-1.5 text-ink-400">{taskOriginLabel(world, t.origin)}</td>
+                <td className="px-3 py-1.5 text-ink-400"><TaskOrigin world={world} task={t} /></td>
                 <td className="px-3 py-1.5 text-amber-300/90">{t.blockedOn ?? ''}</td>
                 <td className="px-3 py-1.5 text-ink-400 font-mono tabular-nums">{fmtAgo(world.now, t.createdAt)}</td>
                 <td className="px-3 py-1.5 text-right">{(t.status !== 'running' || Object.values(world.runs).some((run) => run.taskId === t.id && run.status === 'running' && run.execution === 'local')) && <button onClick={(event) => { event.stopPropagation(); void Promise.resolve(api.tasks.cancel(t.id)).catch(() => {}) }} className="text-ink-500 hover:text-red-300" title="Cancel"><X size={12} /></button>}</td>

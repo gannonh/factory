@@ -1,12 +1,14 @@
 import { Handle, Position, useConnection, type NodeProps, type Node } from '@xyflow/react'
-import { Bot, Boxes, Clock, Hand, Webhook, Zap } from 'lucide-react'
+import { Bot, Boxes, Clock, Hand, ListChecks, Webhook, Zap } from 'lucide-react'
 import { AGENT_STATUS_COLOR, SANDBOX_STATE_COLOR, type Agent, type Group, type Sandbox, type Trigger, type TriggerKind } from '../../domain/types'
-import { Dot, cx } from '../ui'
+import { Dot, cx, fmtAgo } from '../ui'
+import { useWallNow } from '../../useWallNow'
+import type { IntakeStatus } from '../linearIntake'
 import { GROUP_HEADER } from './groups'
 
 export type AgentNodeType = Node<{ agent: Agent; running: number; queued: number }, 'agent'>
 export type SandboxNodeType = Node<{ sandbox: Sandbox; holders: string[] }, 'sandbox'>
-export type TriggerNodeType = Node<{ trigger: Trigger; nextIn: number | null }, 'trigger'>
+export type TriggerNodeType = Node<{ trigger: Trigger; nextIn: number | null; intake: IntakeStatus | null }, 'trigger'>
 export type GroupNodeType = Node<{ group: Group }, 'group'>
 export type FactoryNode = AgentNodeType | SandboxNodeType | TriggerNodeType | GroupNodeType
 
@@ -83,25 +85,42 @@ export function SandboxNode({ data, selected }: NodeProps<SandboxNodeType>) {
   )
 }
 
-const TRIGGER_ICON: Record<TriggerKind, typeof Clock> = { cron: Clock, webhook: Webhook, manual: Hand, event: Zap }
+const TRIGGER_ICON: Record<TriggerKind, typeof Clock> = { cron: Clock, webhook: Webhook, manual: Hand, event: Zap, linear: ListChecks }
+
+function IntakeLines({ intake }: { intake: IntakeStatus }) {
+  const wallNow = useWallNow()
+  return (
+    <div className="px-3 pb-2.5 flex flex-col gap-0.5 text-[10px] text-ink-400">
+      <div className="truncate">
+        {intake.polledAt !== null ? `polled ${fmtAgo(wallNow, intake.polledAt)}` : 'not polled yet'}
+        <span className="font-mono tabular-nums"> · {intake.taken} taken</span>
+      </div>
+      {intake.error && <div className="truncate text-red-300" title={intake.error}>{intake.error}</div>}
+    </div>
+  )
+}
 
 export function TriggerNode({ data, selected }: NodeProps<TriggerNodeType>) {
-  const { trigger, nextIn } = data
+  const { trigger, nextIn, intake } = data
   const Icon = TRIGGER_ICON[trigger.kind]
+  const note = intake
+    ? intake.idle && ` · ${intake.idle}`
+    : trigger.enabled ? (nextIn !== null ? ` · next in ${Math.max(0, Math.ceil(nextIn / 1000))}s` : '') : ' · disabled'
   return (
     <div className={cx(shell, 'w-[200px]', selected ? 'border-cyan-400/70' : 'border-ink-600 hover:border-ink-500', !trigger.enabled && 'opacity-60')}>
       <Handle type="source" position={Position.Right} id="out" />
-      <div className="flex items-center gap-2 px-3 py-2.5">
+      <div className={cx('flex items-center gap-2 px-3', intake ? 'pt-2.5 pb-1.5' : 'py-2.5')}>
         <span className="size-6 rounded-md bg-emerald-500/15 text-emerald-300 flex items-center justify-center"><Icon size={14} /></span>
         <div className="min-w-0 flex-1">
           <div className="font-semibold truncate leading-4">{trigger.name}</div>
           <div className="text-[10px] text-ink-400 truncate">
             {trigger.kind}
-            {trigger.enabled ? (nextIn !== null ? ` · next in ${Math.max(0, Math.ceil(nextIn / 1000))}s` : '') : ' · disabled'}
+            {note}
           </div>
         </div>
         <span className="text-[10px] font-mono text-ink-400 tabular-nums">×{trigger.fired}</span>
       </div>
+      {intake && <IntakeLines intake={intake} />}
     </div>
   )
 }
