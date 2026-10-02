@@ -447,6 +447,22 @@ test('the Linear client sends the key without Bearer and classifies a rejected k
   expect(((await control({ op: 'stats' })) as { requests: Record<string, number> }).requests).toEqual({ FactoryCatalog: 1 })
 })
 
+test('the Linear client stops with an api error when Linear repeats a pagination cursor', async () => {
+  const page = { data: { issues: { nodes: [], pageInfo: { hasNextPage: true, endCursor: 'cursor-1' } } } }
+  const fetch = () => Promise.resolve(new Response(JSON.stringify(page)))
+  await expect(client({ fetch }).issues(ENG)).rejects.toMatchObject({ intake: { kind: 'api', message: 'Linear repeated a pagination cursor' } })
+})
+
+test('the fake Linear rejects an unknown cursor instead of restarting at page one', async () => {
+  const response = await fetch(fake.url, {
+    method: 'POST',
+    headers: { authorization: KEY },
+    body: JSON.stringify({ operationName: 'FactoryIssues', variables: { filter: {}, first: 1, after: 'issue-gone' } }),
+  })
+  expect(response.status).toBe(400)
+  expect(await response.json()).toEqual({ errors: [{ message: 'invalid cursor issue-gone' }] })
+})
+
 test('linear commands answer over HTTP and reject with the intake error message', async () => {
   await addIssue('Fix login')
   const ORIGIN = 'http://localhost:5173'

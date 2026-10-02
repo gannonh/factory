@@ -9,7 +9,7 @@ import { expect, test } from 'vitest'
 import { createHistory } from '../src/history'
 import type { Api } from '../src/api/types'
 import { seedWorld } from '../src/domain/seed'
-import type { AgentId, Edge, EdgeId, SandboxId, Trigger, TriggerId } from '../src/domain/types'
+import { triggerKindPatch, type AgentId, type Edge, type EdgeId, type SandboxId, type Trigger, type TriggerId } from '../src/domain/types'
 import { makeFixture, sb, type Fixture } from './fixture'
 
 function setup() {
@@ -578,4 +578,22 @@ test('undo and redo restore a Linear trigger patch with its object value', async
 
   await history.redo()
   expect(world.triggers[id]).toMatchObject({ kind: 'linear', linear })
+})
+
+test('undoing a switch away from Linear brings the settings back on a disabled trigger', async () => {
+  const { fixture, history } = setup()
+  const id = 'tr-cron' as TriggerId
+  const linear = { team: 'team-eng', project: 'project-alpha', pickupState: 'state-eng-todo' }
+  await fixture.api.triggers.update(id, { kind: 'linear' })
+  await fixture.api.triggers.update(id, { linear })
+  await fixture.api.triggers.update(id, { enabled: true })
+
+  await history.updateTrigger(id, triggerKindPatch(fixture.world().triggers[id], 'cron'))
+  expect(fixture.world().triggers[id]).toMatchObject({ kind: 'cron', linear: null, enabled: true })
+
+  await history.undo()
+  expect(fixture.world().triggers[id]).toMatchObject({ kind: 'linear', linear, enabled: false })
+
+  await history.redo()
+  expect(fixture.world().triggers[id]).toMatchObject({ kind: 'cron', linear: null, enabled: true })
 })

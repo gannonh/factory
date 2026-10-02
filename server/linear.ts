@@ -153,6 +153,7 @@ export function createLinearClient(options: {
           })
         }
         if (!issues.pageInfo.hasNextPage || issues.pageInfo.endCursor === null) return found
+        if (issues.pageInfo.endCursor === after) return fail('api', 'Linear repeated a pagination cursor')
         after = issues.pageInfo.endCursor
       }
     },

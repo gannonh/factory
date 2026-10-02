@@ -154,6 +154,17 @@ export function recommendedPickupState(states: readonly WorkflowState[]): string
   return states.filter((s) => s.type === 'unstarted').sort((a, b) => a.position - b.position)[0]?.id ?? null
 }
 
+/**
+ * A kind change with the fields the server normalizes alongside it, so undo
+ * records them: leaving `linear` clears its settings, and entering it disables
+ * the trigger until the operator has seen the preview.
+ */
+export function triggerKindPatch(trigger: Trigger, kind: TriggerKind): Pick<Trigger, 'kind' | 'linear' | 'enabled'> {
+  return kind === 'linear'
+    ? { kind, linear: trigger.kind === 'linear' ? trigger.linear : null, enabled: trigger.kind === 'linear' && trigger.enabled }
+    : { kind, linear: null, enabled: trigger.enabled }
+}
+
 export type Group = { id: GroupId; name: string }
 
 export type NodeKind = 'agent' | 'sandbox' | 'trigger'

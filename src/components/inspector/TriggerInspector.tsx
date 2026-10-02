@@ -1,6 +1,6 @@
 import { Zap } from 'lucide-react'
 import { api } from '../../api/client'
-import type { Trigger, TriggerKind } from '../../domain/types'
+import { triggerKindPatch, type Trigger, type TriggerKind } from '../../domain/types'
 import { history, useStore } from '../../store'
 import { useWallNow } from '../../useWallNow'
 import { intakeStatus } from '../linearIntake'
@@ -37,7 +37,7 @@ export function TriggerInspector({ trigger }: { trigger: Trigger }) {
       <Section title="Config">
         <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={trigger.enabled} disabled={linear && trigger.linear === null} onChange={(e) => update({ enabled: e.target.checked })} className="accent-cyan-400" />enabled</label>
         <Field label="Kind">
-          <Select value={trigger.kind} onChange={(e) => update({ kind: e.target.value as TriggerKind })}>
+          <Select value={trigger.kind} onChange={(e) => update(triggerKindPatch(trigger, e.target.value as TriggerKind))}>
             <option value="cron">cron</option><option value="webhook">webhook</option><option value="event">event</option><option value="manual">manual</option><option value="linear">linear</option>
           </Select>
         </Field>

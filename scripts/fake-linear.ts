@@ -105,7 +105,9 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
         (filter.team?.id?.eq === undefined || i.team === filter.team.id.eq)
         && (filter.state?.id?.eq === undefined || i.state === filter.state.id.eq)
         && (filter.project?.id?.eq === undefined || i.project === filter.project.id.eq))
-      const start = after === null ? 0 : matches.findIndex((i) => i.id === after) + 1
+      const at = after === null ? -1 : matches.findIndex((i) => i.id === after)
+      if (after !== null && at === -1) throw new Error(`invalid cursor ${after}`)
+      const start = at + 1
       const page = matches.slice(start, start + first)
       return {
         issues: {
@@ -132,7 +134,11 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
     }
     const operation = operations[name]
     if (!operation) return send(res, 400, { errors: [{ message: `Unknown operation ${name}` }] })
-    return send(res, 200, { data: operation((body.variables ?? {}) as Variables) })
+    try {
+      return send(res, 200, { data: operation((body.variables ?? {}) as Variables) })
+    } catch (err) {
+      return send(res, 400, { errors: [{ message: err instanceof Error ? err.message : String(err) }] })
+    }
   }
 
   const server = createServer((req, res) => {
