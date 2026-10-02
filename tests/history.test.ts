@@ -568,7 +568,7 @@ test('undo and redo restore a Linear trigger patch with its object value', async
     },
   } as unknown as Api
   const history = createHistory(api, () => world)
-  const linear = { team: 'team-1', project: null, pickupState: 'state-todo' }
+  const linear = { team: 'team-1', project: null, pickupState: 'state-todo', startedState: null, finishedState: null, failedState: null }
 
   await history.updateTrigger(id, { kind: 'linear', linear })
   expect(world.triggers[id]).toMatchObject({ kind: 'linear', linear })
@@ -583,7 +583,7 @@ test('undo and redo restore a Linear trigger patch with its object value', async
 test('undoing a switch away from Linear brings the settings back on a disabled trigger', async () => {
   const { fixture, history } = setup()
   const id = 'tr-cron' as TriggerId
-  const linear = { team: 'team-eng', project: 'project-alpha', pickupState: 'state-eng-todo' }
+  const linear = { team: 'team-eng', project: 'project-alpha', pickupState: 'state-eng-todo', startedState: 'state-eng-in-progress', finishedState: null, failedState: null }
   await fixture.api.triggers.update(id, { kind: 'linear' })
   await fixture.api.triggers.update(id, { linear })
   await fixture.api.triggers.update(id, { enabled: true })

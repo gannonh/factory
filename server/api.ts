@@ -1,6 +1,6 @@
 import type { MockServer } from './simulation'
 import type {
-  AgentId, AgentPatch, Edge, EdgeId, EdgeKind, GraphFragment, Group, GroupId, LinearSettings, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
+  AgentId, AgentPatch, Edge, EdgeId, EdgeKind, GraphFragment, Group, GroupId, IssueFilter, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
 } from '../src/domain/types'
 
 /** In-process binding for tests. `advance` and `settled` stay here and are not network commands. */
@@ -42,7 +42,7 @@ export const createApi = (server: MockServer) => ({
   },
   linear: {
     catalog: () => server.linearCatalog(),
-    preview: (settings: LinearSettings) => server.linearPreview(settings),
+    preview: (settings: IssueFilter) => server.linearPreview(settings),
   },
   sim: {
     set: (patch: Partial<World['sim']>) => server.setSim(patch),

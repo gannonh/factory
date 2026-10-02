@@ -9,13 +9,13 @@ import { LinearError, createLinearClient, type LinearClient } from '../server/li
 import { ClaudeRunner } from '../server/runners'
 import { MockServer } from '../server/simulation'
 import {
-  issueOfFlow, recommendedPickupState,
+  issueOfFlow, recommendedStates,
   type AgentId, type Edge, type EdgeId, type GraphFragment, type IssueId, type LinearSettings, type NodeRef, type SandboxId, type Task, type TaskId, type TriggerId, type WorkflowState,
 } from '../src/domain/types'
 import { makeFixture, memoryStore, type Fixture } from './fixture'
 
 const KEY = 'lin_api_test_7f3c9e2a'
-const ENG: LinearSettings = { team: 'team-eng', project: null, pickupState: 'state-eng-todo' }
+const ENG: LinearSettings = { team: 'team-eng', project: null, pickupState: 'state-eng-todo', startedState: null, finishedState: null, failedState: null }
 const ONE_AGENT = 'A Linear trigger feeds one agent. Join more agents with a handoff edge.'
 
 let fake: FakeLinear
@@ -104,7 +104,10 @@ test('a project filter takes only that project’s issues', async () => {
 
 test('Linear settings survive a restart from the saved store', async () => {
   const store = memoryStore()
-  const settings = { team: 'team-eng', project: 'project-beta', pickupState: 'state-eng-in-review' }
+  const settings = {
+    team: 'team-eng', project: 'project-beta', pickupState: 'state-eng-in-review',
+    startedState: 'state-eng-in-progress', finishedState: 'state-eng-done', failedState: 'state-eng-backlog',
+  }
   const first = makeFixture({ store, linear: client(), clock: wallClock().read })
   const trigger = linearTrigger(first, first.agent('Coder'), settings)
   first.server.flush()
@@ -401,21 +404,41 @@ test('a world file saved by main loads with every record intact and an empty int
   expect(saved.triggers['tr-1'].linear).toBeNull()
 })
 
-test('the recommended pickup state is the first unstarted state by position', async () => {
-  const states: WorkflowState[] = [
+test('Linear settings saved before lifecycle states load with every state left alone', () => {
+  const store = memoryStore()
+  const saved = { team: 'team-eng', project: null, pickupState: 'state-eng-todo' }
+  store.text = JSON.stringify({ ...MAIN_WORLD, triggers: { 'tr-1': { ...MAIN_WORLD.triggers['tr-1'], kind: 'linear', linear: saved } } })
+  const f = makeFixture({ store, isolate: false })
+  expect(f.world().triggers['tr-1' as TriggerId].linear).toEqual({ ...saved, startedState: null, finishedState: null, failedState: null })
+})
+
+test('the recommended states follow the team workflow by position', async () => {
+  const withReview: WorkflowState[] = [
     { id: 's-backlog', name: 'Backlog', type: 'backlog', position: 0 },
     { id: 's-ready', name: 'Ready', type: 'unstarted', position: 3 },
     { id: 's-todo', name: 'Todo', type: 'unstarted', position: 1 },
-    { id: 's-doing', name: 'In Progress', type: 'started', position: 2 },
+    { id: 's-review', name: 'Code review', type: 'started', position: 5 },
+    { id: 's-doing', name: 'In Progress', type: 'started', position: 4 },
+    { id: 's-done', name: 'Done', type: 'completed', position: 6 },
   ]
-  expect(recommendedPickupState(states)).toBe('s-todo')
-  expect(recommendedPickupState([{ id: 's-done', name: 'Done', type: 'completed', position: 0 }])).toBeNull()
+  expect(recommendedStates(withReview)).toEqual({ pickupState: 's-todo', startedState: 's-doing', finishedState: 's-review', failedState: null })
+
+  const withoutReview: WorkflowState[] = [
+    { id: 's-todo', name: 'Todo', type: 'unstarted', position: 0 },
+    { id: 's-doing', name: 'Doing', type: 'started', position: 1 },
+    { id: 's-done', name: 'Done', type: 'completed', position: 2 },
+    { id: 's-canceled', name: 'Canceled', type: 'canceled', position: 3 },
+  ]
+  expect(recommendedStates(withoutReview)).toEqual({ pickupState: 's-todo', startedState: 's-doing', finishedState: null, failedState: null })
+  expect(recommendedStates([{ id: 's-done', name: 'Done', type: 'completed', position: 0 }]))
+    .toEqual({ pickupState: null, startedState: null, finishedState: null, failedState: null })
 
   const f = makeFixture({ linear: client(), clock: wallClock().read })
   const catalog = await f.api.linear.catalog()
   expect(catalog.teams.map((t) => [t.key, t.name, t.projects.map((p) => p.name)])).toEqual([['ENG', 'Engineering', ['Alpha', 'Beta']], ['OPS', 'Operations', []]])
   expect(catalog.teams[0].states.map((s) => s.name)).toEqual(['Backlog', 'Todo', 'In Progress', 'In Review', 'Done', 'Canceled'])
-  expect(recommendedPickupState(catalog.teams[0].states)).toBe('state-eng-todo')
+  expect(recommendedStates(catalog.teams[0].states))
+    .toEqual({ pickupState: 'state-eng-todo', startedState: 'state-eng-in-progress', finishedState: 'state-eng-in-review', failedState: null })
 })
 
 test('a new Linear trigger starts disabled, and preview pages through every match', async () => {

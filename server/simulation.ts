@@ -23,6 +23,7 @@ import {
   type GroupId,
   type IntakeError,
   type IntakePreview,
+  type IssueFilter,
   type IssueId,
   type LinearCatalog,
   type LinearSettings,
@@ -659,7 +660,7 @@ export class MockServer {
     return this.linear.catalog()
   }
 
-  async linearPreview(settings: LinearSettings): Promise<IntakePreview> {
+  async linearPreview(settings: IssueFilter): Promise<IntakePreview> {
     const issues = await this.linear.issues(settings)
     return {
       count: issues.length,

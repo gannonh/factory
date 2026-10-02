@@ -1,4 +1,4 @@
-import type { IntakeError, IssueId, IssueRef, LinearCatalog, LinearSettings, LinearTeam, WorkflowState } from '../src/domain/types'
+import type { IntakeError, IssueFilter, IssueId, IssueRef, LinearCatalog, LinearTeam, WorkflowState } from '../src/domain/types'
 import { array, boolean, nullable, number, object, oneOf, optional, string, type Parser } from './parse'
 
 export const LINEAR_URL = 'https://api.linear.app/graphql'
@@ -10,7 +10,7 @@ export type LinearIssue = { ref: IssueRef; title: string; description: string }
 export type LinearClient = {
   catalog(): Promise<LinearCatalog>
   /** Every issue matching the settings, across all pages. */
-  issues(settings: LinearSettings): Promise<LinearIssue[]>
+  issues(filter: IssueFilter): Promise<LinearIssue[]>
 }
 
 export class LinearError extends Error {
