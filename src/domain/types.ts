@@ -28,6 +28,10 @@ export type AgentStatus = 'idle' | 'working' | 'paused' | 'error'
 
 export type RetryPolicy = { maxAttempts: number; backoffMs: number; backoff: 'fixed' | 'exponential' }
 
+/** What Factory does with a succeeded local run's commits: nothing, or push the branch and open a pull request (ADR 0009). */
+export type Delivery = 'none' | 'pull-request'
+export const DELIVERIES: Delivery[] = ['none', 'pull-request']
+
 export type Agent = {
   id: AgentId
   name: string
@@ -39,6 +43,7 @@ export type Agent = {
   retry: RetryPolicy
   tools: string[]
   systemPrompt: string
+  delivery: Delivery
   status: AgentStatus
   position: Position
   completed: number

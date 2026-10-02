@@ -348,7 +348,7 @@ export class MockServer {
       const agent: Agent = {
         id, name: `Agent ${n}`, role: 'generalist', model: 'claude-sonnet-5', temperature: 0.3, concurrency: 1,
         timeoutMs: 120_000, retry: { maxAttempts: 2, backoffMs: 1000, backoff: 'fixed' }, tools: ['read_file', 'bash'],
-        systemPrompt: 'You are a helpful engineering agent.', status: 'idle', position, completed: 0, failed: 0,
+        systemPrompt: 'You are a helpful engineering agent.', delivery: 'none', status: 'idle', position, completed: 0, failed: 0,
         groupId: null,
       }
       w.agents = { ...w.agents, [id]: agent }
@@ -1273,11 +1273,11 @@ function pastedNode(ref: NodeRef, id: string, offset: Position, now: number): No
   const position = { x: ref.node.position.x + offset.x, y: ref.node.position.y + offset.y }
   switch (ref.kind) {
     case 'agent': {
-      const { name, role, model, temperature, concurrency, timeoutMs, retry, tools, systemPrompt, status } = ref.node
+      const { name, role, model, temperature, concurrency, timeoutMs, retry, tools, systemPrompt, delivery, status } = ref.node
       return {
         kind: 'agent',
         node: {
-          id: id as AgentId, name, role, model, temperature, concurrency, timeoutMs, retry: { ...retry }, tools: [...tools], systemPrompt,
+          id: id as AgentId, name, role, model, temperature, concurrency, timeoutMs, retry: { ...retry }, tools: [...tools], systemPrompt, delivery,
           status: status === 'paused' ? 'paused' : 'idle', position, completed: 0, failed: 0, groupId: null,
         },
       }

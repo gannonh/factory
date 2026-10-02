@@ -386,14 +386,14 @@ const MAIN_WORLD = {
   events: [{ id: 7, ts: 13500, kind: 'run', subject: { kind: 'run', id: 'run-1' }, msg: 'Builder finished “Sweep open issues”' }],
 }
 
-test('a world file saved by main loads with every record intact and an empty intake', () => {
+test('a world file saved by main loads with every record intact, agents that do not deliver, and an empty intake', () => {
   const store = memoryStore()
   store.text = JSON.stringify(MAIN_WORLD)
   const f = makeFixture({ store, isolate: false })
   const w = f.world()
   expect(w.now).toBe(5000)
   expect(w.sim).toEqual({ paused: true, speed: 2 })
-  expect(w.agents).toEqual(MAIN_WORLD.agents)
+  expect(w.agents).toEqual({ 'ag-1': { ...MAIN_WORLD.agents['ag-1'], delivery: 'none' } })
   expect(w.sandboxes).toEqual(MAIN_WORLD.sandboxes)
   expect(w.triggers).toEqual({ 'tr-1': { ...MAIN_WORLD.triggers['tr-1'], linear: null } })
   expect(w.edges).toEqual(MAIN_WORLD.edges)

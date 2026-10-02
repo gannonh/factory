@@ -56,13 +56,13 @@ test('paste creates offset copies of two agents and the handoff between them, le
   expect(w.agents[newPlanner]).toEqual({
     id: newPlanner, name: 'Planner', role: 'tech lead', model: 'claude-opus-5', temperature: 0.2, concurrency: 1, timeoutMs: 120_000,
     retry: { maxAttempts: 3, backoffMs: 2000, backoff: 'exponential' }, tools: ['read_file', 'search', 'linear'],
-    systemPrompt: 'You are Planner, the tech lead for this team. Work in the assigned sandbox and hand off when done.',
+    systemPrompt: 'You are Planner, the tech lead for this team. Work in the assigned sandbox and hand off when done.', delivery: 'none',
     status: 'idle', position: { x: 360, y: 100 }, completed: 0, failed: 0, groupId: null,
   })
   expect(w.agents[newCoder]).toEqual({
     id: newCoder, name: 'Coder', role: 'implementer', model: 'claude-sonnet-5', temperature: 0.2, concurrency: 2, timeoutMs: 120_000,
     retry: { maxAttempts: 3, backoffMs: 2000, backoff: 'exponential' }, tools: ['read_file', 'write_file', 'bash'],
-    systemPrompt: 'You are Coder, the implementer for this team. Work in the assigned sandbox and hand off when done.',
+    systemPrompt: 'You are Coder, the implementer for this team. Work in the assigned sandbox and hand off when done.', delivery: 'none',
     status: 'idle', position: { x: 360, y: 300 }, completed: 0, failed: 0, groupId: null,
   })
   expect(newPlanner).toMatch(/^ag-/)
