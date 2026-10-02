@@ -29,6 +29,8 @@ The server reads these environment variables:
 - `FACTORY_DATA_DIR` sets where `world.json` and run logs live. The default is `.factory/` in the repository root.
 - `FACTORY_LOCAL_ROOT` sets the seeded local sandbox's root directory. The default is the current directory.
 - `VITE_FACTORY_SERVER` points the page at a server directly instead of through the Vite proxy.
+- `LINEAR_API_KEY` is the Linear personal API key for intake. It stays in the server process and never enters the world.
+- `FACTORY_LINEAR_URL` sets the Linear GraphQL endpoint. The default is `https://api.linear.app/graphql`. Point it at `scripts/fake-linear.ts` for local trials.
 
 Run `with-env npm run dev` when a change needs secrets such as `LINEAR_API_KEY`.
 
@@ -36,6 +38,7 @@ Run `with-env npm run dev` when a change needs secrets such as `LINEAR_API_KEY`.
 
 - `src/domain/types.ts` is the whole domain, shared by the server and the page. It holds the branded ids, the discriminated unions, `SANDBOX_TRANSITIONS` and `EDGE_RULES`. Validation and rendering both read `EDGE_RULES`.
 - `server/simulation.ts` (`MockServer`) owns the world, the tick loop, triggers, the scheduler, retries and handoff fan-out.
+- `server/linear.ts` is the only code that speaks Linear's GraphQL API. `MockServer` polls enabled Linear triggers and takes issues into flows (ADR 0006). `scripts/fake-linear.ts` is a fake Linear server for tests and local trials.
 - `server/runners.ts` runs `local` sandboxes with Claude Code headless. Other sandbox kinds use the simulated runner. See ADRs 0003 to 0005.
 - `server/http.ts` serves `POST /command` and the `/world` websocket on `127.0.0.1`. `server/commands.ts` maps command names to `MockServer` methods, and `server/parse.ts` validates their arguments.
 - `server/worldFile.ts` and `server/records.ts` save and parse the world. `server/runLogs.ts` stores real run logs.
@@ -56,6 +59,7 @@ Run `with-env npm run dev` when a change needs secrets such as `LINEAR_API_KEY`.
 ## Tests
 
 - `tests/fixture.ts` builds a manual-mode `MockServer` with an injected rng and drives it through `server/api.ts`. Advance time with `sim.advance`.
+- `tests/linear-intake.test.ts` starts `scripts/fake-linear.ts` on a free port and injects a wall clock. Await in-flight polls with `sim.settled`.
 - `tests/local-runner.test.ts` puts a fake `claude` script on PATH. `tests/real-output.test.ts` does the same for `gh`. Follow that pattern for any external CLI or API, and inject a fake rather than calling a live service.
 - `tests/server.test.ts` boots the HTTP server on a free port.
 
