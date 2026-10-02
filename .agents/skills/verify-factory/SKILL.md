@@ -11,7 +11,7 @@ Read [features/README.md](features/README.md) before choosing a recipe.
 
 Requirements: `node`, `agent-browser` 0.36 or later, `ffmpeg`, `lsof`, and an authenticated `gh`. The helpers are tested on macOS.
 
-This skill lives at `.agents/skills/verify-factory/` and `.claude/skills/verify-factory/`. The two directories are identical. Edit one, copy it over the other with `rsync -a --delete`, and confirm with `diff -r` that they match.
+This skill lives only at `.agents/skills/verify-factory/`. The repository's `AGENTS.md` points every harness to it. Keep its text and scripts free of harness-specific names and paths.
 
 ## Launch
 

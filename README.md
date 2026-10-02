@@ -19,7 +19,7 @@ npm run dev
 
 The server writes the world to `.factory/world.json` in the repository root. Set `FACTORY_DATA_DIR` to use another directory. The server prints the file path when it starts. `.factory/` is gitignored.
 
-The server saves at most once per second and saves again when it stops. It keeps every running run, the newest 200 finished runs and the tasks they use, every pending task and its flow, and the newest 400 events. Logs are not saved. A run that was in progress when the server stopped comes back as failed with the reason `interrupted by restart`, and its task retries if the agent's retry policy allows it.
+The server saves at most once per second and saves again when it stops. It keeps every running run, the newest 200 finished runs and the tasks they use, every pending task and its flow, and the newest 400 events. Real run logs are saved to one file per run under `run-logs/` in the same directory. Simulated logs are not saved. A run that was in progress when the server stopped comes back as failed with the reason `interrupted by restart`, and its task retries if the agent's retry policy allows it.
 
 To reset the world, click Reset in the top bar. That deletes the file and loads the seed world. You can also stop the server and delete `world.json`.
 
@@ -32,7 +32,7 @@ Canvas (React Flow v12)
 - Three node types: agent, sandbox, trigger.
 - Four edge kinds, validated by node type and drawn distinctly: triggers (green solid), handoff (violet solid), depends-on (amber dashed), runs-in (cyan dotted).
 - Edges animate while their upstream agent is working, a trigger has just fired, or a sandbox is leased.
-- Node positions are part of the world on the server. A server restart drops them and loads the seed.
+- Node positions are part of the world on the server and survive a restart.
 - Auto-layout (dagre, left to right, sandboxes below the agents that use them), fit view, marquee select, right-click spawn, minimap, keyboard delete.
 - Dragging a connection onto any part of a node connects it. A toolbar toggle picks handoff or depends-on for agent-to-agent edges. The edge inspector switches kinds after the fact.
 - Undo and redo for spawn, delete, move, layout, connect, edge kind changes, edge deletes and inspector edits, from the Undo and Redo toolbar buttons or Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z (or Cmd/Ctrl+Y). Restored nodes and edges keep their ids. Typing into one inspector field is one step. Undo history belongs to one browser tab. Two tabs share the world and can overwrite each other's graph edits through undo. A reload or Reset clears that tab's history. There is no conflict handling.
@@ -75,10 +75,20 @@ Simulation
 - `src/clipboard.ts` holds the copied graph fragment and pastes it through the history, which calls `api.graph.paste`.
 - `src/components/canvas` is the React Flow graph, `inspector` the right panel, `agents` and `sandboxes` the list views, `dock` the bottom panel.
 
-## Not in the MVP yet
+## Real runs
 
-- Real backends: connecting to local, VPS and remote hosts, real agent processes, real logs.
-- Auth, teams, multiple projects.
+A sandbox of kind `local` runs a real agent. Every other sandbox kind runs on the simulation.
+
+- The runner starts Claude Code in headless mode with a non-interactive permission mode and the agent's tool list. `claude` must be on the server's PATH and signed in.
+- The seeded local sandbox's root is `FACTORY_LOCAL_ROOT`, or the directory the server starts in. Each run works in `<root>/.factory-runs/<run id>`. When the root is the top of a git repository, that directory is a worktree on the branch `factory-<run id>`.
+- Logs and token counts stream into the dock. The run's output is the agent's final message plus git artifacts: the branch, the commits made during the run, and a PR link when `gh` finds one for the branch.
+- Cancel and the agent's timeout kill the process. Pausing the simulation does not suspend a running process.
+- The seed's cron trigger that reaches the local sandbox is disabled, so starting Factory never starts a paid run by itself.
+
+## Not built yet
+
+- Work backends such as Linear (in progress), real triggers, and Docker, VPS and remote sandboxes.
+- Running the server on a remote host, auth, teams, multiple projects.
 
 ## License
 
