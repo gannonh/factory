@@ -4,7 +4,7 @@
 
 An issue's state in Linear decides which stage of the pipeline works on it. Factory does not keep its own record of where an issue is in the pipeline.
 
-A stage is a Linear trigger on one state, joined to the agent that starts the stage's flow. When an issue enters a state that a trigger handles, Factory starts one round for it. A round is one flow: the trigger's agent and any agents joined to it by handoff and depends-on edges. When the round's flow ends, Factory moves the issue to the trigger's finished or failed state, which is how the issue reaches the next stage. A state that no trigger handles is a human gate. Factory takes no action on it, and a person releases the issue by moving it.
+A stage is a Linear trigger on one state, joined to the agent that starts the stage's flow. When an issue enters a state that a trigger handles, Factory starts one round for it. A round is one flow: a task on the trigger's agent plus every task that its handoffs create. A depends-on edge orders tasks already in the flow and never adds one. When the round's flow ends, Factory moves the issue to the trigger's finished or failed state, which is how the issue reaches the next stage. A state that no trigger handles is a human gate. Factory takes no action on it, and a person releases the issue by moving it.
 
 Every entry into a handled state starts a new round, including a return to a state the issue was in before. Rework is a return to an earlier state. A round owns its trigger's pickup state and started state. When the issue leaves both while the round is open, Factory cancels the round's flow. A round that fails with no retries left moves the issue to the failed state and stops. It does not start again until a person moves the issue.
 

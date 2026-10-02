@@ -132,7 +132,7 @@
       <div class="card">
         <div class="head"><span class="kind">Stage</span><span class="name">Agent Review + Verification</span><span class="on">verification on by default</span></div>
         <p class="desc">Answers every review thread and fixes CI until feedback is resolved and CI is green. Then verification runs the checks on the exact reviewed head, and the agent cannot override the result.</p>
-        <div class="flow"><span class="label">FLOW</span><span class="agent">PR fixer</span><span class="edge">depends-on →</span><span class="agent">Verifier</span></div>
+        <div class="flow"><span class="label">FLOW</span><span class="agent">PR fixer</span><span class="edge">handoff →</span><span class="agent">Verifier</span></div>
         <div class="exits">
           <span class="fwd">resolved, green, verified: Human Review</span>
           <span class="back">verification fails: stays in Agent Review</span>
@@ -176,7 +176,7 @@
       <h2>Key</h2>
       <div class="key">
         <span class="sw" style="--c: var(--stage)"></span><span><b>Stage.</b> A trigger on a Linear state. Each entry into the state starts one round, which runs one flow.</span>
-        <span class="sw" style="--c: var(--agent)"></span><span><b>Flow.</b> The agents a round runs, joined by handoff or depends-on edges.</span>
+        <span class="sw" style="--c: var(--agent)"></span><span><b>Flow.</b> The tasks a round runs: one on the stage's agent plus each task its handoffs create.</span>
         <span class="sw dash" style="--c: var(--gate)"></span><span><b>Human gate.</b> A state with no trigger. A person moves the issue on.</span>
         <span class="sw" style="--c: var(--back)"></span><span><b>Back edge.</b> The issue stays or goes back. Re-entering a stage starts a new round.</span>
       </div>
