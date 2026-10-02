@@ -1,5 +1,5 @@
 import type {
-  AgentId, AgentPatch, Edge, EdgeId, EdgeKind, GraphFragment, Group, GroupId, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
+  AgentId, AgentPatch, Edge, EdgeId, EdgeKind, GraphFragment, Group, GroupId, IntakePreview, LinearCatalog, LinearSettings, NodeId, NodeKind, NodeRef, Position, Priority, SandboxAction, SandboxId, SandboxKind, TaskId, Trigger, TriggerId, World,
 } from '../domain/types'
 import type { Api, ConnectResult } from './types'
 
@@ -184,6 +184,10 @@ export const api: Api = {
   triggers: {
     update: (id: TriggerId, patch: Partial<Omit<Trigger, 'id' | 'position' | 'groupId'>>) => call('triggers.update', [id, patch]),
     fire: (id: TriggerId) => call('triggers.fire', [id]),
+  },
+  linear: {
+    catalog: () => call<LinearCatalog>('linear.catalog', []),
+    preview: (settings: LinearSettings) => call<IntakePreview>('linear.preview', [settings]),
   },
   sim: {
     set: (patch: Partial<World['sim']>) => call('sim.set', [patch]),
