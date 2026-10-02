@@ -34,7 +34,7 @@ const client = (options: Partial<Parameters<typeof createLinearClient>[0]> = {})
 
 function switchable(initial: LinearClient) {
   let current = initial
-  return { client: { catalog: () => current.catalog(), issues: (s: LinearSettings) => current.issues(s) } as LinearClient, use: (next: LinearClient) => { current = next } }
+  return { client: { catalog: () => current.catalog(), issues: (s: LinearSettings) => current.issues(s) } satisfies LinearClient, use: (next: LinearClient) => { current = next } }
 }
 
 function wallClock(start = 1_000_000) {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../api/client'
-import { recommendedPickupState, type IntakePreview, type LinearSettings, type LinearTeam, type Trigger } from '../../domain/types'
+import { recommendedPickupState, type IntakePreview, type LinearSettings, type Trigger } from '../../domain/types'
 import { Button, Field, IssueLink, Section, Select } from '../ui'
 
 type Loaded<T> = { status: 'loading' } | { status: 'ready'; value: T } | { status: 'error'; message: string }
@@ -46,31 +46,31 @@ function Preview({ settings }: { settings: LinearSettings }) {
 
 export function LinearSection({ trigger, update }: { trigger: Trigger; update: (patch: { linear: LinearSettings }) => Promise<unknown> }) {
   const catalog = useLoaded(loadCatalog)
-  const [draftTeam, setDraftTeam] = useState<string | null>(null)
+  const [teamAwaitingState, setTeamAwaitingState] = useState<string | null>(null)
   const { linear } = trigger
-  const teamId = draftTeam ?? linear?.team ?? ''
+  const teamId = teamAwaitingState ?? linear?.team ?? ''
 
   let body
   if (catalog.status === 'loading') body = <div className="text-[11px] text-ink-400">Loading teams…</div>
   else if (catalog.status === 'error') body = <div className="text-[11px] text-red-300 break-words">{catalog.message}</div>
   else {
     const teams = catalog.value.teams
-    const team: LinearTeam | undefined = teams.find((t) => t.id === teamId)
+    const team = teams.find((t) => t.id === teamId)
     const states = [...(team?.states ?? [])].sort((a, b) => a.position - b.position)
     const recommended = team ? recommendedPickupState(team.states) : null
-    const pickup = draftTeam ? '' : linear?.pickupState ?? ''
+    const pickup = teamAwaitingState ? '' : linear?.pickupState ?? ''
 
     const chooseTeam = (id: string) => {
-      if (id === linear?.team) { setDraftTeam(null); return }
+      if (id === linear?.team) { setTeamAwaitingState(null); return }
       const next = teams.find((t) => t.id === id)
       const state = next ? recommendedPickupState(next.states) : null
-      if (state === null) { setDraftTeam(id); return }
-      setDraftTeam(null)
+      if (state === null) { setTeamAwaitingState(id); return }
+      setTeamAwaitingState(null)
       void update({ linear: { team: id, project: null, pickupState: state } }).catch(() => {})
     }
     const chooseState = (state: string) => {
-      setDraftTeam(null)
-      void update({ linear: { team: teamId, project: draftTeam ? null : linear?.project ?? null, pickupState: state } }).catch(() => {})
+      setTeamAwaitingState(null)
+      void update({ linear: { team: teamId, project: teamAwaitingState ? null : linear?.project ?? null, pickupState: state } }).catch(() => {})
     }
 
     body = (
@@ -84,8 +84,8 @@ export function LinearSection({ trigger, update }: { trigger: Trigger; update: (
         </Field>
         <Field label="Project">
           <Select
-            value={draftTeam ? '' : linear?.project ?? ''}
-            disabled={!linear || draftTeam !== null}
+            value={teamAwaitingState ? '' : linear?.project ?? ''}
+            disabled={!linear || teamAwaitingState !== null}
             onChange={(e) => { if (linear) void update({ linear: { ...linear, project: e.target.value || null } }).catch(() => {}) }}
           >
             <option value="">All projects</option>
@@ -93,14 +93,14 @@ export function LinearSection({ trigger, update }: { trigger: Trigger; update: (
             {(team?.projects ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </Select>
         </Field>
-        <Field label="Pickup state" hint={linear && !draftTeam && pickup === recommended ? 'recommended' : undefined}>
+        <Field label="Pickup state" hint={linear && !teamAwaitingState && pickup === recommended ? 'recommended' : undefined}>
           <Select value={pickup} disabled={!team} onChange={(e) => chooseState(e.target.value)}>
             {pickup === '' && <option value="" disabled>{team && recommended === null ? 'No Todo-type state; choose one' : 'Choose a state'}</option>}
             {pickup !== '' && !states.some((s) => s.id === pickup) && <option value={pickup}>{pickup}</option>}
             {states.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </Select>
         </Field>
-        {linear && !draftTeam && recommended !== null && pickup !== recommended && (
+        {linear && !teamAwaitingState && recommended !== null && pickup !== recommended && (
           <Button size="xs" className="self-start" onClick={() => chooseState(recommended)}>Reset to recommended</Button>
         )}
       </>
@@ -110,7 +110,7 @@ export function LinearSection({ trigger, update }: { trigger: Trigger; update: (
   return (
     <>
       <Section title="Linear">{body}</Section>
-      {linear && !draftTeam && !trigger.enabled && (
+      {linear && !teamAwaitingState && !trigger.enabled && (
         <Section title="Preview">
           <Preview settings={linear} />
           <div className="text-[10px] text-ink-500">Enabling takes these issues and starts their tasks.</div>
