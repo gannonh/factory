@@ -4,13 +4,17 @@
 
 Each poll of a Linear trigger also reads the current state of every issue whose flow is still open and was taken by that trigger. One batched `issues` query filtered by id covers them. An issue missing from the answer has been deleted or archived. If the query fails, the poll records its error on the trigger and nothing is taken or cancelled.
 
-A pure function, `flowAction` in `server/writeBack.ts`, decides from the issue's state and whether its flow is open. An open flow whose issue sits in the trigger's pickup or started state is left alone. A canceled-type state or a missing issue cancels the flow with the reason "canceled in Linear". Any other state cancels it with "moved to <state> in Linear". A flow that has ended is never touched.
+Each intake record keeps the trigger's pickup and started states from when it took the issue, so editing the trigger later does not cancel flows it already took. A record saved before this decision has none and reads the trigger's current states.
+
+A pure function, `flowAction` in `server/writeBack.ts`, decides from the issue's state and whether its flow is open. An open flow whose issue sits in its record's pickup or started state is left alone. A canceled-type state or a missing issue cancels the flow with the reason "canceled in Linear". Any other state cancels it with "moved to <state> in Linear". A flow that has ended is never touched.
 
 The intake record stores why its flow was cancelled in `cancel`. The first cause wins. A cancel from Linear cancels every queued or waiting task in the flow and ends every running run as `cancelled`, which kills a local process through the runner's kill path. A cancelled run does not retry. When the flow ends, the record queues one note that gives the reason, and no move. Any move that has not landed is marked `dropped` and is never sent.
 
-Cancelling a task of an issue's flow in Factory cancels the whole flow the same way and stores the cancelled task's title. When the flow ends cancelled, the record queues a move to the failed state, then a note naming that task. A flow cancelled in Factory for another reason, such as a cancelled prerequisite, names its first cancelled task.
+Cancelling a task of an issue's flow in Factory cancels the whole flow the same way and stores the cancelled task's title. When the flow ends, the stored cause decides the writes even if another task failed: a move to the failed state, then a note naming that task. A flow that ends cancelled for another reason, such as a cancelled prerequisite, names its first cancelled task.
 
-Every move now carries the trigger's pickup and started states. `ensureState` moves an issue only out of those states. An issue found anywhere else was moved by a person, so the move is marked `dropped`.
+A run still running in a saved world whose flow was cancelled restores as cancelled rather than failed, so a restart does not retry it.
+
+`ensureState` moves an issue only out of its record's pickup and started states. An issue found anywhere else was moved by a person, so the move is marked `dropped`. A move dropped while it is in flight stays dropped whatever its answer.
 
 ## Reason
 

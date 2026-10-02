@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest'
 import { startFakeLinear, type FakeLinear } from '../scripts/fake-linear'
 import { createLinearClient, type IssueState, type LinearClient } from '../server/linear'
-import { flowAction } from '../server/writeBack'
-import { LINEAR_POLL_MS, type AgentId, type IssueId, type LinearSettings, type Run, type TriggerId } from '../src/domain/types'
+import { flowAction, reconcileRecord } from '../server/writeBack'
+import { LINEAR_POLL_MS, type AgentId, type FlowId, type IntakeRecord, type IssueId, type LinearSettings, type Run, type Task, type TaskId, type TriggerId, type World } from '../src/domain/types'
 import { makeFixture, memoryStore, type Fixture } from './fixture'
 
 const KEY = 'lin_api_test_cancel'
@@ -293,4 +293,81 @@ test('a server killed between a cancel from Linear and its note posts the note e
   expect(after.comments).toHaveLength(1)
   expect(after.comments[0].id).toBe((second.world().intake[ENG_1].writes[1] as { commentId: string }).commentId)
   expect(await requests()).toMatchObject({ FactoryCreateComment: 1 })
+})
+
+test('changing the trigger’s started state does not cancel flows it has already taken', async () => {
+  await addIssue('Fix login')
+  const wall = wallClock()
+  const f = makeFixture({ linear: client(), clock: wall.read })
+  const trigger = linearTrigger(f, f.agent('Coder'))
+  await start(f)
+  f.api.triggers.update(trigger, { linear: { ...LIFECYCLE, startedState: 'state-eng-in-review' } })
+  await nextPoll(f, wall)
+  expect(runsInOrder(f).map((r) => r.status)).toEqual(['running'])
+  expect(f.world().intake[ENG_1].cancel).toBeNull()
+})
+
+test('a move dropped by a cancel from Linear while it is in flight stays dropped when its answer fails', async () => {
+  await addIssue('Fix login')
+  const wall = wallClock()
+  const real = client()
+  let release = (_err: Error) => {}
+  const linear: LinearClient = {
+    ...real,
+    ensureState: () => new Promise<boolean>((_resolve, reject) => { release = reject }),
+  }
+  const f = makeFixture({ linear, clock: wall.read })
+  linearTrigger(f, f.agent('Coder'))
+  await step(f, 0)
+  f.api.sim.advance(1)
+  expect(writeSteps(f)).toEqual([['move started', 'pending']])
+
+  await moveIssue('ENG-1', 'Canceled')
+  wall.now += LINEAR_POLL_MS
+  f.api.sim.advance(1)
+  for (let i = 0; i < 200 && f.world().intake[ENG_1].cancel === null; i++) await new Promise((resolve) => setTimeout(resolve, 5))
+  release(new Error('socket hang up'))
+  await f.api.sim.settled()
+  expect(writeSteps(f)).toEqual([['move started', 'dropped'], ['note cancelled', 'landed']])
+})
+
+test('a run still running in a saved world whose flow was cancelled restores as cancelled and does not retry', async () => {
+  await addIssue('Fix login')
+  const store = memoryStore()
+  const wall = wallClock()
+  const first = makeFixture({ store, linear: client(), clock: wall.read })
+  linearTrigger(first, first.agent('Coder'))
+  await start(first)
+  first.server.flush()
+  const [run] = runsInOrder(first)
+  const saved = JSON.parse(store.text!) as World
+  saved.intake[ENG_1] = { ...saved.intake[ENG_1], cancel: { kind: 'linear', reason: 'canceled in Linear' } }
+  store.text = JSON.stringify(saved)
+
+  const second = makeFixture({ store, isolate: false, linear: client(), clock: wall.read })
+  expect(second.world().runs[run.id]).toMatchObject({ status: 'cancelled', error: 'its flow was cancelled' })
+  expect(second.world().tasks[run.taskId]).toMatchObject({ status: 'cancelled', retryAt: null })
+  await step(second, 60_000)
+  expect(Object.values(second.world().runs)).toHaveLength(1)
+})
+
+test('an operator’s cancel decides the note even when another task in the flow failed', () => {
+  const flowId = 'fl-1' as FlowId
+  const task = (id: string, title: string, status: Task['status'], createdAt: number): Task => ({
+    id: id as TaskId, flowId, agentId: 'ag-coder' as AgentId, title, prompt: '', priority: 'normal', status,
+    origin: { kind: 'manual' }, input: null, createdAt, attempts: 1, retryAt: null, blockedOn: null,
+  })
+  const record: IntakeRecord = {
+    issue: { backend: 'linear', id: ENG_1, identifier: 'ENG-1', url: 'https://linear.app/fake/issue/ENG-1', branchName: 'eng-1' },
+    trigger: 'tr-1' as TriggerId, flowId, takenAt: 0, phase: 'started', writes: [], states: LIFECYCLE, cancel: { kind: 'factory', task: 'Review' },
+  }
+  const world = { agents: {}, runs: {}, triggers: { ['tr-1' as TriggerId]: { linear: LIFECYCLE } } } as unknown as World
+  const next = reconcileRecord(record, [task('tk-a', 'Build', 'failed', 1), task('tk-b', 'Review', 'cancelled', 2)], world, () => 'comment-1')
+  expect(next.writes).toEqual([
+    { kind: 'move', step: 'failed', stateId: 'state-eng-backlog', status: { state: 'pending' } },
+    {
+      kind: 'note', outcome: 'cancelled', commentId: 'comment-1', status: { state: 'pending' },
+      body: '**Factory stopped work on this issue: “Review” was cancelled in Factory.**\n\n**ag-coder**\nFailed: no reason recorded\n\n**ag-coder**\nCancelled before it finished.\n\nSigned by Factory. Runs: none. Agents: ag-coder.',
+    },
+  ])
 })

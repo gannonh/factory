@@ -56,7 +56,7 @@ import type { RunLogStore } from './runLogs'
 import { array, boolean, defaulted, id, number, object, oneOf, record } from './parse'
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
 import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type LinearClient, type LinearIssue } from './linear'
-import { cancelRecord, flowAction, flowOutcome, landed, nextWrite, reconcileRecord } from './writeBack'
+import { cancelRecord, flowAction, flowOutcome, landed, nextWrite, reconcileRecord, workingStates } from './writeBack'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 
@@ -197,7 +197,12 @@ export class MockServer {
     restored.logs = this.runLogs?.load(localRunIds, MAX_LOGS) ?? []
     this.seq = Math.max(0, ...restored.events.map((event) => event.id), ...restored.logs.map((line) => line.id))
     const interrupted = Object.values(restored.runs).filter((run) => run.status === 'running')
-    for (const run of interrupted) this.finishRun(run, { status: 'failed', reason: 'interrupted by restart' })
+    for (const run of interrupted) {
+      const task = restored.tasks[run.taskId]
+      this.finishRun(run, task && this.openRecord(task.flowId)?.cancel
+        ? { status: 'cancelled', reason: 'its flow was cancelled' }
+        : { status: 'failed', reason: 'interrupted by restart' })
+    }
     if (interrupted.length > 0) this.publish()
     return true
   }
@@ -598,8 +603,7 @@ export class MockServer {
       return
     }
     if (t.status !== 'queued' && t.status !== 'waiting') return
-    this.patchTask(id, { status: 'cancelled', blockedOn: null })
-    this.event('task', { kind: 'task', id }, `Cancelled “${t.title}”`)
+    this.cancelPending(t, null)
     this.publish()
   }
 
@@ -616,11 +620,13 @@ export class MockServer {
       if (task.status === 'running') {
         const run = Object.values(this.world.runs).find((r) => r.taskId === task.id && r.status === 'running')
         if (run) this.finishRun(run, { status: 'cancelled', reason })
-      } else if (task.status === 'queued' || task.status === 'waiting') {
-        this.patchTask(task.id, { status: 'cancelled', retryAt: null, blockedOn: null })
-        this.event('task', { kind: 'task', id: task.id }, `Cancelled “${task.title}”: ${reason}`)
-      }
+      } else if (task.status === 'queued' || task.status === 'waiting') this.cancelPending(task, reason)
     }
+  }
+
+  private cancelPending(task: Task, reason: string | null) {
+    this.patchTask(task.id, { status: 'cancelled', retryAt: null, blockedOn: null })
+    this.event('task', { kind: 'task', id: task.id }, `Cancelled “${task.title}”${reason ? `: ${reason}` : ''}`)
   }
 
   private openRecord(flowId: FlowId): IntakeRecord | undefined {
@@ -868,7 +874,8 @@ export class MockServer {
         origin: { kind: 'issue', trigger: id, issue: issue.ref },
         input: null,
       }, flowId)
-      const record: IntakeRecord = { issue: issue.ref, trigger: id, flowId, takenAt: this.clock(), phase: 'taken', writes: [], cancel: null }
+      const states = { pickupState: settings.pickupState, startedState: settings.startedState }
+      const record: IntakeRecord = { issue: issue.ref, trigger: id, flowId, takenAt: this.clock(), phase: 'taken', writes: [], states, cancel: null }
       this.world.intake = { ...this.world.intake, [issue.ref.id]: record }
       taken.push(issue.ref.identifier)
     }
@@ -884,7 +891,7 @@ export class MockServer {
     const record = this.world.intake[issueId]
     if (!record || record.phase === 'ended' || record.cancel !== null) return
     const tasks = Object.values(this.world.tasks).filter((t) => t.flowId === record.flowId)
-    const action = flowAction(state, flowOutcome(tasks) === null, settings)
+    const action = flowAction(state, flowOutcome(tasks) === null, record.states ?? settings)
     if (action.kind === 'none') return
     this.world.intake = { ...this.world.intake, [issueId]: cancelRecord(record, { kind: 'linear', reason: action.reason }) }
     this.cancelFlow(record.flowId, action.reason)
@@ -936,17 +943,18 @@ export class MockServer {
       }
       const current = this.world.intake[issueId]
       if (current) {
-        const writes = current.writes.map((w, i) => (i === index ? landed(w, status) : w))
+        // A move dropped by a cancel from Linear while it was in flight stays dropped.
+        const writes = current.writes.map((w, i) => (i === index && w.status.state !== 'dropped' ? landed(w, status) : w))
         this.world.intake = { ...this.world.intake, [issueId]: { ...current, writes } }
         this.publish()
       }
     }
   }
 
-  /** The states a record's trigger works in. Factory moves its issue only out of these, or anywhere once the trigger is gone. */
+  /** The states Factory may move a record's issue out of, or null for an old record whose trigger is gone. */
   private ownStates(record: IntakeRecord): string[] | null {
-    const settings = this.world.triggers[record.trigger]?.linear
-    return settings ? [settings.pickupState, ...(settings.startedState ? [settings.startedState] : [])] : null
+    const states = record.states ?? this.world.triggers[record.trigger]?.linear
+    return states ? workingStates(states) : null
   }
 
   private forgetPolls(ids: TriggerId[]) {

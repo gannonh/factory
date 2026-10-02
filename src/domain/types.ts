@@ -162,12 +162,17 @@ export type IntakePhase = 'taken' | 'started' | 'ended'
 /** Why an issue's flow was cancelled: the issue left the trigger's states in Linear, or an operator cancelled one of its tasks. */
 export type FlowCancel = { kind: 'linear'; reason: string } | { kind: 'factory'; task: string }
 
+/** The states a Linear trigger works in. An issue that leaves them while its flow is open cancels the flow. */
+export type TriggerStates = Pick<LinearSettings, 'pickupState' | 'startedState'>
+
 /**
  * One issue taken by intake. Retention never prunes these, so an issue never starts a second flow.
  * `writes` is the ordered write-back queue; each phase change appends to it and nothing removes from it.
+ * `states` are the trigger's states when it took the issue, or null for a record saved before they were kept.
  */
 export type IntakeRecord = {
-  issue: IssueRef; trigger: TriggerId; flowId: FlowId; takenAt: number; phase: IntakePhase; writes: IssueWrite[]; cancel: FlowCancel | null
+  issue: IssueRef; trigger: TriggerId; flowId: FlowId; takenAt: number; phase: IntakePhase; writes: IssueWrite[]
+  states: TriggerStates | null; cancel: FlowCancel | null
 }
 
 export type IntakeError = { kind: 'missing-key' | 'auth' | 'network' | 'api'; message: string }
