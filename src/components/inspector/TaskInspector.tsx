@@ -3,6 +3,7 @@ import { useStore } from '../../store'
 import { Badge, Dot, Section, fmtDuration } from '../ui'
 import { TaskOrigin } from '../TaskOrigin'
 import { TaskInputSection } from './TaskInputSection'
+import { WriteBackSection } from './WriteBackSection'
 import { useWallNow } from '../../useWallNow'
 
 const RUN_STATUS_COLOR = { running: '#22d3ee', succeeded: '#34d399', failed: '#f87171', cancelled: '#64748b' } as const
@@ -13,6 +14,7 @@ export function TaskInspector({ task }: { task: Task }) {
   const select = useStore((state) => state.select)
   const agent = world.agents[task.agentId]
   const runs = Object.values(world.runs).filter((run) => run.taskId === task.id).sort((a, b) => a.startedAt - b.startedAt)
+  const intake = Object.values(world.intake).find((record) => record.flowId === task.flowId)
 
   return (
     <>
@@ -50,6 +52,8 @@ export function TaskInspector({ task }: { task: Task }) {
       </Section>
 
       {task.input && <TaskInputSection input={task.input} />}
+
+      {intake && <WriteBackSection record={intake} />}
 
       <Section title="Runs" right={<span className="font-mono text-[10px] text-ink-500">{runs.length}</span>}>
         {runs.length === 0

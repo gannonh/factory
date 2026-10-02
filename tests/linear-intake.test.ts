@@ -91,7 +91,7 @@ test('an issue in the pickup state becomes one task on the joined agent', async 
     status: 'queued',
     origin: { kind: 'issue', trigger, issue },
   })
-  expect(f.world().intake).toEqual({ 'issue-eng-1': { issue, trigger, flowId: task.flowId, takenAt: 1_000_000 } })
+  expect(f.world().intake).toEqual({ 'issue-eng-1': { issue, trigger, flowId: task.flowId, takenAt: 1_000_000, phase: 'taken', writes: [] } })
   expect(f.world().intakePolls).toEqual({ [trigger]: { at: 1_000_000, error: null } })
   expect(f.world().triggers[trigger].fired).toBe(1)
   expect(f.world().events.at(-1)?.msg).toBe('Linear intake took ENG-1')

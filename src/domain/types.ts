@@ -148,8 +148,22 @@ export type Trigger = {
 
 export type IssueRef = { backend: 'linear'; id: IssueId; identifier: string; url: string; branchName: string }
 
-/** One issue taken by intake. Retention never prunes these, so an issue never starts a second flow. */
-export type IntakeRecord = { issue: IssueRef; trigger: TriggerId; flowId: FlowId; takenAt: number }
+/** Where a write to Linear stands. `at` is wall-clock ms. */
+export type WriteStatus = { state: 'pending' } | { state: 'landed'; at: number } | { state: 'failed'; at: number; error: string }
+
+/** One write-back to the taken issue. A note's body and comment id are fixed when the write becomes due. */
+export type IssueWrite =
+  | { kind: 'move'; step: 'started' | 'finished' | 'failed'; stateId: string; status: WriteStatus }
+  | { kind: 'note'; outcome: 'finished' | 'failed'; commentId: string; body: string; status: WriteStatus }
+
+/** How far the issue's flow has gone: no run yet, a run started, or every task terminal. */
+export type IntakePhase = 'taken' | 'started' | 'ended'
+
+/**
+ * One issue taken by intake. Retention never prunes these, so an issue never starts a second flow.
+ * `writes` is the ordered write-back queue; each phase change appends to it and nothing removes from it.
+ */
+export type IntakeRecord = { issue: IssueRef; trigger: TriggerId; flowId: FlowId; takenAt: number; phase: IntakePhase; writes: IssueWrite[] }
 
 export type IntakeError = { kind: 'missing-key' | 'auth' | 'network' | 'api'; message: string }
 
