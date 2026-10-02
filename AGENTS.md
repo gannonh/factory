@@ -7,7 +7,8 @@ Global agent instructions define the work lifecycle, Linear rules and verificati
 ## Planning sources
 
 - Linear team Kata-sh, project [Factory](https://linear.app/kata-sh/project/factory-ad3c9a38d7c1). The project page holds the roadmap and product decisions. Each gate is a milestone, and each epic lists its slices in delivery order.
-- Factory is a standalone product. Plan it from this repository and its Linear project only. Do not import the specs, vocabulary or architecture of Symphony or other Kata products.
+- Factory is a standalone product with its own vocabulary and architecture. Plan it from this repository and its Linear project.
+- Kata Symphony (`~/dev/kata-symphony`, `apps/symphony`) is the functional reference for lifecycle defaults: stages, human gates, retries, and review, CI and merge handling. Read it for behavior. Do not copy its code, terms or module structure. ADR 0008 records which parts of its model Factory adopts.
 - Live checks against real Linear use the [Factory UAT](https://linear.app/kata-sh/project/factory-uat-b7104fa5f8c4) project and open PRs in the private scratch repository `gannonh/factory-uat`. Never point a live check at real Kata-sh work or at `gannonh/factory`.
 
 ## Commands
@@ -70,5 +71,7 @@ Read `.agents/skills/verify-factory/SKILL.md` before you drive the UI. It launch
 Automated drags do not create React Flow connections, because the handles listen to mouse events rather than pointer events. A node spawned near the right edge can sit under the inspector panel.
 
 ## Docs
+
+`docs/domain.md` defines the domain vocabulary, `docs/domain.html` diagrams how work nests, and `docs/pipeline.html` diagrams the pipeline an issue moves through. Use those terms in code, tickets and ADRs. When a term changes or a planned term gets built, update those files in the same PR.
 
 When a change alters behavior that `README.md` or an ADR describes, update that document in the same PR.

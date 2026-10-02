@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factory pipeline: an issue's lifecycle end to end</title>
+<!-- Proposed Gate 4 design. Source of truth: KAT-3629 and docs/adr/0008-linear-state-drives-stages.md. Terms: docs/domain.md. -->
+<style>
+  :root {
+    --ink-950: #07090f; --ink-900: #0b0f19; --ink-850: #0f1522; --ink-800: #141b2b; --ink-700: #1c2538;
+    --ink-500: #3b475f; --ink-400: #64748b; --ink-300: #94a3b8; --ink-200: #cbd5e1; --ink-100: #e2e8f0;
+    --stage: #a78bfa; --agent: #22d3ee; --gate: #f87171; --state: #94a3b8; --done: #34d399; --back: #fbbf24;
+    --sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --mono: ui-monospace, 'JetBrains Mono', SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ink-950); color: var(--ink-200); font: 14px/1.5 var(--sans); }
+  main { max-width: 1120px; margin: 0 auto; padding: 32px 20px 48px; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 28px; }
+  header { grid-column: 1 / -1; }
+  h1 { margin: 0 0 4px; font-size: 20px; color: var(--ink-100); font-weight: 600; }
+  header p { margin: 0; color: var(--ink-400); }
+  .status { display: inline-block; margin-top: 8px; font: 500 11px var(--mono); color: var(--back); border: 1px solid color-mix(in srgb, var(--back) 40%, transparent); border-radius: 4px; padding: 1px 6px; }
+
+  ol.pipe { list-style: none; margin: 0; padding: 0; }
+  .step { position: relative; display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 14px; padding-bottom: 26px; }
+  .step:not(:last-child)::after { content: "↓"; position: absolute; left: 58px; bottom: 4px; color: var(--ink-500); font-size: 14px; }
+  .state { align-self: start; margin-top: 10px; font: 600 12px var(--mono); color: var(--ink-100); text-align: right; }
+  .state small { display: block; font-weight: 400; color: var(--ink-400); font-size: 11px; }
+
+  .card { --c: var(--stage); border: 1px solid var(--c); border-left-width: 3px; border-radius: 8px; padding: 10px 12px 12px; background: color-mix(in srgb, var(--c) 6%, var(--ink-900)); }
+  .card.gate { --c: var(--gate); border-style: dashed; }
+  .card.end { --c: var(--done); }
+  .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+  .kind { font: 600 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--c); }
+  .name { color: var(--ink-100); font-weight: 600; }
+  .on { margin-left: auto; font: 500 10px var(--mono); color: var(--ink-400); border: 1px solid var(--ink-700); border-radius: 4px; padding: 1px 5px; }
+  .desc { margin: 6px 0 0; color: var(--ink-300); font-size: 13px; }
+
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; padding: 8px; border: 1px solid color-mix(in srgb, var(--agent) 45%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--agent) 5%, var(--ink-900)); }
+  .flow .label { font: 600 10px var(--mono); letter-spacing: .08em; color: var(--agent); margin-right: 4px; }
+  .agent { font-size: 12px; color: var(--ink-100); border: 1px solid var(--ink-700); background: var(--ink-850); border-radius: 5px; padding: 2px 8px; }
+  .edge { font: 11px var(--mono); color: var(--ink-400); }
+
+  .exits { display: flex; flex-direction: column; gap: 3px; margin-top: 10px; font: 12px var(--mono); }
+  .exits .fwd { color: var(--ink-300); }
+  .exits .fwd::before { content: "→ "; color: var(--ink-500); }
+  .exits .back { color: var(--back); }
+  .exits .back::before { content: "↩ "; }
+
+  aside h2 { margin: 0 0 10px; font-size: 13px; color: var(--ink-100); text-transform: uppercase; letter-spacing: .08em; font-weight: 600; }
+  .key { display: grid; grid-template-columns: 14px 1fr; gap: 6px 10px; align-items: start; font-size: 13px; }
+  .sw { width: 12px; height: 12px; border-radius: 3px; margin-top: 4px; background: var(--c); }
+  .sw.dash { background: none; border: 1.5px dashed var(--c); }
+  .key b { color: var(--ink-100); font-weight: 600; }
+  aside ul { margin: 0; padding-left: 18px; color: var(--ink-300); font-size: 13px; }
+  aside li { margin-top: 6px; }
+  aside section + section { margin-top: 24px; }
+  aside .foot { margin-top: 22px; padding-top: 12px; border-top: 1px solid var(--ink-700); color: var(--ink-400); font-size: 12px; }
+  code { font-family: var(--mono); font-size: 12px; color: var(--ink-200); }
+
+  @media (max-width: 820px) {
+    main { grid-template-columns: 1fr; }
+    .step { grid-template-columns: 1fr; gap: 4px; }
+    .state { text-align: left; margin-top: 0; }
+    .step:not(:last-child)::after { left: 12px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>An issue's lifecycle through the pipeline</h1>
+    <p>Each Linear state either starts a stage (one round, which runs one flow of agents) or is a human gate where Factory waits for a person.</p>
+    <span class="status">Proposed Gate 4 design. Not built yet.</span>
+  </header>
+
+  <ol class="pipe">
+    <li class="step">
+      <div class="state">Triage<small>or new in Backlog</small></div>
+      <div class="card">
+        <div class="head"><span class="kind">Stage</span><span class="name">Triage</span><span class="on">on by default</span></div>
+        <p class="desc">Reads the issue and routes it, with a risk class and evidence.</p>
+        <div class="flow"><span class="label">FLOW</span><span class="agent">Triager</span></div>
+        <div class="exits">
+          <span class="fwd">needs a spec: label it and leave it in Backlog for the Spec stage</span>
+          <span class="fwd">ready: leave it in Backlog for approval</span>
+          <span class="back">needs information or human-owned: comment and stop</span>
+        </div>
+      </div>
+    </li>
+
+    <li class="step">
+      <div class="state">Backlog<small>labeled for spec</small></div>
+      <div class="card">
+        <div class="head"><span class="kind">Stage</span><span class="name">Spec</span><span class="on">on by default</span></div>
+        <p class="desc">Draft, adversarial review and revise, each in a fresh context, up to 3 cycles. Writes the spec onto the issue.</p>
+        <div class="flow"><span class="label">FLOW</span><span class="agent">Spec writer</span><span class="edge">handoff →</span><span class="agent">Spec reviewer</span><span class="edge">handoff →</span><span class="agent">Reviser</span></div>
+        <div class="exits"><span class="fwd">stays in Backlog for approval</span></div>
+      </div>
+    </li>
+
+    <li class="step">
+      <div class="state">Backlog<small>spec written</small></div>
+      <div class="card gate">
+        <div class="head"><span class="kind">Human gate</span><span class="name">Spec approval</span><span class="on">on by default</span></div>
+        <p class="desc">A person reads the spec and approves it by moving the issue.</p>
+        <div class="exits"><span class="fwd">approve: Todo</span></div>
+      </div>
+    </li>
+
+    <li class="step">
+      <div class="state">Todo<small>approved, queued</small></div>
+      <div class="card gate">
+        <div class="head"><span class="kind">Human gate</span><span class="name">Start signal</span></div>
+        <p class="desc">Approved work waits here until a person says to build it.</p>
+        <div class="exits"><span class="fwd">start: Start</span></div>
+      </div>
+    </li>
+
+    <li class="step">
+      <div class="state">Start<small>then In Progress</small></div>
+      <div class="card">
+        <div class="head"><span class="kind">Stage</span><span class="name">Build</span></div>
+        <p class="desc">Factory moves the issue to In Progress when the run starts. The agent implements and keeps the workpad comment. Factory pushes the branch and opens the PR.</p>
+        <div class="flow"><span class="label">FLOW</span><span class="agent">Implementer</span></div>
+        <div class="exits"><span class="fwd">PR opened: Agent Review</span></div>
+      </div>
+    </li>
+
+    <li class="step">
+      <div class="state">Agent Review</div>
+      <div class="card">
+        <div class="head"><span class="kind">Stage</span><span class="name">Agent Review + Verification</span><span class="on">verification on by default</span></div>
+        <p class="desc">Answers every review thread and fixes CI until feedback is resolved and CI is green. Then verification runs the checks on the exact reviewed head, and the agent cannot override the result.</p>
+        <div class="flow"><span class="label">FLOW</span><span class="agent">PR fixer</span><span class="edge">handoff →</span><span class="agent">Verifier</span></div>
+        <div class="exits">
+          <span class="fwd">resolved, green, verified: Human Review</span>
+          <span class="back">verification fails: stays in Agent Review</span>
+        </div>
+      </div>
+    </li>
+
+    <li class="step">
+      <div class="state">Human Review</div>
+      <div class="card gate">
+        <div class="head"><span class="kind">Human gate</span><span class="name">Human review</span><span class="on">on by default</span></div>
+        <p class="desc">A person reviews the PR.</p>
+        <div class="exits">
+          <span class="fwd">approve: Merging</span>
+          <span class="back">reject: back to Start, which is a new Build round on the same PR</span>
+        </div>
+      </div>
+    </li>
+
+    <li class="step">
+      <div class="state">Merging</div>
+      <div class="card">
+        <div class="head"><span class="kind">Stage</span><span class="name">Merge</span></div>
+        <p class="desc">Resolves conflicts, repairs CI and squash-merges.</p>
+        <div class="flow"><span class="label">FLOW</span><span class="agent">Merger</span></div>
+        <div class="exits"><span class="fwd">merged: Done</span></div>
+      </div>
+    </li>
+
+    <li class="step">
+      <div class="state">Done</div>
+      <div class="card end">
+        <div class="head"><span class="kind">End</span><span class="name">Merged</span></div>
+        <p class="desc">Factory posts its final note. Canceled or Duplicate at any point stops the open round instead.</p>
+      </div>
+    </li>
+  </ol>
+
+  <aside>
+    <section>
+      <h2>Key</h2>
+      <div class="key">
+        <span class="sw" style="--c: var(--stage)"></span><span><b>Stage.</b> A trigger on a Linear state. Each entry into the state starts one round, which runs one flow.</span>
+        <span class="sw" style="--c: var(--agent)"></span><span><b>Flow.</b> The tasks a round runs: one on the stage's agent plus each task its handoffs create.</span>
+        <span class="sw dash" style="--c: var(--gate)"></span><span><b>Human gate.</b> A state with no trigger. A person moves the issue on.</span>
+        <span class="sw" style="--c: var(--back)"></span><span><b>Back edge.</b> The issue stays or goes back. Re-entering a stage starts a new round.</span>
+      </div>
+    </section>
+    <section>
+      <h2>Rules</h2>
+      <ul>
+        <li>Linear holds the issue's state. Factory reads it and never keeps a second copy.</li>
+        <li>Context between rounds lives on the issue and its PR: the workpad, Factory's notes and review threads.</li>
+        <li>A crashed round is replaced by a new round with the same inputs.</li>
+        <li>Moving an issue out of a stage's state cancels that stage's open round.</li>
+        <li>Every stage and gate can be turned off in the UI. The defaults run the full lifecycle.</li>
+      </ul>
+    </section>
+    <p class="foot">Design: KAT-3629 and <code>docs/adr/0008-linear-state-drives-stages.md</code>. Terms: <code>docs/domain.md</code>. Update this page when the design or the build changes.</p>
+  </aside>
+</main>
+</body>
+</html>
