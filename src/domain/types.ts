@@ -6,7 +6,6 @@ export type TaskId = string & { readonly __brand: 'TaskId' }
 export type RunId = string & { readonly __brand: 'RunId' }
 export type FlowId = string & { readonly __brand: 'FlowId' }
 export type GroupId = string & { readonly __brand: 'GroupId' }
-/** A work backend's own issue id, such as a Linear issue UUID. */
 export type IssueId = string & { readonly __brand: 'IssueId' }
 
 export type NodeId = AgentId | SandboxId | TriggerId
@@ -116,7 +115,6 @@ export type TriggerKind = 'cron' | 'webhook' | 'manual' | 'event' | 'linear'
 /** Linear ids chosen in the trigger inspector. A null project takes every issue in the team. */
 export type LinearSettings = { team: string; project: string | null; pickupState: string }
 
-/** Intake polls each enabled Linear trigger on this wall-clock interval. */
 export const LINEAR_POLL_MS = 30_000
 
 export type Trigger = {
@@ -283,9 +281,7 @@ export type World = {
   groups: Record<GroupId, Group>
   tasks: Record<TaskId, Task>
   runs: Record<RunId, Run>
-  /** keyed by issue id; saved and never pruned */
   intake: Record<IssueId, IntakeRecord>
-  /** keyed by Linear trigger id; runtime only */
   intakePolls: Record<TriggerId, IntakePoll>
   logs: LogLine[]
   events: FactoryEvent[]
@@ -341,7 +337,6 @@ export function taskOriginLabel(world: World, origin: Task['origin']): string {
   }
 }
 
-/** The issue a flow came from, so handoff tasks in an issue's flow show it too. */
 export function issueOfFlow(world: World, flowId: FlowId): IssueRef | null {
   return Object.values(world.intake).find((r) => r.flowId === flowId)?.issue ?? null
 }

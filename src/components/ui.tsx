@@ -34,7 +34,6 @@ export function FlowBadge({ flowId }: { flowId: string }) {
   )
 }
 
-/** An issue identifier that opens the issue in the work backend. */
 export function IssueLink({ issue }: { issue: { identifier: string; url: string } }) {
   return (
     <a

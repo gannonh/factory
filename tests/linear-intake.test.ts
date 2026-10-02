@@ -32,7 +32,6 @@ const issueQueries = async () => ((await control({ op: 'stats' })) as { requests
 
 const client = (options: Partial<Parameters<typeof createLinearClient>[0]> = {}) => createLinearClient({ url: fake.url, apiKey: KEY, ...options })
 
-/** A client the test can point elsewhere between polls, as an operator fixing their setup would. */
 function switchable(initial: LinearClient) {
   let current = initial
   return { client: { catalog: () => current.catalog(), issues: (s: LinearSettings) => current.issues(s) } as LinearClient, use: (next: LinearClient) => { current = next } }
@@ -43,7 +42,6 @@ function wallClock(start = 1_000_000) {
   return clock
 }
 
-/** A new trigger switched to Linear, joined to `agent`, given settings and enabled. */
 function linearTrigger(f: Fixture, agent: AgentId, settings: LinearSettings = ENG): TriggerId {
   const id = f.api.graph.createNode('trigger', { x: 0, y: 0 }) as TriggerId
   f.api.triggers.update(id, { kind: 'linear', name: 'Linear intake' })

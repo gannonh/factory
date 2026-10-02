@@ -84,11 +84,6 @@ function edgeExists(world: World, source: NodeId, target: NodeId, kind: EdgeKind
   return Object.values(world.edges).some((e) => e.id !== exceptId && e.source === source && e.target === target && e.kind === kind)
 }
 
-/**
- * Why the graph refuses one more edge of `kind` out of `source`, or null. Each
- * issue becomes one flow, so a Linear trigger joins exactly one agent; handoff
- * edges carry that flow further.
- */
 function fanOutRefusal(world: World, source: NodeId, kind: EdgeKind): string | null {
   if (kind !== 'triggers' || world.triggers[source as TriggerId]?.kind !== 'linear') return null
   return Object.values(world.edges).some((e) => e.kind === 'triggers' && e.source === source) ? ONE_AGENT : null
@@ -149,9 +144,7 @@ export class MockServer {
   private seedOptions: { localRoot?: string; localCronEnabled?: boolean }
   private linear: LinearClient
   private clock: () => number
-  /** One in-flight poll per Linear trigger. */
   private polls = new Map<TriggerId, Promise<void>>()
-  /** Wall-clock start of each trigger's latest poll. */
   private pollStarted = new Map<TriggerId, number>()
   private seq = 0
   private rev = 0
@@ -161,8 +154,6 @@ export class MockServer {
    * `manual` stops the automatic interval; tests then advance simulated time with
    * `advance(ms)`. `rng` makes run outcomes, durations, and metric noise repeatable.
    * `store` holds the saved world; without one the world lives in memory only.
-   * `linear` defaults to a client with no key, which never makes a request.
-   * `clock` is the wall clock that paces Linear polls.
    */
   constructor(options: {
     manual?: boolean; rng?: () => number; store?: WorldStore; runLogs?: RunLogStore; localRunner?: Runner; localRoot?: string; localCronEnabled?: boolean
@@ -230,7 +221,6 @@ export class MockServer {
     this.flush()
   }
 
-  /** Resolves once no Linear poll is in flight. */
   async settled() {
     while (this.polls.size > 0) await Promise.all(this.polls.values())
   }
@@ -638,11 +628,6 @@ export class MockServer {
     this.publish()
   }
 
-  /**
-   * A Linear trigger starts disabled and cannot be enabled until it has
-   * settings, so choosing the kind never takes issues before the operator
-   * has seen the preview.
-   */
   updateTrigger(id: TriggerId, patch: Partial<Omit<Trigger, 'id' | 'position' | 'groupId'>>) {
     const cur = this.world.triggers[id]
     if (!cur) return
@@ -664,7 +649,6 @@ export class MockServer {
     this.publish()
   }
 
-  /** A Linear trigger polls now instead of firing, and resolves when that poll is done. */
   async fireTrigger(id: TriggerId) {
     if (this.world.triggers[id]?.kind === 'linear') return this.poll(id)
     this.fire(id)
@@ -812,13 +796,11 @@ export class MockServer {
     return done
   }
 
-  /** Take every issue without an intake record. A result that no longer matches the trigger is dropped; the next poll converges. */
   private finishPoll(id: TriggerId, settings: LinearSettings, issues: LinearIssue[], error: IntakeError | null) {
     const tr = this.world.triggers[id]
     if (!this.pollable(tr) || !sameSettings(tr.linear, settings)) return
     this.world.intakePolls = { ...this.world.intakePolls, [id]: { at: this.clock(), error } }
     const feed = Object.values(this.world.edges).find((e) => e.kind === 'triggers' && e.source === id && this.world.agents[e.target as AgentId])
-    // without a joined agent nothing is taken, so a later poll still finds these issues
     if (!feed) {
       this.publish()
       return

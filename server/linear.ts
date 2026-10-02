@@ -5,7 +5,6 @@ export const LINEAR_URL = 'https://api.linear.app/graphql'
 const TIMEOUT_MS = 15_000
 const PAGE_SIZE = 50
 
-/** An issue in the pickup state, as intake needs it. */
 export type LinearIssue = { ref: IssueRef; title: string; description: string }
 
 export type LinearClient = {
@@ -14,7 +13,6 @@ export type LinearClient = {
   issues(settings: LinearSettings): Promise<LinearIssue[]>
 }
 
-/** The one failure type of this module. `intake` is what the world records. */
 export class LinearError extends Error {
   readonly intake: IntakeError
   constructor(intake: IntakeError) {
@@ -83,10 +81,7 @@ const envelope = object<{ data?: unknown; errors?: GraphqlError[] }>({ data: opt
 
 const isAuthError = (e: GraphqlError) => e.extensions?.code === 'AUTHENTICATION_ERROR' || e.extensions?.type === 'authentication error'
 
-/**
- * The only code that speaks Linear's GraphQL API. Personal API keys go in the
- * Authorization header as is; Linear rejects them with a `Bearer` prefix.
- */
+/** Personal API keys go in the Authorization header as is; Linear rejects them with a `Bearer` prefix. */
 export function createLinearClient(options: {
   url: string
   apiKey: string | undefined
@@ -164,7 +159,6 @@ export function createLinearClient(options: {
   }
 }
 
-/** The IntakeError for any failure, so a bug outside the request path still lands in the poll record instead of the tick loop. */
 export function intakeErrorOf(err: unknown): IntakeError {
   return err instanceof LinearError ? err.intake : { kind: 'api', message: err instanceof Error ? err.message : String(err) }
 }

@@ -1,11 +1,9 @@
 import type { Trigger, World } from '../domain/types'
 
 export type IntakeStatus = {
-  /** wall-clock ms of the latest finished poll */
   polledAt: number | null
   taken: number
   error: string | null
-  /** why the trigger is not polling, or null while it is */
   idle: 'not configured' | 'disabled' | 'intake paused' | null
 }
 

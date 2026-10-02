@@ -15,7 +15,6 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) {
 }
 
 const worldFile = worldFilePath(process.env, join(import.meta.dirname, '..'))
-// the key stays in this process: it never enters the world, which every tab and the world file receive
 const linear = createLinearClient({ url: process.env.FACTORY_LINEAR_URL || LINEAR_URL, apiKey: process.env.LINEAR_API_KEY || undefined })
 const simulation = new MockServer({
   store: fileStore(worldFile), runLogs: fileRunLogs(dirname(worldFile)), localRoot: process.env.FACTORY_LOCAL_ROOT ?? process.cwd(), localCronEnabled: false, linear,

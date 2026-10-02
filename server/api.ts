@@ -47,7 +47,6 @@ export const createApi = (server: MockServer) => ({
   sim: {
     set: (patch: Partial<World['sim']>) => server.setSim(patch),
     advance: (ms: number) => server.advance(ms),
-    /** Resolves once no Linear poll is in flight. */
     settled: () => server.settled(),
     reset: () => server.reset(),
   },

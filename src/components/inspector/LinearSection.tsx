@@ -5,7 +5,6 @@ import { Button, Field, IssueLink, Section, Select } from '../ui'
 
 type Loaded<T> = { status: 'loading' } | { status: 'ready'; value: T } | { status: 'error'; message: string }
 
-/** Runs `load` on mount and whenever its identity changes, so callers keep it stable. A superseded request's result is dropped. */
 function useLoaded<T>(load: () => T | PromiseLike<T>): Loaded<T> {
   const [result, setResult] = useState<{ load: typeof load; state: Loaded<T> } | null>(null)
   useEffect(() => {
@@ -21,7 +20,6 @@ function useLoaded<T>(load: () => T | PromiseLike<T>): Loaded<T> {
 
 const loadCatalog = () => api.linear.catalog()
 
-/** The safe-start check: what the trigger would take if it were enabled now. */
 function Preview({ settings }: { settings: LinearSettings }) {
   const { team, project, pickupState } = settings
   const load = useCallback(() => api.linear.preview({ team, project, pickupState }), [team, project, pickupState])
@@ -48,7 +46,6 @@ function Preview({ settings }: { settings: LinearSettings }) {
 
 export function LinearSection({ trigger, update }: { trigger: Trigger; update: (patch: { linear: LinearSettings }) => Promise<unknown> }) {
   const catalog = useLoaded(loadCatalog)
-  // A team with no unstarted state has no recommendation, and `linear` needs a pickup state, so the team waits here.
   const [draftTeam, setDraftTeam] = useState<string | null>(null)
   const { linear } = trigger
   const teamId = draftTeam ?? linear?.team ?? ''

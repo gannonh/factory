@@ -87,7 +87,6 @@ export function SandboxNode({ data, selected }: NodeProps<SandboxNodeType>) {
 
 const TRIGGER_ICON: Record<TriggerKind, typeof Clock> = { cron: Clock, webhook: Webhook, manual: Hand, event: Zap, linear: ListChecks }
 
-/** Poll age is wall-clock, so it ticks apart from the simulated clock. */
 function IntakeLines({ intake }: { intake: IntakeStatus }) {
   const wallNow = useWallNow()
   return (

@@ -43,9 +43,7 @@ export type Api = {
     fire: (id: TriggerId) => MaybePromise<void>
   }
   linear: {
-    /** Teams with their workflow states and projects, for the trigger inspector's pickers. Rejects with the poll error's message. */
     catalog: () => MaybePromise<LinearCatalog>
-    /** The issues these settings would take now: the count and the first few. */
     preview: (settings: LinearSettings) => MaybePromise<IntakePreview>
   }
   sim: {
