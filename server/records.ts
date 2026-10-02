@@ -1,9 +1,9 @@
 import {
   EDGE_KINDS, MODELS, SANDBOX_TRANSITIONS, isCapacity,
   type Agent, type AgentId, type Artifact, type Edge, type EdgeId, type FactoryEvent, type FlowId, type Group, type GroupId,
-  type IntakeRecord, type IssueId, type IssueRef, type Lease, type LinearSettings, type Metrics, type NodeId, type Position, type Priority, type RetryPolicy, type Run, type RunId,
+  type IntakeRecord, type IssueFilter, type IssueId, type IssueWrite, type IssueRef, type Lease, type LinearSettings, type Metrics, type NodeId, type Position, type Priority, type RetryPolicy, type Run, type RunId,
   type RunOutput, type Sandbox, type SandboxId, type SandboxKind, type SandboxState, type Subject,
-  type Task, type TaskId, type TaskInput, type Trigger, type TriggerId, type TriggerKind,
+  type Task, type TaskId, type TaskInput, type Trigger, type TriggerId, type TriggerKind, type WriteStatus,
 } from '../src/domain/types'
 import { array, boolean, defaulted, id, nullable, number, object, oneOf, refine, string, tagged, type Parser } from './parse'
 import { isRestorableInteger } from './storedNumber'
@@ -68,7 +68,19 @@ export const sandbox = object<Sandbox>({
   groupId: nullable(groupId),
 })
 
-export const linearSettings = object<LinearSettings>({ team: string, project: nullable(string), pickupState: string })
+const lifecycleState = defaulted(nullable(string), () => null)
+
+// The lifecycle states arrived after Linear settings were first saved, so they default to leaving the issue alone.
+export const linearSettings = object<LinearSettings>({
+  team: string,
+  project: nullable(string),
+  pickupState: string,
+  startedState: lifecycleState,
+  finishedState: lifecycleState,
+  failedState: lifecycleState,
+})
+
+export const issueFilter = object<IssueFilter>({ team: string, project: nullable(string), pickupState: string })
 
 export const triggerFields = {
   name: string,
@@ -137,7 +149,29 @@ export const run = object<Run>({
   error: nullable(string),
 })
 
-export const intakeRecord = object<IntakeRecord>({ issue: issueRef, trigger: triggerId, flowId: id<FlowId>(), takenAt: number })
+const writeStatuses: { [S in WriteStatus['state']]: Parser<Extract<WriteStatus, { state: S }>> } = {
+  pending: object({ state: oneOf('pending') }),
+  landed: object({ state: oneOf('landed'), at: number }),
+  failed: object({ state: oneOf('failed'), at: number, error: string }),
+}
+const writeState = oneOf('pending', 'landed', 'failed')
+const writeStatus: Parser<WriteStatus> = (value, path) =>
+  writeStatuses[writeState((value as { state?: unknown } | null)?.state, `${path}.state`)](value, path)
+
+const issueWrite = tagged<IssueWrite>({
+  move: object({ kind: oneOf('move'), step: oneOf('started', 'finished', 'failed'), stateId: string, status: writeStatus }),
+  note: object({ kind: oneOf('note'), outcome: oneOf('finished', 'failed'), commentId: string, body: nullable(string), status: writeStatus }),
+})
+
+// A record saved before write-back counts as ended with nothing to write, so upgrading never posts notes for older flows.
+export const intakeRecord = object<IntakeRecord>({
+  issue: issueRef,
+  trigger: triggerId,
+  flowId: id<FlowId>(),
+  takenAt: number,
+  phase: defaulted(oneOf('taken', 'started', 'ended'), () => 'ended' as const),
+  writes: defaulted(array(issueWrite), () => []),
+})
 
 const subject = tagged<Subject>({
   agent: object({ kind: oneOf('agent'), id: agentId }),

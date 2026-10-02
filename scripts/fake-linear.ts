@@ -1,7 +1,8 @@
 /**
- * A fake Linear GraphQL API for tests and local UAT. It answers only the two
- * operations `server/linear.ts` sends, by operationName, with Linear's filter
- * and cursor pagination semantics. `POST /control` changes its data.
+ * A fake Linear GraphQL API for tests and local UAT. It answers only the
+ * operations `server/linear.ts` sends, by operationName, with Linear's filter,
+ * cursor pagination and response shapes. `POST /control` reads and changes its
+ * data.
  *
  *   node --import tsx scripts/fake-linear.ts --port 8790 [--key lin_api_fake]
  */
@@ -11,7 +12,11 @@ import type { WorkflowStateType } from '../src/domain/types'
 
 type State = { id: string; name: string; type: WorkflowStateType; position: number }
 type Team = { id: string; key: string; name: string; states: State[]; projects: Array<{ id: string; name: string }> }
-type Issue = { id: string; identifier: string; title: string; description: string; url: string; branchName: string; team: string; state: string; project: string | null }
+type Comment = { id: string; body: string }
+type Issue = {
+  id: string; identifier: string; title: string; description: string; url: string; branchName: string
+  team: string; state: string; project: string | null; comments: Comment[]
+}
 
 export type FakeLinear = { url: string; controlUrl: string; close: () => Promise<void> }
 
@@ -33,7 +38,10 @@ function seedTeams(): Team[] {
 const slug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)
 
 type Eq = { id?: { eq?: string } } | undefined
-type Variables = { filter?: { team?: Eq; state?: Eq; project?: Eq }; first?: number; after?: string | null }
+type Variables = {
+  filter?: { team?: Eq; state?: Eq; project?: Eq }; first?: number; after?: string | null
+  id?: string; stateId?: string; commentId?: string; input?: { id?: string; issueId?: string; body?: string }
+}
 
 export function startFakeLinear(options: { port?: number; apiKey?: string } = {}): Promise<FakeLinear> {
   const apiKey = options.apiKey ?? 'lin_api_fake'
@@ -41,10 +49,12 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
   let issues: Issue[] = []
   let failAuth = false
   let requests: Record<string, number> = {}
+  let failures: Record<string, { times: number; message: string }> = {}
 
   const teamByKey = (key: string) => teams.find((t) => t.key === key) ?? missing(`team ${key}`)
   const stateByName = (team: Team, name: string) => team.states.find((s) => s.name === name) ?? missing(`state ${name}`)
   const issueBy = (identifier: string) => issues.find((i) => i.identifier === identifier) ?? missing(`issue ${identifier}`)
+  const issueById = (id: string | undefined) => issues.find((i) => i.id === id) ?? notFound()
   const view = (issue: Issue) => {
     const team = teams.find((t) => t.id === issue.team)
     return {
@@ -72,6 +82,7 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
         team: team.id,
         state: stateByName(team, String(body.state ?? 'Todo')).id,
         project: project?.id ?? null,
+        comments: [],
       }
       issues.push(issue)
       return view(issue)
@@ -82,9 +93,15 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       issue.state = stateByName(team, String(body.state)).id
       return view(issue)
     },
+    issue: (body) => view(issueBy(String(body.identifier))),
     failAuth(body) {
       failAuth = body.on === true
       return { failAuth }
+    },
+    failNext(body) {
+      const operation = String(body.operation)
+      failures[operation] = { times: Number(body.times ?? 1), message: String(body.message ?? `${operation} failed`) }
+      return { [operation]: failures[operation] }
     },
     stats: () => ({ requests }),
     reset() {
@@ -92,6 +109,7 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       issues = []
       failAuth = false
       requests = {}
+      failures = {}
       return { ok: true }
     },
   }
@@ -116,6 +134,29 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
         },
       }
     },
+    FactoryIssueState: ({ id }) => {
+      const issue = issueById(id)
+      return { issue: { id: issue.id, state: { id: issue.state } } }
+    },
+    FactoryMoveIssue: ({ id, stateId }) => {
+      const issue = issueById(id)
+      const team = teams.find((t) => t.id === issue.team)!
+      if (!team.states.some((s) => s.id === stateId)) throw new Error(`state ${stateId} is not in team ${team.key}`)
+      issue.state = stateId!
+      return { issueUpdate: { success: true } }
+    },
+    FactoryIssueComment: ({ id, commentId }) => {
+      const issue = issueById(id)
+      return { issue: { id: issue.id, comments: { nodes: issue.comments.filter((c) => c.id === commentId).map((c) => ({ id: c.id })) } } }
+    },
+    FactoryCreateComment: ({ input = {} }) => {
+      const issue = issueById(input.issueId)
+      if (typeof input.body !== 'string' || input.body === '') throw new Error('Argument Validation Error: body should not be empty')
+      const id = input.id ?? `comment-${issues.flatMap((i) => i.comments).length + 1}`
+      if (issues.some((i) => i.comments.some((c) => c.id === id))) throw new Error(`a comment with id ${id} already exists`)
+      issue.comments.push({ id, body: input.body })
+      return { commentCreate: { success: true } }
+    },
   }
 
   async function handle(req: IncomingMessage, res: ServerResponse) {
@@ -134,6 +175,11 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
     }
     const operation = operations[name]
     if (!operation) return send(res, 400, { errors: [{ message: `Unknown operation ${name}` }] })
+    const failure = failures[name]
+    if (failure && failure.times > 0) {
+      failure.times -= 1
+      return send(res, 400, { errors: [{ message: failure.message }] })
+    }
     try {
       return send(res, 200, { data: operation((body.variables ?? {}) as Variables) })
     } catch (err) {
@@ -164,6 +210,10 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
 
 function missing(what: string): never {
   throw new Error(`no ${what}`)
+}
+
+function notFound(): never {
+  throw new Error('Entity not found: Issue')
 }
 
 async function read(req: IncomingMessage): Promise<string> {

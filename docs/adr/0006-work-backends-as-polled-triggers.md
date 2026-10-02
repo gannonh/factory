@@ -22,8 +22,8 @@ Retention prunes old tasks and runs. If intake checked tasks to find issues it h
 
 ## Limits
 
-Intake reads issues and never writes back to Linear. It does not move an issue to another state, comment on it or link a pull request. A deleted trigger leaves its intake records, so its issues are not taken again by a new trigger. The intake map grows by one record per issue and has no compaction.
+Intake itself only reads issues. Write-back moves the issue and posts a note as its flow runs (ADR 0007). Nothing links a pull request. A deleted trigger leaves its intake records, so its issues are not taken again by a new trigger. The intake map grows by one record per issue and has no compaction.
 
 ## When to reopen
 
-Reopen this decision when the server runs where Linear can reach it, so webhooks become possible. Reopen it also when intake must write to Linear, or when the intake map grows large enough to slow a save.
+Reopen this decision when the server runs where Linear can reach it, so webhooks become possible. Reopen it also when the intake map grows large enough to slow a save.

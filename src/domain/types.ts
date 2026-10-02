@@ -112,8 +112,21 @@ export const isCapacity = (v: number) => Number.isInteger(v) && v >= 1
 
 export type TriggerKind = 'cron' | 'webhook' | 'manual' | 'event' | 'linear'
 
-/** Linear ids chosen in the trigger inspector. A null project takes every issue in the team. */
-export type LinearSettings = { team: string; project: string | null; pickupState: string }
+/**
+ * Linear ids chosen in the trigger inspector. A null project takes every issue in the team.
+ * The lifecycle states are where write-back moves a taken issue; null leaves the issue alone.
+ */
+export type LinearSettings = {
+  team: string
+  project: string | null
+  pickupState: string
+  startedState: string | null
+  finishedState: string | null
+  failedState: string | null
+}
+
+/** The settings that choose which issues intake takes. */
+export type IssueFilter = Pick<LinearSettings, 'team' | 'project' | 'pickupState'>
 
 export const LINEAR_POLL_MS = 30_000
 
@@ -135,8 +148,22 @@ export type Trigger = {
 
 export type IssueRef = { backend: 'linear'; id: IssueId; identifier: string; url: string; branchName: string }
 
-/** One issue taken by intake. Retention never prunes these, so an issue never starts a second flow. */
-export type IntakeRecord = { issue: IssueRef; trigger: TriggerId; flowId: FlowId; takenAt: number }
+/** Where a write to Linear stands. `at` is wall-clock ms. */
+export type WriteStatus = { state: 'pending' } | { state: 'landed'; at: number } | { state: 'failed'; at: number; error: string }
+
+/** One write-back to the taken issue. A note's body and comment id are fixed when the write becomes due. The body is dropped once the note lands. */
+export type IssueWrite =
+  | { kind: 'move'; step: 'started' | 'finished' | 'failed'; stateId: string; status: WriteStatus }
+  | { kind: 'note'; outcome: 'finished' | 'failed'; commentId: string; body: string | null; status: WriteStatus }
+
+/** How far the issue's flow has gone: no run yet, a run started, or every task terminal. */
+export type IntakePhase = 'taken' | 'started' | 'ended'
+
+/**
+ * One issue taken by intake. Retention never prunes these, so an issue never starts a second flow.
+ * `writes` is the ordered write-back queue; each phase change appends to it and nothing removes from it.
+ */
+export type IntakeRecord = { issue: IssueRef; trigger: TriggerId; flowId: FlowId; takenAt: number; phase: IntakePhase; writes: IssueWrite[] }
 
 export type IntakeError = { kind: 'missing-key' | 'auth' | 'network' | 'api'; message: string }
 
@@ -149,9 +176,22 @@ export type LinearTeam = { id: string; key: string; name: string; states: Workfl
 export type LinearCatalog = { teams: LinearTeam[] }
 export type IntakePreview = { count: number; issues: Array<{ identifier: string; title: string; url: string }> }
 
-/** Epic decision 8: pickup defaults to the team's first `unstarted` state by position, such as Todo. */
-export function recommendedPickupState(states: readonly WorkflowState[]): string | null {
-  return states.filter((s) => s.type === 'unstarted').sort((a, b) => a.position - b.position)[0]?.id ?? null
+export type RecommendedStates = Pick<LinearSettings, 'startedState' | 'finishedState' | 'failedState'> & { pickupState: string | null }
+
+/**
+ * Epic decision 8, by position: pickup is the first `unstarted` state (Todo), started is the
+ * first `started` state (In Progress), finished is the first `started` state named like review,
+ * and failed leaves the issue where it is.
+ */
+export function recommendedStates(states: readonly WorkflowState[]): RecommendedStates {
+  const ordered = [...states].sort((a, b) => a.position - b.position)
+  const started = ordered.filter((s) => s.type === 'started')
+  return {
+    pickupState: ordered.find((s) => s.type === 'unstarted')?.id ?? null,
+    startedState: started[0]?.id ?? null,
+    finishedState: started.find((s) => /review/i.test(s.name))?.id ?? null,
+    failedState: null,
+  }
 }
 
 /**
