@@ -39,6 +39,7 @@ function switchable(initial: LinearClient) {
     issues: (filter) => current.issues(filter),
     ensureState: (issueId, stateId) => current.ensureState(issueId, stateId),
     ensureComment: (issueId, commentId, body) => current.ensureComment(issueId, commentId, body),
+    ensureAttachment: (issueId, url, title) => current.ensureAttachment(issueId, url, title),
   }
   return { client, use: (next: LinearClient) => { current = next } }
 }

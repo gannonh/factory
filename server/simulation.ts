@@ -866,7 +866,7 @@ export class MockServer {
     this.drains.set(issueId, done)
   }
 
-  /** Lands an issue's due writes. A failed move holds back later moves, not notes, until the next poll retries it. Task state is never touched. */
+  /** Lands an issue's due writes. A failed move holds back later moves, not notes or attaches, until the next poll retries it. Task state is never touched. */
   private async drainWrites(issueId: IssueId) {
     for (;;) {
       const record: IntakeRecord | undefined = this.world.intake[issueId]
@@ -876,6 +876,7 @@ export class MockServer {
       let status: WriteStatus
       try {
         if (write.kind === 'move') await this.linear.ensureState(issueId, write.stateId)
+        else if (write.kind === 'attach') await this.linear.ensureAttachment(issueId, write.url, write.title)
         else await this.linear.ensureComment(issueId, write.commentId, write.body ?? '')
         status = { state: 'landed', at: this.clock() }
       } catch (err) {

@@ -24,6 +24,20 @@ function latestRun(task: Task, runs: World['runs']): Run | null {
   return Object.values(runs).filter((r) => r.taskId === task.id).sort((a, b) => b.attempt - a.attempt)[0] ?? null
 }
 
+/**
+ * The distinct pull requests the flow's succeeded local runs produced, in flow order. Simulated runs only
+ * invent demo links, so they never reach Linear as attachments.
+ */
+function deliveredPullRequests(tasks: readonly Task[], runs: World['runs']): Array<Artifact & { url: string }> {
+  const found = new Map<string, Artifact & { url: string }>()
+  for (const task of inFlowOrder(tasks)) {
+    const run = latestRun(task, runs)
+    if (run?.status !== 'succeeded' || run.execution !== 'local' || !run.output) continue
+    for (const a of run.output.artifacts) if (a.kind === 'pr' && a.url && !found.has(a.url)) found.set(a.url, { ...a, url: a.url })
+  }
+  return [...found.values()]
+}
+
 const artifactLine = (a: Artifact) => `- ${a.kind}: ${a.url ? `[${a.label}](${a.url})` : a.label}`
 
 function outcomeLines(task: Task, run: Run | null): string[] {
@@ -71,6 +85,9 @@ export function reconcileRecord(
     if (outcome !== 'cancelled') {
       const stateId = outcome === 'finished' ? settings?.finishedState : settings?.failedState
       if (stateId) writes.push({ kind: 'move', step: outcome, stateId, status: PENDING })
+      for (const pr of deliveredPullRequests(tasks, world.runs)) {
+        if (!writes.some((w) => w.kind === 'attach' && w.url === pr.url)) writes.push({ kind: 'attach', url: pr.url, title: pr.label, status: PENDING })
+      }
       writes.push({ kind: 'note', outcome, commentId: newCommentId(), body: noteBody(outcome, tasks, world), status: PENDING })
     }
   }
@@ -80,7 +97,7 @@ export function reconcileRecord(
 /**
  * The index of the next write to send, or -1. A write is due when it is pending or failed at least `retryMs` ago.
  * Moves go in order, so a stuck move holds back later moves (a late started move would undo a finished one),
- * but never a note: the note reports the result whatever happened to the issue's state.
+ * but never a note or an attach: those report the result whatever happened to the issue's state.
  */
 export function nextWrite(writes: readonly IssueWrite[], now: number, retryMs: number): number {
   let movesOpen = false
