@@ -7,6 +7,7 @@ import {
   attachedEdges,
   edgeKindFor,
   isCapacity,
+  issueOfFlow,
   nodeKindOf,
   nodeRef,
   nodeSubject,
@@ -51,7 +52,7 @@ import {
   type WriteStatus,
 } from '../src/domain/types'
 import type { WorldStore } from './worldFile'
-import { ClaudeRunner, SimulatedRunner, gitArtifacts, prepareWorkdir, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
+import { ClaudeRunner, SimulatedRunner, deliver, gitArtifacts, prepareWorkdir, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
 import type { RunLogStore } from './runLogs'
 import { array, boolean, defaulted, id, number, object, oneOf, record } from './parse'
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
@@ -943,22 +944,37 @@ export class MockServer {
 
   private async completeLocalRun(run: Run, agent: Agent, result: string) {
     const prepared = this.workdirs.get(run.id)
+    const delivering = agent.delivery === 'pull-request' && prepared?.delivery ? prepared : null
     let artifacts: RunOutput['artifacts'] = []
     if (prepared) {
-      try { artifacts = await gitArtifacts(prepared) }
+      try { artifacts = await gitArtifacts(prepared, { lookupPr: !delivering }) }
       catch (error) {
         if (this.world.runs[run.id]?.status !== 'running') return
         this.log('warn', `git artifacts unavailable: ${error instanceof Error ? error.message : String(error)}`, { runId: run.id, agentId: run.agentId })
       }
     }
     if (this.world.runs[run.id]?.status !== 'running') return
+    if (delivering) {
+      const task = this.world.tasks[run.taskId]
+      const issue = task ? issueOfFlow(this.world, task.flowId) : null
+      try {
+        artifacts = [...artifacts, ...await deliver(delivering, { title: run.title, body: issue ? `${result}\n\n${issue.url}` : result })]
+      } catch (error) {
+        if (this.world.runs[run.id]?.status !== 'running') return
+        this.finishRun(run, { status: 'failed', reason: error instanceof Error ? error.message : String(error) }, true)
+        this.publish()
+        return
+      }
+      if (this.world.runs[run.id]?.status !== 'running') return
+    }
     this.finishRun(run, { status: 'succeeded', agent, output: { summary: result, artifacts } })
     this.publish()
   }
 
-  private finishRun(run: Run, completion: RunCompletion) {
+  /** `completing` is set only by the run's own completion, which a pending completion otherwise holds off. */
+  private finishRun(run: Run, completion: RunCompletion, completing = false) {
     if (run.status !== 'running' || this.world.runs[run.id]?.status !== 'running') return
-    if (completion.status !== 'succeeded' && this.pendingCompletions.has(run.id)) return
+    if (completion.status !== 'succeeded' && !completing && this.pendingCompletions.has(run.id)) return
     if (run.execution === 'local' && completion.status !== 'succeeded') completion = { ...completion, reason: boundedRunText(completion.reason, ERROR_TRUNCATED) }
     const timeout = this.localTimeouts.get(run.id)
     if (timeout) clearTimeout(timeout)
@@ -1149,10 +1165,12 @@ export class MockServer {
       }, agent.timeoutMs)
       timeout.unref?.()
       this.localTimeouts.set(id, timeout)
-      void prepareWorkdir(sandbox.host, id).then((workdir) => {
+      const delivery = agent.delivery === 'pull-request' ? { branch: issueOfFlow(this.world, task.flowId)?.branchName ?? `factory-${id}` } : null
+      void prepareWorkdir(sandbox.host, id, delivery).then((workdir) => {
         if (this.closed || this.world.runs[id]?.status !== 'running') return
         this.workdirs.set(id, workdir)
-        this.log('info', `working directory: ${workdir.path}`, { runId: id, agentId: agent.id }, Date.now())
+        const branch = workdir.delivery ? ` on branch ${workdir.delivery.branch} from origin/${workdir.delivery.base}` : ''
+        this.log('info', `working directory: ${workdir.path}${branch}`, { runId: id, agentId: agent.id }, Date.now())
         this.publish()
         this.runners.local.start({ run, agent, task, workdir: workdir.path }, (event) => this.handleRunnerEvent(id, event))
       }).catch((error: unknown) => this.handleRunnerEvent(id, { kind: 'complete', status: 'failed', result: null, reason: error instanceof Error ? error.message : String(error) }))
