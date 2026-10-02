@@ -61,7 +61,7 @@ Run `with-env npm run dev` when a change needs secrets such as `LINEAR_API_KEY`.
 
 ## Browser verification
 
-Read `.agents/skills/verify-factory/SKILL.md` before you drive the UI. It launches an isolated server, drives the page with `agent-browser`, records evidence, and posts it to the PR. Its `features/` directory maps each feature to a recipe. The skill exists only in `.agents/skills/`, so open it by path if your harness does not load that directory.
+Read `.agents/skills/verify-factory/SKILL.md` before you drive the UI. It launches an isolated server, drives the page with `agent-browser`, records evidence, and posts it to the PR. Its `features/` directory maps each feature to a recipe. Project skills live in `.agents/skills/`. `.claude/skills` is a symlink to that directory, so edit skills only under `.agents/skills/`.
 
 Automated drags do not create React Flow connections, because the handles listen to mouse events rather than pointer events. A node spawned near the right edge can sit under the inspector panel.
 
