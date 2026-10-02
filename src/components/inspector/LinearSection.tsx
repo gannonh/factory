@@ -1,30 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { api } from '../../api/client'
-import { recommendedPickupState, type IntakePreview, type LinearSettings, type Trigger } from '../../domain/types'
+import { recommendedStates, type IntakePreview, type LinearSettings, type LinearTeam, type Trigger } from '../../domain/types'
 import { Button, Field, IssueLink, Section, Select } from '../ui'
+import { loadCatalog, useLoaded } from './useLoaded'
 
-type Loaded<T> = { status: 'loading' } | { status: 'ready'; value: T } | { status: 'error'; message: string }
-
-/** Loads on mount and when `load` changes, then again every `refreshMs` while mounted, keeping the shown value until the next one arrives. */
-function useLoaded<T>(load: () => T | PromiseLike<T>, refreshMs?: number): Loaded<T> {
-  const [result, setResult] = useState<{ load: typeof load; state: Loaded<T> } | null>(null)
-  useEffect(() => {
-    let current = true
-    const run = () => Promise.resolve(load()).then(
-      (value) => { if (current) setResult({ load, state: { status: 'ready', value } }) },
-      (error: unknown) => { if (current) setResult({ load, state: { status: 'error', message: error instanceof Error ? error.message : 'Linear request failed' } }) },
-    )
-    void run()
-    const timer = refreshMs === undefined ? undefined : setInterval(() => void run(), refreshMs)
-    return () => {
-      current = false
-      clearInterval(timer)
-    }
-  }, [load, refreshMs])
-  return result?.load === load ? result.state : { status: 'loading' }
-}
-
-const loadCatalog = () => api.linear.catalog()
 const PREVIEW_REFRESH_MS = 5000
 
 function Preview({ settings }: { settings: LinearSettings }) {
@@ -51,11 +30,25 @@ function Preview({ settings }: { settings: LinearSettings }) {
   )
 }
 
+type LifecycleKey = 'startedState' | 'finishedState' | 'failedState'
+const LIFECYCLE: Array<{ key: LifecycleKey; label: string }> = [
+  { key: 'startedState', label: 'Started state' },
+  { key: 'finishedState', label: 'Finished state' },
+  { key: 'failedState', label: 'Failed state' },
+]
+
+/** A newly chosen team's settings: every project and the recommended lifecycle. */
+function teamSettings(team: LinearTeam, pickupState: string): LinearSettings {
+  const { startedState, finishedState, failedState } = recommendedStates(team.states)
+  return { team: team.id, project: null, pickupState, startedState, finishedState, failedState }
+}
+
 export function LinearSection({ trigger, update }: { trigger: Trigger; update: (patch: { linear: LinearSettings }) => Promise<unknown> }) {
   const catalog = useLoaded(loadCatalog)
   const [teamAwaitingState, setTeamAwaitingState] = useState<string | null>(null)
   const { linear } = trigger
   const teamId = teamAwaitingState ?? linear?.team ?? ''
+  const current = teamAwaitingState ? null : linear
 
   let body
   if (catalog.status === 'loading') body = <div className="text-[11px] text-ink-400">Loading teams…</div>
@@ -64,21 +57,32 @@ export function LinearSection({ trigger, update }: { trigger: Trigger; update: (
     const teams = catalog.value.teams
     const team = teams.find((t) => t.id === teamId)
     const states = [...(team?.states ?? [])].sort((a, b) => a.position - b.position)
-    const recommended = team ? recommendedPickupState(team.states) : null
-    const pickup = teamAwaitingState ? '' : linear?.pickupState ?? ''
+    const recommended = team ? recommendedStates(team.states) : null
+    const pickup = current?.pickupState ?? ''
 
+    const save = (settings: LinearSettings) => {
+      setTeamAwaitingState(null)
+      void update({ linear: settings }).catch(() => {})
+    }
     const chooseTeam = (id: string) => {
       if (id === linear?.team) { setTeamAwaitingState(null); return }
       const next = teams.find((t) => t.id === id)
-      const state = next ? recommendedPickupState(next.states) : null
-      if (state === null) { setTeamAwaitingState(id); return }
-      setTeamAwaitingState(null)
-      void update({ linear: { team: id, project: null, pickupState: state } }).catch(() => {})
+      const state = next ? recommendedStates(next.states).pickupState : null
+      if (!next || state === null) { setTeamAwaitingState(id); return }
+      save(teamSettings(next, state))
     }
     const chooseState = (state: string) => {
-      setTeamAwaitingState(null)
-      void update({ linear: { team: teamId, project: teamAwaitingState ? null : linear?.project ?? null, pickupState: state } }).catch(() => {})
+      if (current) save({ ...current, pickupState: state })
+      else if (team) save(teamSettings(team, state))
     }
+    const reset = current && recommended && {
+      ...current,
+      pickupState: recommended.pickupState ?? current.pickupState,
+      startedState: recommended.startedState,
+      finishedState: recommended.finishedState,
+      failedState: recommended.failedState,
+    }
+    const resettable = reset && current && (['pickupState', ...LIFECYCLE.map((l) => l.key)] as const).some((key) => reset[key] !== current[key])
 
     body = (
       <>
@@ -91,24 +95,37 @@ export function LinearSection({ trigger, update }: { trigger: Trigger; update: (
         </Field>
         <Field label="Project">
           <Select
-            value={teamAwaitingState ? '' : linear?.project ?? ''}
-            disabled={!linear || teamAwaitingState !== null}
-            onChange={(e) => { if (linear) void update({ linear: { ...linear, project: e.target.value || null } }).catch(() => {}) }}
+            value={current?.project ?? ''}
+            disabled={!current}
+            onChange={(e) => { if (current) save({ ...current, project: e.target.value || null }) }}
           >
             <option value="">All projects</option>
-            {linear?.project && !team?.projects.some((p) => p.id === linear.project) && <option value={linear.project}>{linear.project}</option>}
+            {current?.project && !team?.projects.some((p) => p.id === current.project) && <option value={current.project}>{current.project}</option>}
             {(team?.projects ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </Select>
         </Field>
-        <Field label="Pickup state" hint={linear && !teamAwaitingState && pickup === recommended ? 'recommended' : undefined}>
+        <Field label="Pickup state" hint={current && pickup === recommended?.pickupState ? 'recommended' : undefined}>
           <Select value={pickup} disabled={!team} onChange={(e) => chooseState(e.target.value)}>
-            {pickup === '' && <option value="" disabled>{team && recommended === null ? 'No Todo-type state; choose one' : 'Choose a state'}</option>}
+            {pickup === '' && <option value="" disabled>{team && recommended?.pickupState === null ? 'No Todo-type state; choose one' : 'Choose a state'}</option>}
             {pickup !== '' && !states.some((s) => s.id === pickup) && <option value={pickup}>{pickup}</option>}
             {states.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </Select>
         </Field>
-        {linear && !teamAwaitingState && recommended !== null && pickup !== recommended && (
-          <Button size="xs" className="self-start" onClick={() => chooseState(recommended)}>Reset to recommended</Button>
+        {LIFECYCLE.map(({ key, label }) => {
+          const value = current?.[key] ?? null
+          return (
+            <Field key={key} label={label} hint={current && recommended && value === recommended[key] ? 'recommended' : undefined}>
+              <Select value={value ?? ''} disabled={!current} onChange={(e) => { if (current) save({ ...current, [key]: e.target.value || null }) }}>
+                <option value="">Leave unchanged</option>
+                {value !== null && !states.some((s) => s.id === value) && <option value={value}>{value}</option>}
+                {states.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </Select>
+            </Field>
+          )
+        })}
+        <div className="text-[10px] text-ink-500">Factory moves the issue when its flow starts and ends, then posts one note.</div>
+        {reset && resettable && (
+          <Button size="xs" className="self-start" onClick={() => save(reset)}>Reset to recommended</Button>
         )}
       </>
     )
@@ -117,9 +134,9 @@ export function LinearSection({ trigger, update }: { trigger: Trigger; update: (
   return (
     <>
       <Section title="Linear">{body}</Section>
-      {linear && !teamAwaitingState && !trigger.enabled && (
+      {current && !trigger.enabled && (
         <Section title="Preview">
-          <Preview settings={linear} />
+          <Preview settings={current} />
           <div className="text-[10px] text-ink-500">Enabling takes these issues and starts their tasks.</div>
         </Section>
       )}

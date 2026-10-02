@@ -23,6 +23,8 @@ import {
   type GroupId,
   type IntakeError,
   type IntakePreview,
+  type IntakeRecord,
+  type IssueFilter,
   type IssueId,
   type LinearCatalog,
   type LinearSettings,
@@ -46,6 +48,7 @@ import {
   type TriggerId,
   type TriggerKind,
   type World,
+  type WriteStatus,
 } from '../src/domain/types'
 import type { WorldStore } from './worldFile'
 import { ClaudeRunner, SimulatedRunner, gitArtifacts, prepareWorkdir, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
@@ -53,6 +56,8 @@ import type { RunLogStore } from './runLogs'
 import { array, boolean, defaulted, id, number, object, oneOf, record } from './parse'
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
 import { LINEAR_URL, createLinearClient, intakeErrorOf, type LinearClient, type LinearIssue } from './linear'
+import { landed, nextWrite, reconcileRecord } from './writeBack'
+import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 
 const TICK_MS = 400
@@ -146,6 +151,7 @@ export class MockServer {
   private clock: () => number
   private polls = new Map<TriggerId, Promise<void>>()
   private pollStarted = new Map<TriggerId, number>()
+  private drains = new Map<IssueId, Promise<void>>()
   private seq = 0
   private rev = 0
   private closed = false
@@ -217,12 +223,13 @@ export class MockServer {
       if (run.status === 'running' && !this.pendingCompletions.has(run.id)) this.runners[run.execution ?? 'simulated'].kill(run.id)
     }
     if (this.pendingCompletions.size) await Promise.all(this.pendingCompletions.values())
-    if (this.polls.size) await this.settled()
+    if (this.polls.size || this.drains.size) await this.settled()
     this.flush()
   }
 
+  /** Resolves once no Linear poll or write-back is in flight. */
   async settled() {
-    while (this.polls.size > 0) await Promise.all(this.polls.values())
+    while (this.polls.size > 0 || this.drains.size > 0) await Promise.all([...this.polls.values(), ...this.drains.values()])
   }
 
   /** Monotonic count of publishes. The initial seed is revision 1. */
@@ -262,10 +269,14 @@ export class MockServer {
   }
 
   private publish() {
+    const grown = this.reconcileIntake()
     this.rev += 1
     this.world = { ...this.world }
     for (const fn of this.listeners) fn(this.world)
-    if (!this.store || this.saveTimer) return
+    // A queued write, with its comment id, must be on disk before it can reach Linear, or a restart would mint a new id and post twice.
+    if (grown.length > 0) this.flush()
+    for (const issueId of grown) this.drain(issueId)
+    if (!this.store || this.saveTimer || grown.length > 0) return
     this.saveTimer = setTimeout(() => this.flush(), SAVE_MS)
   }
 
@@ -659,7 +670,7 @@ export class MockServer {
     return this.linear.catalog()
   }
 
-  async linearPreview(settings: LinearSettings): Promise<IntakePreview> {
+  async linearPreview(settings: IssueFilter): Promise<IntakePreview> {
     const issues = await this.linear.issues(settings)
     return {
       count: issues.length,
@@ -780,6 +791,9 @@ export class MockServer {
       const last = this.pollStarted.get(tr.id)
       if (last === undefined || now - last >= LINEAR_POLL_MS) void this.poll(tr.id)
     }
+    for (const record of Object.values(this.world.intake)) {
+      if (nextWrite(record.writes, now, LINEAR_POLL_MS) !== -1) this.drain(record.issue.id)
+    }
   }
 
   private poll(id: TriggerId): Promise<void> {
@@ -817,7 +831,8 @@ export class MockServer {
         origin: { kind: 'issue', trigger: id, issue: issue.ref },
         input: null,
       }, flowId)
-      this.world.intake = { ...this.world.intake, [issue.ref.id]: { issue: issue.ref, trigger: id, flowId, takenAt: this.clock() } }
+      const record: IntakeRecord = { issue: issue.ref, trigger: id, flowId, takenAt: this.clock(), phase: 'taken', writes: [] }
+      this.world.intake = { ...this.world.intake, [issue.ref.id]: record }
       taken.push(issue.ref.identifier)
     }
     if (taken.length > 0) {
@@ -825,6 +840,54 @@ export class MockServer {
       this.event('trigger', { kind: 'trigger', id }, `${tr.name} took ${taken.join(', ')}`)
     }
     this.publish()
+  }
+
+  /** Moves each open intake record along with its flow, and returns the issues that gained writes. */
+  private reconcileIntake(): IssueId[] {
+    const open = Object.values(this.world.intake).filter((record) => record.phase !== 'ended')
+    if (open.length === 0) return []
+    const flows = new Map<FlowId, Task[]>(open.map((record) => [record.flowId, []]))
+    for (const task of Object.values(this.world.tasks)) flows.get(task.flowId)?.push(task)
+    const grown: IssueId[] = []
+    for (const record of open) {
+      const next = reconcileRecord(record, flows.get(record.flowId) ?? [], this.world, randomUUID)
+      if (next === record) continue
+      this.world.intake = { ...this.world.intake, [record.issue.id]: next }
+      if (next.writes.length > record.writes.length) grown.push(record.issue.id)
+    }
+    return grown
+  }
+
+  private drain(issueId: IssueId) {
+    if (this.closed || this.drains.has(issueId)) return
+    const done = this.drainWrites(issueId)
+      .catch((err: unknown) => console.error(`write-back for ${issueId} stopped: ${intakeErrorOf(err).message}`))
+      .finally(() => this.drains.delete(issueId))
+    this.drains.set(issueId, done)
+  }
+
+  /** Lands an issue's due writes. A failed move holds back later moves, not notes, until the next poll retries it. Task state is never touched. */
+  private async drainWrites(issueId: IssueId) {
+    for (;;) {
+      const record: IntakeRecord | undefined = this.world.intake[issueId]
+      const index = record ? nextWrite(record.writes, this.clock(), LINEAR_POLL_MS) : -1
+      if (this.closed || !record || index === -1) return
+      const write = record.writes[index]
+      let status: WriteStatus
+      try {
+        if (write.kind === 'move') await this.linear.ensureState(issueId, write.stateId)
+        else await this.linear.ensureComment(issueId, write.commentId, write.body ?? '')
+        status = { state: 'landed', at: this.clock() }
+      } catch (err) {
+        status = { state: 'failed', at: this.clock(), error: intakeErrorOf(err).message }
+      }
+      const current = this.world.intake[issueId]
+      if (current) {
+        const writes = current.writes.map((w, i) => (i === index ? landed(w, status) : w))
+        this.world.intake = { ...this.world.intake, [issueId]: { ...current, writes } }
+        this.publish()
+      }
+    }
   }
 
   private forgetPolls(ids: TriggerId[]) {

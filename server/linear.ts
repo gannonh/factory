@@ -1,4 +1,4 @@
-import type { IntakeError, IssueId, IssueRef, LinearCatalog, LinearSettings, LinearTeam, WorkflowState } from '../src/domain/types'
+import type { IntakeError, IssueFilter, IssueId, IssueRef, LinearCatalog, LinearTeam, WorkflowState } from '../src/domain/types'
 import { array, boolean, nullable, number, object, oneOf, optional, string, type Parser } from './parse'
 
 export const LINEAR_URL = 'https://api.linear.app/graphql'
@@ -7,10 +7,15 @@ const PAGE_SIZE = 50
 
 export type LinearIssue = { ref: IssueRef; title: string; description: string }
 
+/** The write methods converge: each checks Linear first, so repeating one after a lost answer changes nothing. */
 export type LinearClient = {
   catalog(): Promise<LinearCatalog>
   /** Every issue matching the settings, across all pages. */
-  issues(settings: LinearSettings): Promise<LinearIssue[]>
+  issues(filter: IssueFilter): Promise<LinearIssue[]>
+  /** Leaves the issue in `stateId`, moving it only when it is elsewhere. */
+  ensureState(issueId: IssueId, stateId: string): Promise<void>
+  /** Leaves exactly one comment with id `commentId` on the issue, creating it only when it is missing. */
+  ensureComment(issueId: IssueId, commentId: string, body: string): Promise<void>
 }
 
 export class LinearError extends Error {
@@ -42,6 +47,23 @@ export const ISSUES_QUERY = `query FactoryIssues($filter: IssueFilter!, $first: 
   }
 }`
 
+export const ISSUE_STATE_QUERY = `query FactoryIssueState($id: String!) {
+  issue(id: $id) { id state { id } }
+}`
+
+export const MOVE_ISSUE_MUTATION = `mutation FactoryMoveIssue($id: String!, $stateId: String!) {
+  issueUpdate(id: $id, input: { stateId: $stateId }) { success }
+}`
+
+export const ISSUE_COMMENT_QUERY = `query FactoryIssueComment($id: String!, $commentId: ID!) {
+  issue(id: $id) { id comments(filter: { id: { eq: $commentId } }) { nodes { id } } }
+}`
+
+// Linear accepts a client-chosen UUID as the new comment's id, which is what lets a retry find a comment whose answer was lost.
+export const CREATE_COMMENT_MUTATION = `mutation FactoryCreateComment($input: CommentCreateInput!) {
+  commentCreate(input: $input) { success }
+}`
+
 const nodes = <T>(item: Parser<T>) => object<{ nodes: T[] }>({ nodes: array(item) })
 
 const workflowState = object<WorkflowState>({
@@ -69,6 +91,10 @@ const issuesData = object({
     pageInfo: object({ hasNextPage: boolean, endCursor: nullable(string) }),
   }),
 })
+
+const issueStateData = object({ issue: object({ id: string, state: object({ id: string }) }) })
+const issueCommentData = object({ issue: object({ id: string, comments: nodes(object({ id: string })) }) })
+const success = object({ success: boolean })
 
 type GraphqlError = { message: string; extensions?: { type?: string; code?: string } }
 
@@ -156,6 +182,19 @@ export function createLinearClient(options: {
         if (issues.pageInfo.endCursor === after) return fail('api', 'Linear repeated a pagination cursor')
         after = issues.pageInfo.endCursor
       }
+    },
+    async ensureState(issueId, stateId) {
+      const { issue } = await request('FactoryIssueState', ISSUE_STATE_QUERY, { id: issueId }, issueStateData)
+      if (issue.state.id === stateId) return
+      const { issueUpdate } = await request('FactoryMoveIssue', MOVE_ISSUE_MUTATION, { id: issueId, stateId }, object({ issueUpdate: success }))
+      if (!issueUpdate.success) fail('api', 'Linear did not move the issue')
+    },
+    async ensureComment(issueId, commentId, body) {
+      const { issue } = await request('FactoryIssueComment', ISSUE_COMMENT_QUERY, { id: issueId, commentId }, issueCommentData)
+      if (issue.comments.nodes.some((c) => c.id === commentId)) return
+      const input = { id: commentId, issueId, body }
+      const { commentCreate } = await request('FactoryCreateComment', CREATE_COMMENT_MUTATION, { input }, object({ commentCreate: success }))
+      if (!commentCreate.success) fail('api', 'Linear did not create the comment')
     },
   }
 }

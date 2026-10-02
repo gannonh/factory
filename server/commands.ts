@@ -1,7 +1,7 @@
 import type { AgentPatch, GraphFragment, NodeKind, NodeRef, RetryPolicy, SandboxAction, TaskId, Trigger, World } from '../src/domain/types'
 import { args, array, boolean, id, nullable, object, oneOf, optional, partial, string, tagged, type Parser } from './parse'
 import {
-  agent, agentFields, agentId, capacity, edge, edgeId, edgeKind, group, groupId, linearSettings, nodeId, position,
+  agent, agentFields, agentId, capacity, edge, edgeId, edgeKind, group, groupId, issueFilter, nodeId, position,
   priority, retryFields, sandbox, sandboxId, sandboxKind, trigger, triggerFields, triggerId,
 } from './records'
 import type { MockServer } from './simulation'
@@ -61,7 +61,7 @@ const commands: Record<string, Command> = {
   'triggers.update': command(args(triggerId, triggerPatch), (s, [id, patch]) => s.updateTrigger(id, patch)),
   'triggers.fire': command(args(triggerId), (s, [id]) => s.fireTrigger(id)),
   'linear.catalog': command(args(), (s) => s.linearCatalog()),
-  'linear.preview': command(args(linearSettings), (s, [settings]) => s.linearPreview(settings)),
+  'linear.preview': command(args(issueFilter), (s, [settings]) => s.linearPreview(settings)),
   'sim.set': command(args(simPatch), (s, [patch]) => s.setSim(patch)),
   'sim.reset': command(args(), (s) => s.reset()),
 }
