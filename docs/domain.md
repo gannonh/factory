@@ -45,7 +45,7 @@ Each term is marked **built** when it exists in code today, or **planned** when 
 
 ## The pipeline
 
-ADR 0008 defines these terms. Gate 4 builds them.
+ADR 0008 defines these terms. Gate 4 builds them. `docs/pipeline.html` draws the proposed pipeline end to end.
 
 - **Stage.** A Linear trigger on one state plus the agents its flows reach. A stage does one job in the issue lifecycle, such as build, agent review or merge. **Planned.**
 - **Round.** One entry of an issue into a stage's state. Each round runs exactly one flow. An issue that enters Todo, moves to Agent Review and returns to Todo for rework has three rounds: two in the build stage and one in the agent review stage. A round is not a turn and not an attempt. **Planned** (KAT-3619).
