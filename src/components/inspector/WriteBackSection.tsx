@@ -9,6 +9,7 @@ const NOTE_LABEL: Record<Extract<IssueWrite, { kind: 'note' }>['outcome'], strin
 
 function writeLabel(write: IssueWrite, stateName: (id: string) => string): string {
   if (write.kind === 'move') return `Move to ${write.step} state (${stateName(write.stateId)})`
+  if (write.kind === 'attach') return `Attach ${write.title}`
   return NOTE_LABEL[write.outcome]
 }
 

@@ -74,34 +74,135 @@ export function claudeArgs(agent: Agent, prompt: string): string[] {
   ]
 }
 
-export type PreparedWorkdir = { path: string; initialHead: string | null }
+/** Where a delivering run's branch goes: `branch` is pushed to origin and opened as a pull request against `base`. */
+export type DeliveryPlan = { branch: string; base: string }
 
-export async function prepareWorkdir(root: string, runId: RunId): Promise<PreparedWorkdir> {
+/** `initialHead` is the commit the run started from; a delivering run starts from origin's default branch. */
+export type PreparedWorkdir = { path: string; initialHead: string | null; delivery: DeliveryPlan | null }
+
+const NETWORK_TIMEOUT_MS = 120_000
+const LOCAL_TIMEOUT_MS = 15_000
+const MAX_REASON_CHARS = 300
+// Network git must fail rather than wait on a credential prompt nobody can answer, over HTTPS or SSH.
+const gitEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -o BatchMode=yes' })
+
+/**
+ * Makes the run's working directory. With no delivery the worktree branches `factory-<runId>` from the
+ * root's HEAD. With delivery it fetches origin and cuts the requested branch from origin's default branch,
+ * suffixed `-2`, `-3`, … until the name is free locally and on origin, so a retry never reuses a pushed branch.
+ */
+export async function prepareWorkdir(root: string, runId: RunId, delivery: { branch: string } | null): Promise<PreparedWorkdir> {
   if (!isAbsolute(root)) throw new Error('local sandbox root must be an absolute path')
   const rootPath = await realpath(root)
   if (!(await stat(rootPath)).isDirectory()) throw new Error('local sandbox root must be a directory')
   const workdir = join(rootPath, '.factory-runs', basename(runId))
   let gitRoot: string | null = null
   try { gitRoot = (await execFileAsync('git', ['-C', rootPath, 'rev-parse', '--show-toplevel'])).stdout.trim() } catch { /* plain directory */ }
+  const isGitRoot = gitRoot !== null && resolve(gitRoot) === rootPath
+  if (delivery && !isGitRoot) throw new Error('delivery failed: sandbox root is not the top of a git repository')
   await mkdir(join(rootPath, '.factory-runs'), { recursive: true })
-  if (gitRoot && resolve(gitRoot) === rootPath) {
-    const excludePath = (await execFileAsync('git', ['-C', rootPath, 'rev-parse', '--git-path', 'info/exclude'])).stdout.trim()
-    const exclude = isAbsolute(excludePath) ? excludePath : resolve(rootPath, excludePath)
-    const current = await readFile(exclude, 'utf8').catch(() => '')
-    if (!current.split(/\r?\n/).includes('/.factory-runs/')) {
-      await mkdir(dirname(exclude), { recursive: true })
-      await appendFile(exclude, `${current.endsWith('\n') || current.length === 0 ? '' : '\n'}/.factory-runs/\n`)
-    }
-    const initialHead = await execFileAsync('git', ['-C', rootPath, 'rev-parse', '--verify', 'HEAD']).then(({ stdout }) => stdout.trim()).catch(() => null)
-    if (initialHead) {
-      await execFileAsync('git', ['-C', rootPath, 'worktree', 'add', '-b', `factory-${runId}`, workdir, initialHead])
-      return { path: workdir, initialHead }
-    }
+  if (!isGitRoot) {
     await mkdir(workdir)
-  } else {
-    await mkdir(workdir)
+    return { path: workdir, initialHead: null, delivery: null }
   }
-  return { path: workdir, initialHead: null }
+  const excludePath = (await execFileAsync('git', ['-C', rootPath, 'rev-parse', '--git-path', 'info/exclude'])).stdout.trim()
+  const exclude = isAbsolute(excludePath) ? excludePath : resolve(rootPath, excludePath)
+  const current = await readFile(exclude, 'utf8').catch(() => '')
+  if (!current.split(/\r?\n/).includes('/.factory-runs/')) {
+    await mkdir(dirname(exclude), { recursive: true })
+    await appendFile(exclude, `${current.endsWith('\n') || current.length === 0 ? '' : '\n'}/.factory-runs/\n`)
+  }
+  if (delivery) return prepareDelivery(rootPath, workdir, delivery.branch)
+  const initialHead = await execFileAsync('git', ['-C', rootPath, 'rev-parse', '--verify', 'HEAD']).then(({ stdout }) => stdout.trim()).catch(() => null)
+  if (initialHead) {
+    await execFileAsync('git', ['-C', rootPath, 'worktree', 'add', '-b', `factory-${runId}`, workdir, initialHead])
+    return { path: workdir, initialHead, delivery: null }
+  }
+  await mkdir(workdir)
+  return { path: workdir, initialHead: null, delivery: null }
+}
+
+// Two runs on one repository must not pick the same free branch name or fetch at once.
+const deliveryQueues = new Map<string, Promise<unknown>>()
+
+function prepareDelivery(rootPath: string, workdir: string, requested: string): Promise<PreparedWorkdir> {
+  const turn = (deliveryQueues.get(rootPath) ?? Promise.resolve()).then(() => prepareDeliveryNow(rootPath, workdir, requested))
+  const queued = turn.catch(() => undefined)
+  deliveryQueues.set(rootPath, queued)
+  void queued.then(() => { if (deliveryQueues.get(rootPath) === queued) deliveryQueues.delete(rootPath) })
+  return turn
+}
+
+async function prepareDeliveryNow(rootPath: string, workdir: string, requested: string): Promise<PreparedWorkdir> {
+  const git = (step: string, args: string[], timeout = LOCAL_TIMEOUT_MS) =>
+    execFileAsync('git', ['-C', rootPath, ...args], { timeout, env: gitEnv() }).then(({ stdout }) => stdout, (error: unknown) => {
+      throw new Error(`delivery failed: ${step}: ${failureReason(error)}`)
+    })
+  await git('check branch name', ['check-ref-format', '--branch', requested])
+  const hasOrigin = await execFileAsync('git', ['-C', rootPath, 'remote', 'get-url', 'origin'], { timeout: LOCAL_TIMEOUT_MS }).then(() => true, () => false)
+  if (!hasOrigin) throw new Error('delivery failed: sandbox root has no origin remote')
+  const symref = await git('git ls-remote', ['ls-remote', '--symref', 'origin', 'HEAD'], NETWORK_TIMEOUT_MS)
+  const base = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(symref)?.[1]
+  if (!base) throw new Error('delivery failed: origin has no default branch')
+  await git('git fetch', ['fetch', '--no-tags', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`], NETWORK_TIMEOUT_MS)
+  const remoteHeads = await git('git ls-remote', ['ls-remote', '--heads', 'origin'], NETWORK_TIMEOUT_MS)
+  const taken = new Set(remoteHeads.split('\n').map((line) => line.split('\t')[1]?.replace(/^refs\/heads\//, '')).filter(Boolean))
+  const local = await git('git for-each-ref', ['for-each-ref', '--format=%(refname:lstrip=2)', 'refs/heads/'])
+  for (const name of local.split('\n')) if (name) taken.add(name)
+  let branch = requested
+  for (let n = 2; taken.has(branch); n++) branch = `${requested}-${n}`
+  const initialHead = (await git('git rev-parse', ['rev-parse', '--verify', `refs/remotes/origin/${base}^{commit}`])).trim()
+  await git('git worktree add', ['worktree', 'add', '--no-track', '-b', branch, workdir, initialHead])
+  return { path: workdir, initialHead, delivery: { branch, base } }
+}
+
+/** The most telling line a failed child process printed, bounded for the run's failure reason. */
+export function failureReason(error: unknown): string {
+  const stderr = typeof error === 'object' && error !== null && 'stderr' in error ? String(error.stderr) : ''
+  const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const telling = lines.find((line) => /^(fatal|error):|^! |rejected/i.test(line)) ?? lines.at(-1)
+  const killed = typeof error === 'object' && error !== null && 'killed' in error && error.killed === true
+  const reason = killed ? 'timed out' : telling ?? (error instanceof Error ? error.message.split('\n')[0] : String(error))
+  return Array.from(reason).length > MAX_REASON_CHARS ? `${Array.from(reason).slice(0, MAX_REASON_CHARS - 1).join('')}…` : reason
+}
+
+const PR_URL = /^https:\/\/[^\s/]+\/\S+\/pull\/([1-9]\d*)$/
+
+/**
+ * Pushes a delivering run's branch and opens its pull request. A branch with no commits since the run
+ * started opens nothing and says so. Any failure throws `delivery failed: <reason>` for the run to fail with.
+ */
+export async function deliver(prepared: PreparedWorkdir, pr: { title: string; body: string }): Promise<Artifact[]> {
+  if (!prepared.delivery || !prepared.initialHead) throw new Error('delivery failed: the run has no delivery branch')
+  const { branch, base } = prepared.delivery
+  const run = (command: 'git' | 'gh', step: string, args: string[], timeout: number) =>
+    execFileAsync(command, args, { cwd: prepared.path, timeout, env: gitEnv(), maxBuffer: 1024 * 1024 }).then(({ stdout }) => stdout, (error: unknown) => {
+      throw new Error(`delivery failed: ${step}: ${failureReason(error)}`)
+    })
+  // Deliver HEAD, as gitArtifacts lists it: an agent that switched branches or detached HEAD still has its commits shipped.
+  const count = Number((await run('git', 'git rev-list', ['rev-list', '--count', `${prepared.initialHead}..HEAD`], LOCAL_TIMEOUT_MS)).trim())
+  if (count === 0) return [{ kind: 'note', label: 'No changes; no pull request opened', url: null }]
+  await run('git', 'git push', ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`], NETWORK_TIMEOUT_MS)
+  const remote = await run('git', 'git remote get-url', ['remote', 'get-url', 'origin'], LOCAL_TIMEOUT_MS)
+  const repository = githubUrl(remote.trim())?.slice('https://'.length)
+  const repoArgs = repository ? ['--repo', repository] : []
+  const asPullRequest = (url: string | undefined): Artifact[] | null =>
+    url && url.length <= 512 && PR_URL.test(url) ? [{ kind: 'pr', label: `Pull request #${PR_URL.exec(url)![1]}`, url }] : null
+  // The agent may have opened the pull request itself; a failing view means there is none. Only an open PR into `base` counts.
+  const existing = await execFileAsync('gh', ['pr', 'view', branch, ...repoArgs, '--json', 'url,state,baseRefName'], { cwd: prepared.path, timeout: 10_000, env: gitEnv() })
+    .then(({ stdout }) => {
+      const view: unknown = JSON.parse(stdout)
+      if (typeof view !== 'object' || view === null) return undefined
+      const { url, state, baseRefName } = view as Record<string, unknown>
+      return state === 'OPEN' && baseRefName === base && typeof url === 'string' ? url : undefined
+    }, () => undefined)
+    .catch(() => undefined)
+  const found = asPullRequest(existing)
+  if (found) return found
+  const created = await run('gh', 'gh pr create', ['pr', 'create', '--head', branch, '--base', base, '--title', pr.title, '--body', pr.body, ...repoArgs], NETWORK_TIMEOUT_MS)
+  const opened = asPullRequest(created.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length <= 512 && PR_URL.test(line)).at(-1))
+  if (!opened) throw new Error('delivery failed: gh pr create printed no pull request URL')
+  return opened
 }
 
 function githubUrl(remote: string): string | null {
@@ -123,8 +224,11 @@ function githubUrl(remote: string): string | null {
   return `https://github.com/${owner}/${repository}`
 }
 
-/** Git inspection happens after the agent exits, before the server completes the run. */
-export async function gitArtifacts({ path, initialHead }: PreparedWorkdir): Promise<Artifact[]> {
+/**
+ * Git inspection happens after the agent exits, before the server completes the run. `lookupPr` finds a PR
+ * the agent opened itself; a delivering run skips it, since Factory opens that run's PR.
+ */
+export async function gitArtifacts({ path, initialHead }: Pick<PreparedWorkdir, 'path' | 'initialHead'>, { lookupPr = true } = {}): Promise<Artifact[]> {
   if (!initialHead) return []
   const git = async (...args: string[]) => (await execFileAsync('git', ['-C', path, ...args])).stdout.trim()
   const branch = await git('symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => null)
@@ -143,7 +247,7 @@ export async function gitArtifacts({ path, initialHead }: PreparedWorkdir): Prom
     const hash = line.slice(0, separator)
     artifacts.push({ kind: 'commit', label: `${hash.slice(0, 7)} ${boundedLabel(line.slice(separator + 1).trimEnd(), 160)}`, url: null })
   }
-  if (branch && repository) {
+  if (lookupPr && branch && repository) {
     const pr = await execFileAsync('gh', ['pr', 'view', branch, '--repo', repository.slice('https://'.length), '--json', 'url', '--jq', '.url'], { cwd: path, timeout: 5000 }).then(({ stdout }) => stdout.trim()).catch(() => null)
     // GitHub may return a canonical URL after a repository rename or transfer.
     const match = pr?.match(/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/([1-9]\d*)$/i)

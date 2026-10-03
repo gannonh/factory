@@ -61,7 +61,7 @@ async function nextPoll(f: Fixture, wall: { now: number }) {
 
 const runsInOrder = (f: Fixture): Run[] => Object.values(f.world().runs).sort((a, b) => a.startedAt - b.startedAt)
 const writeSteps = (f: Fixture, id: IssueId = ENG_1) =>
-  f.world().intake[id].writes.map((w) => [w.kind === 'move' ? `move ${w.step}` : `note ${w.outcome}`, w.status.state])
+  f.world().intake[id].writes.map((w) => [w.kind === 'move' ? `move ${w.step}` : w.kind === 'attach' ? `attach ${w.url}` : `note ${w.outcome}`, w.status.state])
 
 const state = (name: string, type: IssueState['type']): IssueState => ({ id: `state-eng-${name.toLowerCase().replace(/\s+/g, '-')}`, name, type })
 const TODO = state('Todo', 'unstarted')

@@ -24,6 +24,8 @@ export type LinearClient = {
   ensureState(issueId: IssueId, stateId: string, from: readonly string[] | null): Promise<boolean>
   /** Leaves exactly one comment with id `commentId` on the issue, creating it only when it is missing. */
   ensureComment(issueId: IssueId, commentId: string, body: string): Promise<void>
+  /** Leaves an attachment linking `url` on the issue, creating it only when none has that URL. */
+  ensureAttachment(issueId: IssueId, url: string, title: string): Promise<void>
 }
 
 export class LinearError extends Error {
@@ -79,6 +81,14 @@ export const CREATE_COMMENT_MUTATION = `mutation FactoryCreateComment($input: Co
   commentCreate(input: $input) { success }
 }`
 
+export const ISSUE_ATTACHMENT_QUERY = `query FactoryIssueAttachment($id: String!, $url: String!) {
+  issue(id: $id) { id attachments(filter: { url: { eq: $url } }) { nodes { id } } }
+}`
+
+export const CREATE_ATTACHMENT_MUTATION = `mutation FactoryCreateAttachment($input: AttachmentCreateInput!) {
+  attachmentCreate(input: $input) { success }
+}`
+
 const nodes = <T>(item: Parser<T>) => object<{ nodes: T[] }>({ nodes: array(item) })
 
 const stateType = oneOf('triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled')
@@ -107,6 +117,7 @@ const issueStatesData = issuePage(object<StateNode>({ id: string, state: object<
 
 const issueStateData = object({ issue: object({ id: string, state: object({ id: string }) }) })
 const issueCommentData = object({ issue: object({ id: string, comments: nodes(object({ id: string })) }) })
+const issueAttachmentData = object({ issue: object({ id: string, attachments: nodes(object({ id: string })) }) })
 const success = object({ success: boolean })
 
 type GraphqlError = { message: string; extensions?: { type?: string; code?: string } }
@@ -217,6 +228,13 @@ export function createLinearClient(options: {
       const input = { id: commentId, issueId, body }
       const { commentCreate } = await request('FactoryCreateComment', CREATE_COMMENT_MUTATION, { input }, object({ commentCreate: success }))
       if (!commentCreate.success) fail('api', 'Linear did not create the comment')
+    },
+    async ensureAttachment(issueId, url, title) {
+      const { issue } = await request('FactoryIssueAttachment', ISSUE_ATTACHMENT_QUERY, { id: issueId, url }, issueAttachmentData)
+      if (issue.attachments.nodes.length > 0) return
+      const input = { issueId, url, title }
+      const { attachmentCreate } = await request('FactoryCreateAttachment', CREATE_ATTACHMENT_MUTATION, { input }, object({ attachmentCreate: success }))
+      if (!attachmentCreate.success) fail('api', 'Linear did not create the attachment')
     },
   }
 }
