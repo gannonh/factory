@@ -1,11 +1,16 @@
-import type { IntakeError, IssueFilter, IssueId, IssueRef, LinearCatalog, LinearTeam, WorkflowState, WorkflowStateType } from '../src/domain/types'
+import type { IntakeError, IssueFilter, IssueId, IssueRef, LinearCatalog, LinearTeam, Priority, WorkflowState, WorkflowStateType } from '../src/domain/types'
 import { array, boolean, nullable, number, object, oneOf, optional, string, type Parser } from './parse'
 
 export const LINEAR_URL = 'https://api.linear.app/graphql'
 const TIMEOUT_MS = 15_000
 const PAGE_SIZE = 50
 
-export type LinearIssue = { ref: IssueRef; title: string; description: string }
+export type LinearIssue = { ref: IssueRef; title: string; description: string; priority: Priority }
+
+/** Linear's priority numbers: 0 No priority, 1 Urgent, 2 High, 3 Medium, 4 Low. */
+export const LINEAR_PRIORITY: Record<0 | 1 | 2 | 3 | 4, Priority> = { 0: 'normal', 1: 'high', 2: 'high', 3: 'normal', 4: 'low' }
+
+const priorityOf = (n: number): Priority => LINEAR_PRIORITY[n as keyof typeof LINEAR_PRIORITY] ?? 'normal'
 
 /** The workflow state an issue sits in now. */
 export type IssueState = { id: string; name: string; type: WorkflowStateType }
@@ -52,7 +57,7 @@ export const CATALOG_QUERY = `query FactoryCatalog {
 
 export const ISSUES_QUERY = `query FactoryIssues($filter: IssueFilter!, $first: Int!, $after: String) {
   issues(filter: $filter, first: $first, after: $after) {
-    nodes { id identifier title description url branchName }
+    nodes { id identifier title description url branchName priority }
     pageInfo { hasNextPage endCursor }
   }
 }`
@@ -104,7 +109,7 @@ const team = object<{ id: string; key: string; name: string; states: { nodes: Wo
 
 const catalogData = object({ teams: nodes(team) })
 
-type IssueNode = { id: string; identifier: string; title: string; description: string | null; url: string; branchName: string }
+type IssueNode = { id: string; identifier: string; title: string; description: string | null; url: string; branchName: string; priority: number }
 type StateNode = { id: string; state: IssueState }
 type Page<T> = { nodes: T[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } }
 
@@ -112,7 +117,7 @@ const issuePage = <T>(node: Parser<T>) => object({
   issues: object<Page<T>>({ nodes: array(node), pageInfo: object({ hasNextPage: boolean, endCursor: nullable(string) }) }),
 })
 
-const issuesData = issuePage(object<IssueNode>({ id: string, identifier: string, title: string, description: nullable(string), url: string, branchName: string }))
+const issuesData = issuePage(object<IssueNode>({ id: string, identifier: string, title: string, description: nullable(string), url: string, branchName: string, priority: number }))
 const issueStatesData = issuePage(object<StateNode>({ id: string, state: object<IssueState>({ id: string, name: string, type: stateType }) }))
 
 const issueStateData = object({ issue: object({ id: string, state: object({ id: string }) }) })
@@ -207,6 +212,7 @@ export function createLinearClient(options: {
         ref: { backend: 'linear', id: n.id as IssueId, identifier: n.identifier, url: n.url, branchName: n.branchName },
         title: n.title,
         description: n.description ?? '',
+        priority: priorityOf(n.priority),
       }))
     },
     async issueStates(ids) {

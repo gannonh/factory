@@ -864,6 +864,10 @@ export class MockServer {
     if (!this.pollable(tr) || !sameSettings(tr.linear, settings)) return
     this.world.intakePolls = { ...this.world.intakePolls, [id]: { at: this.clock(), error } }
     for (const issueId of refreshed) this.followIssue(issueId, states.get(issueId) ?? null, settings)
+    for (const issue of issues) {
+      const record = this.world.intake[issue.ref.id]
+      if (record) this.refreshUnstarted(record, issue)
+    }
     const feed = Object.values(this.world.edges).find((e) => e.kind === 'triggers' && e.source === id && this.world.agents[e.target as AgentId])
     if (!feed) {
       this.publish()
@@ -877,7 +881,7 @@ export class MockServer {
       this.enqueueTaskSilently(agentId, {
         title: `${issue.ref.identifier} ${issue.title}`,
         prompt: [issue.title, issue.description, issue.ref.url].filter((part) => part !== '').join('\n\n'),
-        priority: 'normal',
+        priority: issue.priority,
         origin: { kind: 'issue', trigger: id, issue: issue.ref },
         input: null,
       }, flowId)
@@ -891,6 +895,14 @@ export class MockServer {
       this.event('trigger', { kind: 'trigger', id }, `${tr.name} took ${taken.join(', ')}`)
     }
     this.publish()
+  }
+
+  /** Until its flow's first run starts, a taken issue's task follows the issue's priority in Linear. */
+  private refreshUnstarted(record: IntakeRecord, issue: LinearIssue) {
+    if (record.phase !== 'taken' || record.cancel !== null) return
+    const task = Object.values(this.world.tasks)
+      .find((t) => t.flowId === record.flowId && t.origin.kind === 'issue' && (t.status === 'queued' || t.status === 'waiting'))
+    if (task && task.priority !== issue.priority) this.patchTask(task.id, { priority: issue.priority })
   }
 
   /** Cancels the issue's flow when the issue has left the trigger's states in Linear. */

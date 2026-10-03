@@ -15,7 +15,7 @@ type Team = { id: string; key: string; name: string; states: State[]; projects: 
 type Comment = { id: string; body: string }
 type Attachment = { id: string; url: string; title: string }
 type Issue = {
-  id: string; identifier: string; title: string; description: string; url: string; branchName: string
+  id: string; identifier: string; title: string; description: string; url: string; branchName: string; priority: number
   team: string; state: string; project: string | null; comments: Comment[]; attachments: Attachment[]; deleted: boolean
 }
 
@@ -86,6 +86,7 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
         description: String(body.description ?? ''),
         url: `https://linear.app/fake/issue/${identifier}/${slug(title)}`,
         branchName: `${identifier.toLowerCase()}-${slug(title)}`,
+        priority: Number(body.priority ?? 0),
         team: team.id,
         state: stateByName(team, String(body.state ?? 'Todo')).id,
         project: project?.id ?? null,
@@ -100,6 +101,11 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       const issue = issueBy(String(body.identifier))
       const team = teams.find((t) => t.id === issue.team)!
       issue.state = stateByName(team, String(body.state)).id
+      return view(issue)
+    },
+    setPriority(body) {
+      const issue = issueBy(String(body.identifier))
+      issue.priority = Number(body.priority)
       return view(issue)
     },
     /** Moves the issue to the trash: lists leave it out, but it still answers by id, as Linear's API does. */
@@ -148,7 +154,7 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       teams: { nodes: teams.map((t) => ({ id: t.id, key: t.key, name: t.name, states: { nodes: t.states }, projects: { nodes: t.projects } })) },
     }),
     FactoryIssues: (variables) => ({
-      issues: page(variables, ({ id, identifier, title, description, url, branchName }) => ({ id, identifier, title, description: description || null, url, branchName })),
+      issues: page(variables, ({ id, identifier, title, description, url, branchName, priority }) => ({ id, identifier, title, description: description || null, url, branchName, priority })),
     }),
     FactoryIssueStates: (variables) => ({
       issues: page(variables, (issue) => {
