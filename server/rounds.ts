@@ -1,6 +1,7 @@
 import type {
-  FlowId, IntakeRecord, IssueBlocker, IssueRef, IssueWrite, PullRequestRef, Rework, RoundResult, TaskInput, TriggerId, TriggerStates,
+  FlowId, IntakeRecord, IssueBlocker, IssueRef, PullRequestRef, Rework, RoundResult, TaskInput, TriggerId, TriggerStates,
 } from '../src/domain/types'
+import { dropPendingMoves } from './writeBack'
 
 /** A comment a round's prompt quotes. `at` is wall-clock ms. `place` is a file and line for an inline review comment. */
 export type Feedback = { author: string; body: string; at: number; kind: 'review' | 'inline' | 'comment'; place: string | null }
@@ -27,8 +28,16 @@ export function reworkable(record: IntakeRecord, pickupState: string): boolean {
 const results = (record: IntakeRecord): RoundResult[] =>
   [record.result, ...record.past.map((p) => p.result).reverse()].filter((r) => r !== null)
 
-/** The newest pull request any round delivered. */
-export const latestPullRequest = (record: IntakeRecord): PullRequestRef | null => results(record).find((r) => r.pr)?.pr ?? null
+/**
+ * The newest pull request any round delivered. A record saved before rounds has no results, so its pull request is the
+ * newest one its attach writes name.
+ */
+export function latestPullRequest(record: IntakeRecord): PullRequestRef | null {
+  const delivered = results(record).find((r) => r.pr)?.pr
+  if (delivered) return delivered
+  const attach = record.writes.findLast((w) => w.kind === 'attach')
+  return attach ? { kind: 'pr', label: attach.title, url: attach.url } : null
+}
 
 /** The newest succeeded output of any round: the next round's task input. */
 export const latestOutput = (record: IntakeRecord): TaskInput | null => results(record).find((r) => r.output)?.output ?? null
@@ -52,22 +61,21 @@ export function startRound(record: IntakeRecord | undefined, issue: IssueRef, st
   const fresh = { ...start, phase: 'taken', cancel: null, result: null, left: false } as const
   if (!record) return { issue, ...fresh, writes: [], round: 1, rework: null, past: [] }
   const { round, trigger, flowId, takenAt, result } = record
-  const writes = record.writes.map((w): IssueWrite => (w.kind === 'move' && w.status.state !== 'landed' ? { ...w, status: { state: 'dropped' } } : w))
-  return { ...record, ...fresh, issue, writes, round: round + 1, past: [...record.past, { round, trigger, flowId, takenAt, result }] }
+  return { ...record, ...fresh, issue, writes: dropPendingMoves(record.writes), round: round + 1, past: [...record.past, { round, trigger, flowId, takenAt, result }] }
 }
 
 /**
- * Feedback counts from Factory's latest note on the issue, or from the ended round's start when no note is on the issue.
+ * The issue's comments since Factory's latest note on it, or since the ended round's start when no note is on the issue.
  * Factory's own notes never count.
  */
-export function linearFeedback(record: IntakeRecord, comments: ReadonlyArray<{ id: string; body: string; createdAt: string; author: string | null }>): { since: number; feedback: Feedback[] } {
+export function linearFeedback(record: IntakeRecord, comments: ReadonlyArray<{ id: string; body: string; createdAt: string; author: string | null }>): Feedback[] {
   const notes = new Set(record.writes.flatMap((w) => (w.kind === 'note' ? [w.commentId] : [])))
   const noteTimes = comments.filter((c) => notes.has(c.id)).map((c) => Date.parse(c.createdAt))
   const since = noteTimes.length > 0 ? Math.max(...noteTimes) : record.takenAt
   const feedback = comments
     .filter((c) => !notes.has(c.id))
     .map((c): Feedback => ({ author: c.author ?? 'unknown', body: c.body, at: Date.parse(c.createdAt), kind: 'comment', place: null }))
-  return { since, feedback: recent(feedback, since) }
+  return recent(feedback, since)
 }
 
 /** The newest MAX_FEEDBACK entries after `since`, oldest first, each body cut to MAX_FEEDBACK_CHARS. */
@@ -86,7 +94,9 @@ const ENDED: Record<RoundResult['outcome'], string> = { finished: 'finished', fa
 function reworkLine(rework: Rework | null, previous: RoundResult | null): string {
   if (!rework) return `The previous round ${previous ? ENDED[previous.outcome] : 'ended'} without a pull request, so this round starts fresh.`
   const pr = `#${prNumber(rework.pr)} (${rework.pr.url})`
-  if (rework.kind === 'continue') return `Continue on pull request ${pr}, branch \`${rework.branch}\`. Push new commits; Factory updates the same pull request.`
+  if (rework.kind === 'continue') {
+    return `Continue on pull request ${pr}. Commit your changes on top of the current HEAD and do not rebase, amend or push; Factory pushes them to the pull request's branch \`${rework.branch}\`.`
+  }
   return `Pull request ${pr} was ${rework.state}, so this round starts a fresh branch and opens a new pull request.`
 }
 

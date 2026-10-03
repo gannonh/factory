@@ -15,7 +15,7 @@ import { reworkable } from '../server/rounds'
 import { MockServer } from '../server/simulation'
 import type { WorldStore } from '../server/worldFile'
 import { intakeStatus } from '../src/components/linearIntake'
-import { roundOfFlow, type AgentId, type EdgeId, type IntakeRecord, type IssueId, type LinearSettings, type Run, type SandboxId, type Task, type TriggerId } from '../src/domain/types'
+import { LINEAR_POLL_MS, roundOfFlow, type AgentId, type EdgeId, type IntakeRecord, type IssueId, type LinearSettings, type Run, type SandboxId, type Task, type TriggerId } from '../src/domain/types'
 import { fakeGh } from './fake-gh'
 import { makeFixture, memoryStore, RNG } from './fixture'
 
@@ -109,10 +109,13 @@ function agentRunner(outcome: (task: Task) => 'commit' | 'fail' | 'hang' = () =>
 
 type Factory = { server: MockServer; api: InProcessApi; trigger: TriggerId; root: string }
 const WALL = 1_000_000
+/** Factory's wall clock in `factory()`. Feedback times in these tests are set against it. */
+let wall = WALL
+beforeEach(() => { wall = WALL })
 
 /** The seeded world with Coder delivering from the local sandbox at `root`, fed by a Linear trigger on ENG's Todo. */
 function factory(root: string, runner: ReturnType<typeof agentRunner>, settings = LIFECYCLE, store?: WorldStore): Factory {
-  const server = new MockServer({ manual: true, rng: RNG, localRunner: runner, localRoot: root, linear: linear(), clock: () => WALL, store })
+  const server = new MockServer({ manual: true, rng: RNG, localRunner: runner, localRoot: root, linear: linear(), clock: () => wall, store })
   const api = createApi(server)
   const world = server.snapshot()
   for (const trigger of Object.values(world.triggers)) api.triggers.update(trigger.id, { enabled: false })
@@ -156,7 +159,6 @@ const issueTasks = (f: Factory) => Object.values(f.server.snapshot().tasks).filt
 const record = (f: Factory): IntakeRecord => f.server.snapshot().intake[ENG_1]
 const workdirOf = (f: Factory, run: Run) => join(f.root, '.factory-runs', run.id)
 const short = (repo: string) => git(repo, 'rev-parse', '--short=7', 'HEAD')
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 test('a delivered issue moved back to Todo reworks on the same pull request with the review and Linear feedback, then a merged PR starts fresh', async () => {
   const repo = repository()
@@ -169,17 +171,19 @@ test('a delivered issue moved back to Todo reworks on the same pull request with
   expect((await issue('ENG-1')).state).toBe('In Review')
   expect(record(f)).toMatchObject({ round: 1, phase: 'ended', left: true, result: { outcome: 'finished', pr: { kind: 'pr', label: 'Pull request #41', url: PR_41 }, output: { ...first.output, runId: first.id } } })
 
-  // Review feedback after Factory's note counts. An empty approval and a review from before the note do not.
-  await sleep(5)
-  const at = (offset: number) => new Date(Date.now() + offset).toISOString()
-  gh.review(41, 'zed', 'Stale review from before the round.', '2020-01-01T00:00:00.000Z')
-  gh.review(41, 'alice', 'Please handle the empty password case.', at(0))
-  gh.review(41, 'erin', '', at(1))
-  gh.inline(41, 'bob', 'This throws on null.\nGuard it.', 'src/login.ts', 12, at(2))
-  gh.conversation(41, 'carol', 'Can we add a test?', at(3))
+  // Review feedback since round 1 was taken counts, even from before Factory's note. An empty approval and a review from
+  // before the round do not.
+  const at = (offset: number) => new Date(WALL + offset).toISOString()
+  gh.review(41, 'yan', 'Stale review from before the round.', at(-1000))
+  gh.review(41, 'zed', 'Rename the handler.', at(1000))
+  gh.review(41, 'alice', 'Please handle the empty password case.', at(2000))
+  gh.review(41, 'erin', '', at(2001))
+  gh.inline(41, 'bob', 'This throws on null.\nGuard it.', 'src/login.ts', 12, at(2002))
+  gh.conversation(41, 'carol', 'Can we add a test?', at(2003))
   await control({ op: 'addComment', identifier: 'ENG-1', author: 'Dana', body: 'Also log the failed attempt.' })
   await moveIssue('ENG-1', 'Todo')
 
+  wall = WALL + 5000
   gh.failNext('view')
   await poll(f)
   expect(issueTasks(f)).toHaveLength(1)
@@ -198,9 +202,10 @@ ${ISSUE_URL}
 
 ## Rework round 2
 
-Continue on pull request #41 (${PR_41}), branch \`eng-1-fix-login\`. Push new commits; Factory updates the same pull request.
+Continue on pull request #41 (${PR_41}). Commit your changes on top of the current HEAD and do not rebase, amend or push; Factory pushes them to the pull request's branch \`eng-1-fix-login\`.
 
 ### Review comments on the pull request
+- **zed** (review): Rename the handler.
 - **alice** (review): Please handle the empty password case.
 - **bob** on \`src/login.ts:12\`: This throws on null.
   Guard it.
@@ -248,13 +253,24 @@ Implemented ENG-1 Fix login (round 2).
 Signed by Factory. Runs: ${secondRun.id}. Agents: Coder.`)
   expect(after.comments[0].body.startsWith('**Factory finished this issue.**\n\n**Coder**')).toBe(true)
 
+  // Round 3 reads only the review made after round 2 was taken, although round 2's note came after it.
+  gh.review(41, 'frank', 'Handle the locked account too.', at(6000))
   gh.setState('eng-1-fix-login', 'MERGED')
   await moveIssue('ENG-1', 'Todo')
   await poll(f)
   const third = issueTasks(f)[2]
   expect(third).toMatchObject({
     title: 'ENG-1 Fix login (round 3)',
-    prompt: `Fix login\n\n${ISSUE_URL}\n\n## Rework round 3\n\nPull request #41 (${PR_41}) was merged, so this round starts a fresh branch and opens a new pull request.`,
+    prompt: `Fix login
+
+${ISSUE_URL}
+
+## Rework round 3
+
+Pull request #41 (${PR_41}) was merged, so this round starts a fresh branch and opens a new pull request.
+
+### Review comments on the pull request
+- **frank** (review): Handle the locked account too.`,
     input: { ...secondRun.output, runId: secondRun.id },
   })
   const thirdRun = await nextRun(f)
@@ -356,6 +372,105 @@ test('an intake record saved before rounds loads as round 1 with nothing past, a
   await second.api.triggers.fire(trigger)
   await second.api.sim.settled()
   expect(Object.values(second.world().tasks).filter((t) => t.origin.kind === 'issue')).toHaveLength(1)
+})
+
+test('a delivered record saved before rounds continues on the pull request its attach write names', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const store = memoryStore()
+  const f = factory(repo.root, agentRunner(), LIFECYCLE, store)
+  await poll(f)
+  await nextRun(f)
+  await f.server.close()
+  const saved = JSON.parse(store.text!) as { intake: Record<string, Record<string, unknown>> }
+  for (const old of Object.values(saved.intake)) for (const key of ['round', 'rework', 'result', 'left', 'past']) delete old[key]
+  store.text = JSON.stringify(saved)
+
+  const server = new MockServer({ manual: true, rng: RNG, localRunner: agentRunner(), localRoot: repo.root, linear: linear(), clock: () => wall, store })
+  const g = { server, api: createApi(server), trigger: f.trigger, root: repo.root }
+  expect(record(g)).toMatchObject({ round: 1, result: null, left: false })
+  await poll(g)
+  expect(record(g).left).toBe(true)
+  await moveIssue('ENG-1', 'Todo')
+  await poll(g)
+  expect(record(g)).toMatchObject({
+    round: 2, rework: { kind: 'continue', pr: { kind: 'pr', label: 'Pull request #41', url: PR_41 }, branch: 'eng-1-fix-login', base: 'main' },
+  })
+  expect(issueTasks(g)[1].prompt).toContain(`Continue on pull request #41 (${PR_41}).`)
+  await server.close()
+})
+
+const moveSteps = (f: Factory) => record(f).writes.map((w) => [w.kind === 'move' ? `move ${w.step}` : w.kind, w.status.state])
+
+test('a finished move still failing when the issue left Todo never lands after a person moves the issue back', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner(), { ...LIFECYCLE, startedState: null })
+  await poll(f)
+  await control({ op: 'failNext', operation: 'FactoryMoveIssue' })
+  await nextRun(f)
+  expect([(await issue('ENG-1')).state, record(f).left]).toEqual(['Todo', false])
+  expect(moveSteps(f)).toEqual([['move finished', 'failed'], ['attach', 'landed'], ['note', 'landed']])
+
+  await moveIssue('ENG-1', 'Backlog')
+  await poll(f)
+  expect(record(f).left).toBe(true)
+  expect(moveSteps(f)).toEqual([['move finished', 'failed'], ['attach', 'landed'], ['note', 'landed']])
+
+  // The retry comes due on the same tick as the next poll, and runs before the poll's answer starts round 2.
+  await moveIssue('ENG-1', 'Todo')
+  wall = WALL + LINEAR_POLL_MS
+  f.api.sim.advance(1)
+  await f.api.sim.settled()
+  expect((await issue('ENG-1')).state).toBe('Todo')
+  expect(moveSteps(f)).toEqual([['move finished', 'dropped'], ['attach', 'landed'], ['note', 'landed']])
+  expect(issueTasks(f).map((t) => t.title)).toEqual(['ENG-1 Fix login', 'ENG-1 Fix login (round 2)'])
+  await f.server.close()
+})
+
+test('a trigger that feeds no agent reads no comments or pull request for an issue back in Todo', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner())
+  await poll(f)
+  await nextRun(f)
+  const feeds = Object.values(f.server.snapshot().edges).filter((e) => e.kind === 'triggers' && e.source === f.trigger)
+  f.api.graph.removeEdges(feeds.map((e) => e.id as EdgeId))
+  await moveIssue('ENG-1', 'Todo')
+  const ghCalls = gh.calls().length
+  await poll(f)
+  expect(issueTasks(f)).toHaveLength(1)
+  expect(gh.calls()).toHaveLength(ghCalls)
+  expect((await control({ op: 'stats' }) as { requests: Record<string, number> }).requests.FactoryIssueComments).toBeUndefined()
+
+  f.api.graph.connect(f.trigger, CODER, 'triggers')
+  await poll(f)
+  expect(issueTasks(f).map((t) => t.title)).toEqual(['ENG-1 Fix login', 'ENG-1 Fix login (round 2)'])
+  await f.server.close()
+})
+
+test('a failed read of one issue’s Linear comments holds only that issue, and the poll still cancels another', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner())
+  await poll(f)
+  await nextRun(f)
+  await control({ op: 'addIssue', title: 'Fix signup' })
+  await poll(f)
+  const eng2 = 'issue-eng-2' as IssueId
+  expect(f.server.snapshot().intake[eng2]).toMatchObject({ phase: 'taken', cancel: null })
+
+  await moveIssue('ENG-1', 'Todo')
+  await moveIssue('ENG-2', 'Backlog')
+  await control({ op: 'failNext', operation: 'FactoryIssueComments', message: 'comments unavailable' })
+  await poll(f)
+  expect(issueTasks(f).map((t) => [t.title, t.status])).toEqual([['ENG-1 Fix login', 'succeeded'], ['ENG-2 Fix signup', 'cancelled']])
+  expect(f.server.snapshot().intake[eng2].cancel).toEqual({ kind: 'linear', reason: 'moved to Backlog in Linear' })
+  expect(f.server.snapshot().logs.map((l) => l.msg)).toContain('ENG-1: could not read its Linear comments, so its next round waits for the next poll: Linear error: comments unavailable')
+
+  await poll(f)
+  expect(issueTasks(f).map((t) => t.title)).toEqual(['ENG-1 Fix login', 'ENG-2 Fix signup', 'ENG-1 Fix login (round 2)'])
+  await f.server.close()
 })
 
 const ended = (fields: Partial<IntakeRecord>): IntakeRecord => ({

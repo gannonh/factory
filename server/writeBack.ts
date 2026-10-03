@@ -41,15 +41,17 @@ export function flowAction(issue: IssueState | null, open: boolean, states: Trig
   return { kind: 'cancel', reason: `moved to ${issue.name} in Linear` }
 }
 
+/** The writes with every move that has not landed dropped: the person who moved the issue chose where it sits. */
+export const dropPendingMoves = (writes: readonly IssueWrite[]): IssueWrite[] =>
+  writes.map((w) => (w.kind === 'move' && w.status.state !== 'landed' ? { ...w, status: { state: 'dropped' } } : w))
+
 /**
  * Records why the flow was cancelled; the first cause wins. A cancel from Linear drops every move not yet landed,
  * since the person who moved the issue already chose where it sits, and means the issue has left the round's pickup state.
  */
 export function cancelRecord(record: IntakeRecord, cancel: FlowCancel): IntakeRecord {
   if (record.cancel !== null || record.phase === 'ended') return record
-  const writes = cancel.kind === 'linear'
-    ? record.writes.map((w): IssueWrite => (w.kind === 'move' && w.status.state !== 'landed' ? { ...w, status: { state: 'dropped' } } : w))
-    : record.writes
+  const writes = cancel.kind === 'linear' ? dropPendingMoves(record.writes) : record.writes
   return { ...record, cancel, writes, left: record.left || cancel.kind === 'linear' }
 }
 

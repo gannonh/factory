@@ -59,7 +59,7 @@ import { array, boolean, defaulted, id, number, object, oneOf, record } from './
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
 import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type IssueStatus, type LinearClient, type LinearIssue } from './linear'
 import { cancelRecord, flowAction, flowOutcome, landed, nextWrite, reconcileRecord, workingStates } from './writeBack'
-import { latestOutput, latestPullRequest, linearFeedback, recent, reworkOf, reworkable, roundPrompt, roundTitle, startRound, type RoundContext } from './rounds'
+import { latestOutput, latestPullRequest, linearFeedback, recent, reworkOf, reworkable, roundPrompt, roundTitle, startRound, type Feedback, type RoundContext } from './rounds'
 import { readPullRequest } from './github'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
@@ -857,7 +857,7 @@ export class MockServer {
     // Only a poll begun after a round ended can show that its issue left, or came back.
     const ended = new Map(Object.values(this.world.intake).filter((r) => r.phase === 'ended').map((r) => [r.issue.id, r]))
     const done = Promise.all([this.linear.issues(settings), this.linear.issueStates(open)])
-      .then(async ([issues, states]) => ({ issues, states, rounds: await this.roundContexts(issues, ended, settings) }))
+      .then(async ([issues, states]) => ({ issues, states, rounds: await this.roundContexts(id, issues, ended, settings) }))
       .then(
         ({ issues, states, rounds }) => this.finishPoll(id, settings, issues, open, states, null, ended, rounds),
         (err: unknown) => this.finishPoll(id, settings, [], [], new Map(), intakeErrorOf(err), new Map(), new Map()),
@@ -867,23 +867,39 @@ export class MockServer {
     return done
   }
 
+  /** The agent a trigger's `triggers` edge feeds, if any. */
+  private feedAgent(id: TriggerId): AgentId | null {
+    const feed = Object.values(this.world.edges).find((e) => e.kind === 'triggers' && e.source === id && this.world.agents[e.target as AgentId])
+    return feed ? feed.target as AgentId : null
+  }
+
   /**
    * The context of each listed issue that starts a new round: the open pull request to continue or the closed one to
-   * replace, and the feedback since the last round. A Linear failure fails the poll. An issue whose pull request cannot be
-   * read waits for the next poll, so a round never guesses its branch.
+   * replace, and the feedback since the last round. Review feedback counts from the ended round's start, when its prompt
+   * was built. An issue whose comments or pull request cannot be read waits for the next poll, so a round never guesses
+   * its branch. A trigger that feeds no agent starts no round, so it reads nothing.
    */
-  private async roundContexts(issues: LinearIssue[], ended: Map<IssueId, IntakeRecord>, settings: LinearSettings): Promise<Map<IssueId, RoundContext>> {
+  private async roundContexts(id: TriggerId, issues: LinearIssue[], ended: Map<IssueId, IntakeRecord>, settings: LinearSettings): Promise<Map<IssueId, RoundContext>> {
+    if (!this.feedAgent(id)) return new Map()
     const due = issues.map((issue) => ended.get(issue.ref.id)).filter((r): r is IntakeRecord => r !== undefined && reworkable(r, settings.pickupState))
+    const waits = (record: IntakeRecord, what: string, error: unknown): null => {
+      this.log('warn', `${record.issue.identifier}: could not read ${what}, so its next round waits for the next poll: ${error instanceof Error ? error.message : String(error)}`)
+      return null
+    }
     const contexts = await Promise.all(due.map(async (record): Promise<[IssueId, RoundContext] | null> => {
-      const { since, feedback } = linearFeedback(record, await this.linear.comments(record.issue.id))
+      let linear: Feedback[]
+      try {
+        linear = linearFeedback(record, await this.linear.comments(record.issue.id))
+      } catch (error) {
+        return waits(record, 'its Linear comments', error)
+      }
       const pr = latestPullRequest(record)
-      if (!pr) return [record.issue.id, { rework: null, review: [], linear: feedback }]
+      if (!pr) return [record.issue.id, { rework: null, review: [], linear }]
       try {
         const { view, feedback: review } = await readPullRequest(pr.url)
-        return [record.issue.id, { rework: reworkOf(pr, view), review: recent(review, since), linear: feedback }]
+        return [record.issue.id, { rework: reworkOf(pr, view), review: recent(review, record.takenAt), linear }]
       } catch (error) {
-        this.log('warn', `${record.issue.identifier}: could not read ${pr.url}, so its next round waits for the next poll: ${error instanceof Error ? error.message : String(error)}`)
-        return null
+        return waits(record, pr.url, error)
       }
     }))
     return new Map(contexts.filter((c) => c !== null))
@@ -910,13 +926,12 @@ export class MockServer {
       this.followIssue(issueId, status?.state ?? null, settings)
       if (status && this.refreshUnstarted(issueId, status, queued) && status.moreRelations) unread.push(this.world.intake[issueId].issue.identifier)
     }
-    const feed = Object.values(this.world.edges).find((e) => e.kind === 'triggers' && e.source === id && this.world.agents[e.target as AgentId])
-    if (!feed) {
+    const agentId = this.feedAgent(id)
+    if (!agentId) {
       this.warnUnreadRelations(unread)
       this.publish()
       return
     }
-    const agentId = feed.target as AgentId
     const taken: string[] = []
     for (const issue of issues) {
       const record = this.world.intake[issue.ref.id]
@@ -1046,10 +1061,14 @@ export class MockServer {
     }
   }
 
-  /** The states Factory may move a record's issue out of, or null for an old record whose trigger is gone. */
+  /**
+   * The states Factory may move a record's issue out of, or null for an old record whose trigger is gone. Once an ended
+   * round's issue has left, the pickup state is where a person put it, so a late finished or failed move leaves it there.
+   */
   private ownStates(record: IntakeRecord): string[] | null {
     const states = record.states ?? this.world.triggers[record.trigger]?.linear
-    return states ? workingStates(states) : null
+    if (!states) return null
+    return record.phase === 'ended' && record.left ? workingStates(states).filter((s) => s !== states.pickupState) : workingStates(states)
   }
 
   private forgetPolls(ids: TriggerId[]) {
@@ -1346,7 +1365,7 @@ export class MockServer {
       }, agent.timeoutMs)
       timeout.unref?.()
       this.localTimeouts.set(id, timeout)
-      const rework = Object.values(this.world.intake).find((r) => r.flowId === task.flowId)?.rework
+      const rework = this.openRecord(task.flowId)?.rework
       const delivery: DeliveryRequest | null = agent.delivery !== 'pull-request' ? null
         : rework?.kind === 'continue' ? { kind: 'continue', branch: rework.branch, base: rework.base }
         : { kind: 'new', branch: issueOfFlow(this.world, task.flowId)?.branchName ?? `factory-${id}` }
