@@ -28,7 +28,7 @@ Cutting from the fetched default branch keeps one run's local state from leaking
 
 Delivery covers `local` sandboxes only. Simulated runs ignore the setting, and their demo pull request links are never attached to an issue.
 
-The base is always origin's default branch. Merging, review and CI are out of scope, and a later attempt opens a new pull request rather than pushing to an existing one.
+The base is always origin's default branch. Merging, review and CI are out of scope, and a later attempt within one round opens a new pull request rather than pushing to an existing one. A rework round on an open pull request pushes to that pull request's branch instead (ADR 0012).
 
 A retry after a failed `gh pr create` leaves the first attempt's branch on origin without a pull request. Nothing cleans it up.
 
@@ -36,4 +36,4 @@ Two delivering agents in one issue's flow each open their own pull request, on t
 
 ## When to reopen
 
-Reopen this decision when a later attempt or a review round must push to the existing pull request, when a base other than the default branch is needed, or when a non-local sandbox kind can deliver.
+Reopen this decision when a later attempt within one round must push to the existing pull request, when a base other than the default branch is needed, or when a non-local sandbox kind can deliver. ADR 0012 covers review rounds.

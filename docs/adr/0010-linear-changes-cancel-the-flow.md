@@ -28,8 +28,8 @@ Storing the cause on the record keeps the note's text stable across a restart. T
 
 ## Limits
 
-A disabled trigger does not poll, so its open flows do not react to Linear until it is enabled again. A run that is already collecting its git artifacts when the cancel arrives finishes as succeeded, but hands nothing on. A cancelled issue keeps its intake record, so returning it to the pickup state does not start a new flow. If Linear refuses a comment on a deleted issue, the note retries like any failed write.
+A disabled trigger does not poll, so its open flows do not react to Linear until it is enabled again. A run that is already collecting its git artifacts when the cancel arrives finishes as succeeded, but hands nothing on. A cancelled issue keeps its intake record. Returning it to the pickup state starts a new round (ADR 0012). If Linear refuses a comment on a deleted issue, the note retries like any failed write.
 
 ## When to reopen
 
-Reopen this decision when an issue's return to the pickup state must start a new round, or when Factory must react to edits of an issue's title or description.
+Reopen this decision when Factory must react to edits of an issue's title or description.
