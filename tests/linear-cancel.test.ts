@@ -371,3 +371,20 @@ test('an operator’s cancel decides the note even when another task in the flow
     },
   ])
 })
+
+test('an issue taken before the trigger’s started state changed moves to the started state it was taken with, and keeps running', async () => {
+  await addIssue('Fix login')
+  const wall = wallClock()
+  const f = makeFixture({ linear: client(), clock: wall.read })
+  const coder = f.agent('Coder')
+  f.api.agents.setPaused(coder, true)
+  const trigger = linearTrigger(f, coder)
+  await step(f, 0)
+  f.api.triggers.update(trigger, { linear: { ...LIFECYCLE, startedState: 'state-eng-in-review' } })
+  f.api.agents.setPaused(coder, false)
+  await step(f, 1)
+  expect((await issue('ENG-1')).state).toBe('In Progress')
+  await nextPoll(f, wall)
+  expect(runsInOrder(f).map((r) => r.status)).toEqual(['running'])
+  expect(f.world().intake[ENG_1].cancel).toBeNull()
+})

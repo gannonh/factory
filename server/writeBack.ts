@@ -106,7 +106,8 @@ export function reconcileRecord(
   const fromLinear = record.cancel?.kind === 'linear'
   if (phase === 'taken' && tasks.some((t) => t.attempts > 0)) {
     phase = 'started'
-    if (settings?.startedState && !fromLinear) writes.push({ kind: 'move', step: 'started', stateId: settings.startedState, status: PENDING })
+    const startedState = record.states ? record.states.startedState : settings?.startedState
+    if (startedState && !fromLinear) writes.push({ kind: 'move', step: 'started', stateId: startedState, status: PENDING })
   }
   const outcome = flowOutcome(tasks)
   if (outcome !== null) {

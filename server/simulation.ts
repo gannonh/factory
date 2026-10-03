@@ -588,8 +588,9 @@ export class MockServer {
   cancelTask(id: TaskId) {
     const t = this.world.tasks[id]
     if (!t) return
+    // A local run already collecting its artifacts cannot be stopped, but the cancel still holds back its handoffs and the rest of its flow.
     const record = this.openRecord(t.flowId)
-    if (record && (t.status === 'queued' || t.status === 'waiting' || this.cancellableRun(id))) {
+    if (record && (t.status === 'queued' || t.status === 'waiting' || this.runningLocalRun(id))) {
       this.world.intake = { ...this.world.intake, [record.issue.id]: cancelRecord(record, { kind: 'factory', task: t.title }) }
       this.cancelFlow(t.flowId, 'cancelled by operator')
       this.publish()
@@ -607,9 +608,14 @@ export class MockServer {
     this.publish()
   }
 
-  /** The task's running local run, unless it is already finishing. An operator cannot stop a simulated run. */
+  /** An operator can cancel only a local run. A simulated run has no process to stop. */
+  private runningLocalRun(taskId: TaskId): Run | undefined {
+    return Object.values(this.world.runs).find((candidate) => candidate.taskId === taskId && candidate.status === 'running' && candidate.execution === 'local')
+  }
+
+  /** The task's running local run, unless it is already finishing. */
   private cancellableRun(taskId: TaskId): Run | undefined {
-    const run = Object.values(this.world.runs).find((candidate) => candidate.taskId === taskId && candidate.status === 'running' && candidate.execution === 'local')
+    const run = this.runningLocalRun(taskId)
     return run && !this.pendingCompletions.has(run.id) ? run : undefined
   }
 
