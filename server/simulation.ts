@@ -958,7 +958,10 @@ export class MockServer {
       const task = this.world.tasks[run.taskId]
       const issue = task ? issueOfFlow(this.world, task.flowId) : null
       try {
-        artifacts = [...artifacts, ...await deliver(delivering, { title: run.title, body: issue ? `${result}\n\n${issue.url}` : result })]
+        const delivered = await deliver(delivering, { title: run.title, body: issue ? `${result}\n\n${issue.url}` : result })
+        // Name the branch on origin, not whichever branch the agent left checked out.
+        const branch = { kind: 'branch' as const, label: delivering.delivery!.branch, url: null }
+        artifacts = [branch, ...artifacts.filter((a) => a.kind !== 'branch'), ...delivered]
       } catch (error) {
         if (this.world.runs[run.id]?.status !== 'running') return
         this.finishRun(run, { status: 'failed', reason: error instanceof Error ? error.message : String(error) }, true)

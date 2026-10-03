@@ -83,7 +83,7 @@ type GhCall = { cwd: string; argv: string[] }
 
 /**
  * A fake `gh` first on PATH that keeps one pull request per head branch, as GitHub does. `pr view <branch>` prints
- * that branch's PR or fails; `pr create` opens pull request 41, 42, … in order, or fails once after `failNext`.
+ * that branch's PR as JSON or fails; `pr create` opens pull request 41, 42, … in order, or fails once after `failNext`.
  */
 function fakeGh() {
   const dir = tempDir()
@@ -99,7 +99,7 @@ fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ cwd: process.cwd(), a
 const prs = fs.existsSync(${JSON.stringify(prs)}) ? JSON.parse(fs.readFileSync(${JSON.stringify(prs)}, 'utf8')) : {}
 if (argv[1] === 'view') {
   if (!prs[argv[2]]) { console.error('no pull requests found for branch "' + argv[2] + '"'); process.exit(1) }
-  console.log(prs[argv[2]])
+  console.log(JSON.stringify(prs[argv[2]]))
   process.exit(0)
 }
 if (fs.existsSync(${JSON.stringify(failMarker)})) {
@@ -108,7 +108,7 @@ if (fs.existsSync(${JSON.stringify(failMarker)})) {
   process.exit(1)
 }
 const url = 'https://github.com/example/factory/pull/' + (41 + Object.keys(prs).length)
-prs[argv[argv.indexOf('--head') + 1]] = url
+prs[argv[argv.indexOf('--head') + 1]] = { url, state: 'OPEN', baseRefName: argv[argv.indexOf('--base') + 1] }
 fs.writeFileSync(${JSON.stringify(prs)}, JSON.stringify(prs))
 console.log(url)
 `)
@@ -119,7 +119,7 @@ console.log(url)
     calls,
     creates: () => calls().filter((c) => c.argv[1] === 'create'),
     failNext: () => writeFileSync(failMarker, ''),
-    openPullRequest: (branch: string, url: string) => writeFileSync(prs, JSON.stringify({ [branch]: url })),
+    openPullRequest: (branch: string, url: string, baseRefName = 'main') => writeFileSync(prs, JSON.stringify({ [branch]: { url, state: 'OPEN', baseRefName } })),
   }
 }
 
@@ -443,6 +443,7 @@ test('commits an agent made on a branch of its own are delivered on the planned 
   expect(run.status).toBe('succeeded')
   expect(git(repo.origin, 'rev-parse', `factory-${run.id}`)).toBe(git(workdir, 'rev-parse', 'HEAD'))
   expect(gh.creates().map((c) => c.argv.slice(2, 4))).toEqual([['--head', `factory-${run.id}`]])
+  expect(run.output?.artifacts.filter((a) => a.kind === 'branch')).toEqual([{ kind: 'branch', label: `factory-${run.id}`, url: null }])
   await f.server.close()
 })
 
@@ -459,7 +460,7 @@ test('a pull request for a GitHub origin names that repository', async () => {
 
   expect(artifacts).toEqual([{ kind: 'pr', label: 'Pull request #41', url: 'https://github.com/example/factory/pull/41' }])
   expect(gh.calls().map((c) => c.argv)).toEqual([
-    ['pr', 'view', 'feature-x', '--repo', 'github.com/acme/widgets', '--json', 'url', '--jq', '.url'],
+    ['pr', 'view', 'feature-x', '--repo', 'github.com/acme/widgets', '--json', 'url,state,baseRefName'],
     ['pr', 'create', '--head', 'feature-x', '--base', 'main', '--title', 'T', '--body', 'B', '--repo', 'github.com/acme/widgets'],
   ])
 })
@@ -476,4 +477,24 @@ test('two runs preparing the same branch at once get distinct names', async () =
 test('a git or gh step that times out reports the timeout, not its last output line', () => {
   expect(failureReason(Object.assign(new Error('Command failed'), { killed: true, stderr: 'Creating pull request for x into main\n' }))).toBe('timed out')
   expect(failureReason(Object.assign(new Error('Command failed'), { killed: false, stderr: 'remote: hi\nfatal: unable to access\n' }))).toBe('fatal: unable to access')
+})
+
+test('a pull request the agent opened against another base is not reused', async () => {
+  const repo = repository()
+  const runner: Runner = {
+    execution: 'local',
+    start({ run, task, workdir }, emit) {
+      commitFile(workdir, 'change.txt', `change for ${task.title}`)
+      gh.openPullRequest(`factory-${run.id}`, 'https://github.com/example/factory/pull/7', 'release')
+      emit({ kind: 'complete', status: 'succeeded', result: 'Opened a PR against release.' })
+    },
+    kill() {},
+  }
+  const f = factory(repo.root, runner)
+  f.api.agents.enqueue(CODER, { title: 'Add change', prompt: 'p', priority: 'normal' })
+  const run = await nextAttempt(f)
+
+  expect(run.output?.artifacts.at(-1)).toEqual({ kind: 'pr', label: 'Pull request #42', url: 'https://github.com/example/factory/pull/42' })
+  expect(gh.creates().map((c) => c.argv.slice(2, 6))).toEqual([['--head', `factory-${run.id}`, '--base', 'main']])
+  await f.server.close()
 })

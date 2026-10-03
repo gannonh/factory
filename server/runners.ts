@@ -188,9 +188,15 @@ export async function deliver(prepared: PreparedWorkdir, pr: { title: string; bo
   const repoArgs = repository ? ['--repo', repository] : []
   const asPullRequest = (url: string | undefined): Artifact[] | null =>
     url && url.length <= 512 && PR_URL.test(url) ? [{ kind: 'pr', label: `Pull request #${PR_URL.exec(url)![1]}`, url }] : null
-  // The agent may have opened the pull request itself; a failing view means there is none.
-  const existing = await execFileAsync('gh', ['pr', 'view', branch, ...repoArgs, '--json', 'url', '--jq', '.url'], { cwd: prepared.path, timeout: 10_000, env: gitEnv() })
-    .then(({ stdout }) => stdout.trim(), () => undefined)
+  // The agent may have opened the pull request itself; a failing view means there is none. Only an open PR into `base` counts.
+  const existing = await execFileAsync('gh', ['pr', 'view', branch, ...repoArgs, '--json', 'url,state,baseRefName'], { cwd: prepared.path, timeout: 10_000, env: gitEnv() })
+    .then(({ stdout }) => {
+      const view: unknown = JSON.parse(stdout)
+      if (typeof view !== 'object' || view === null) return undefined
+      const { url, state, baseRefName } = view as Record<string, unknown>
+      return state === 'OPEN' && baseRefName === base && typeof url === 'string' ? url : undefined
+    }, () => undefined)
+    .catch(() => undefined)
   const found = asPullRequest(existing)
   if (found) return found
   const created = await run('gh', 'gh pr create', ['pr', 'create', '--head', branch, '--base', base, '--title', pr.title, '--body', pr.body, ...repoArgs], NETWORK_TIMEOUT_MS)
