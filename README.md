@@ -130,7 +130,7 @@ A sandbox of kind `local` runs a real agent. Every other sandbox kind runs on th
 
 ## Not built yet
 
-- Linking pull requests to Linear issues, reacting to changes made in Linear, other work backends, real webhook triggers, and Docker, VPS and remote sandboxes.
+- Linking pull requests to Linear issues, re-running an issue that returns to the pickup state, reacting to edits of an issue's title or description, other work backends, real webhook triggers, and Docker, VPS and remote sandboxes.
 - Running the server on a remote host, auth, teams, multiple projects.
 
 ## License
