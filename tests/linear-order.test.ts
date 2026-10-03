@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest'
 import { startFakeLinear, type FakeLinear } from '../scripts/fake-linear'
 import { LINEAR_PRIORITY, createLinearClient } from '../server/linear'
-import { LINEAR_POLL_MS, type AgentId, type LinearSettings, type Task, type TriggerId } from '../src/domain/types'
-import { makeFixture, type Fixture } from './fixture'
+import { LINEAR_POLL_MS, type AgentId, type IssueId, type LinearSettings, type Task, type TriggerId } from '../src/domain/types'
+import { makeFixture, memoryStore, type Fixture } from './fixture'
 
 const KEY = 'lin_api_test_order'
 const LIFECYCLE: LinearSettings = {
@@ -24,6 +24,8 @@ async function control(body: Record<string, unknown>): Promise<unknown> {
   return response.json()
 }
 const addIssue = (title: string, fields: Record<string, unknown> = {}) => control({ op: 'addIssue', title, ...fields })
+const moveIssue = (identifier: string, state: string) => control({ op: 'moveIssue', identifier, state })
+const linearState = async (identifier: string) => ((await control({ op: 'issue', identifier })) as { state: string }).state
 
 const client = (options: Partial<Parameters<typeof createLinearClient>[0]> = {}) => createLinearClient({ url: fake.url, apiKey: KEY, ...options })
 
@@ -56,6 +58,12 @@ async function nextPoll(f: Fixture, wall: { now: number }) {
   await step(f, 1)
 }
 
+/** Polls, then runs the scheduler pass that acts on what the poll read. */
+async function pollAndSchedule(f: Fixture, wall: { now: number }) {
+  await nextPoll(f, wall)
+  await step(f, 1)
+}
+
 /** One Coder that runs one task at a time, fed by a Linear trigger. */
 function oneSlot(wall = wallClock()) {
   const f = makeFixture({ linear: client(), clock: wall.read })
@@ -79,12 +87,18 @@ test('Linear priority maps Urgent and High to high, Medium and No priority to no
   ])
 })
 
-test('the Linear client reads an unknown priority number as normal', async () => {
-  const node = { id: 'issue-1', identifier: 'ENG-1', title: 'Fix login', description: null, url: 'https://linear.app/x/ENG-1', branchName: 'eng-1', priority: 7 }
+test('the Linear client reads an unknown priority as normal and takes blockers only from inverse blocks relations', async () => {
+  const related = (type: string, identifier: string, state: { name: string; type: string }) =>
+    ({ type, issue: { id: `id-${identifier}`, identifier, url: `https://linear.app/x/${identifier}`, state } })
+  const node = {
+    id: 'issue-1', identifier: 'ENG-1', title: 'Fix login', description: null, url: 'https://linear.app/x/ENG-1', branchName: 'eng-1', priority: 7,
+    inverseRelations: { nodes: [related('blocks', 'OPS-4', { name: 'In Review', type: 'started' }), related('related', 'ENG-9', { name: 'Todo', type: 'unstarted' })] },
+  }
   const page = { data: { issues: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } }
   const fetch = () => Promise.resolve(new Response(JSON.stringify(page)))
   const [issue] = await client({ fetch }).issues(LIFECYCLE)
   expect(issue.priority).toBe('normal')
+  expect(issue.blockers).toEqual([{ id: 'id-OPS-4', identifier: 'OPS-4', url: 'https://linear.app/x/OPS-4', state: { name: 'In Review', type: 'started' } }])
 })
 
 test('with one agent slot, waiting issues at Low, Urgent and Medium start Urgent, Medium, Low', async () => {
@@ -113,4 +127,133 @@ test('raising a queued issue’s priority in Linear moves it ahead on the next p
   await step(f, 12_500)
   await step(f, 12_500)
   expect(startOrder(f)).toEqual(['ENG-1 Add export', 'ENG-3 Rename flag', 'ENG-2 Tidy logs'])
+})
+
+const ENG_1 = 'issue-eng-1' as IssueId
+const ENG_2 = 'issue-eng-2' as IssueId
+const queueRow = (task: Task) => ({ status: task.status, blockedOn: task.blockedOn, attempts: task.attempts })
+
+test('an issue blocked by an unfinished issue waits, says why, and stays in the pickup state in Linear', async () => {
+  await addIssue('Ship schema', { state: 'In Progress' })
+  await addIssue('Use schema', { blockedBy: ['ENG-1'] })
+  const f = oneSlot()
+  await start(f)
+  await step(f, 30_000)
+
+  expect(queueRow(taskTitled(f, 'ENG-2 Use schema'))).toEqual({ status: 'waiting', blockedOn: 'blocked by ENG-1 (In Progress)', attempts: 0 })
+  expect(Object.values(f.world().runs)).toEqual([])
+  expect(f.world().intake[ENG_2]).toMatchObject({
+    phase: 'taken', writes: [],
+    blockers: [{ id: 'issue-eng-1', identifier: 'ENG-1', url: 'https://linear.app/fake/issue/ENG-1/ship-schema', state: { name: 'In Progress', type: 'started' } }],
+  })
+  expect(Object.keys(f.world().intake)).toEqual(['issue-eng-2'])
+  expect(await linearState('ENG-2')).toBe('Todo')
+})
+
+test('an issue starts on the first poll after its blocker is done, and a blocker in review still blocks it', async () => {
+  await addIssue('Ship schema')
+  await addIssue('Use schema', { blockedBy: ['ENG-1'] })
+  const wall = wallClock()
+  const f = makeFixture({ linear: client(), clock: wall.read })
+  linearTrigger(f, f.agent('Coder'))
+  await start(f)
+  expect(startOrder(f)).toEqual(['ENG-1 Ship schema'])
+  expect(taskTitled(f, 'ENG-2 Use schema').blockedOn).toBe('blocked by ENG-1 (Todo)')
+
+  await step(f, 12_500)
+  expect(await linearState('ENG-1')).toBe('In Review')
+  await pollAndSchedule(f, wall)
+  expect(queueRow(taskTitled(f, 'ENG-2 Use schema'))).toEqual({ status: 'waiting', blockedOn: 'blocked by ENG-1 (In Review)', attempts: 0 })
+  expect(await linearState('ENG-2')).toBe('Todo')
+
+  await moveIssue('ENG-1', 'Done')
+  await pollAndSchedule(f, wall)
+  expect(queueRow(taskTitled(f, 'ENG-2 Use schema'))).toEqual({ status: 'running', blockedOn: null, attempts: 1 })
+  expect(startOrder(f)).toEqual(['ENG-1 Ship schema', 'ENG-2 Use schema'])
+  expect(await linearState('ENG-2')).toBe('In Progress')
+})
+
+test('with two blockers, finishing one leaves the reason naming only the other', async () => {
+  await addIssue('Ship schema', { state: 'In Progress' })
+  await addIssue('Ship API', { state: 'In Progress' })
+  await addIssue('Use both', { blockedBy: ['ENG-1', 'ENG-2'] })
+  const wall = wallClock()
+  const f = oneSlot(wall)
+  await start(f)
+  expect(taskTitled(f, 'ENG-3 Use both').blockedOn).toBe('blocked by ENG-1 (In Progress), ENG-2 (In Progress)')
+
+  await moveIssue('ENG-1', 'Canceled')
+  await pollAndSchedule(f, wall)
+  expect(queueRow(taskTitled(f, 'ENG-3 Use both'))).toEqual({ status: 'waiting', blockedOn: 'blocked by ENG-2 (In Progress)', attempts: 0 })
+})
+
+test('a blocker in another team blocks the issue, and Factory never takes the blocker', async () => {
+  await addIssue('Open firewall', { team: 'OPS' })
+  await addIssue('Call partner API', { blockedBy: ['OPS-1'] })
+  const wall = wallClock()
+  const f = oneSlot(wall)
+  await start(f)
+  expect(Object.values(f.world().tasks).map(queueRow)).toEqual([{ status: 'waiting', blockedOn: 'blocked by OPS-1 (Todo)', attempts: 0 }])
+
+  await moveIssue('OPS-1', 'Done')
+  await pollAndSchedule(f, wall)
+  expect(Object.values(f.world().tasks).map((t) => [t.title, t.status])).toEqual([['ENG-1 Call partner API', 'running']])
+  expect(Object.keys(f.world().intake)).toEqual(['issue-eng-1'])
+  expect(await linearState('OPS-1')).toBe('Done')
+})
+
+test('a blocker added in Linear holds a queued issue on the next poll, and removing it returns the issue to the queue', async () => {
+  await addIssue('Add export')
+  await addIssue('Tidy logs')
+  await addIssue('Ship schema', { state: 'In Progress' })
+  const wall = wallClock()
+  const f = oneSlot(wall)
+  await start(f)
+  expect(queueRow(taskTitled(f, 'ENG-2 Tidy logs'))).toEqual({ status: 'queued', blockedOn: null, attempts: 0 })
+
+  await control({ op: 'block', identifier: 'ENG-2', blockedBy: 'ENG-3' })
+  await pollAndSchedule(f, wall)
+  expect(queueRow(taskTitled(f, 'ENG-2 Tidy logs'))).toEqual({ status: 'waiting', blockedOn: 'blocked by ENG-3 (In Progress)', attempts: 0 })
+
+  await control({ op: 'unblock', identifier: 'ENG-2', blockedBy: 'ENG-3' })
+  await pollAndSchedule(f, wall)
+  expect(queueRow(taskTitled(f, 'ENG-2 Tidy logs'))).toEqual({ status: 'queued', blockedOn: null, attempts: 0 })
+  expect(f.world().intake[ENG_2].blockers).toEqual([])
+})
+
+test('a blocked issue stays waiting with the same reason after a restart', async () => {
+  await addIssue('Ship schema', { state: 'In Review' })
+  await addIssue('Use schema', { blockedBy: ['ENG-1'] })
+  const store = memoryStore()
+  const wall = wallClock()
+  const first = makeFixture({ store, linear: client(), clock: wall.read })
+  linearTrigger(first, first.agent('Coder'))
+  await start(first)
+  first.server.flush()
+
+  const second = makeFixture({ store, isolate: false, linear: client(), clock: wall.read })
+  expect(queueRow(taskTitled(second, 'ENG-2 Use schema'))).toEqual({ status: 'waiting', blockedOn: 'blocked by ENG-1 (In Review)', attempts: 0 })
+  await start(second)
+  expect(queueRow(taskTitled(second, 'ENG-2 Use schema'))).toEqual({ status: 'waiting', blockedOn: 'blocked by ENG-1 (In Review)', attempts: 0 })
+  expect(Object.values(second.world().runs).filter((r) => r.title === 'ENG-2 Use schema')).toEqual([])
+})
+
+test('an intake record saved before blockers were kept loads with none, and its issue runs', async () => {
+  await addIssue('Fix login')
+  const store = memoryStore()
+  const first = makeFixture({ store, linear: client(), clock: wallClock().read })
+  const coder = first.agent('Coder')
+  first.api.agents.setPaused(coder, true)
+  linearTrigger(first, coder)
+  await step(first, 0)
+  first.server.flush()
+  const saved = JSON.parse(store.text!) as { intake: Record<string, Record<string, unknown>> }
+  delete saved.intake[ENG_1].blockers
+  store.text = JSON.stringify(saved)
+
+  const second = makeFixture({ store, isolate: false, linear: client(), clock: wallClock().read })
+  expect(second.world().intake[ENG_1]).toMatchObject({ phase: 'taken', blockers: [] })
+  second.api.agents.setPaused(second.agent('Coder'), false)
+  await step(second, 1)
+  expect(queueRow(taskTitled(second, 'ENG-1 Fix login'))).toEqual({ status: 'running', blockedOn: null, attempts: 1 })
 })

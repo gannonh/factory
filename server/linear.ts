@@ -1,11 +1,13 @@
-import type { IntakeError, IssueFilter, IssueId, IssueRef, LinearCatalog, LinearTeam, Priority, WorkflowState, WorkflowStateType } from '../src/domain/types'
-import { array, boolean, nullable, number, object, oneOf, optional, string, type Parser } from './parse'
+import type { IntakeError, IssueBlocker, IssueFilter, IssueId, IssueRef, LinearCatalog, LinearTeam, Priority, WorkflowState, WorkflowStateType } from '../src/domain/types'
+import { array, boolean, nullable, number, object, optional, string, type Parser } from './parse'
+import { issueBlocker, workflowStateType as stateType } from './records'
 
 export const LINEAR_URL = 'https://api.linear.app/graphql'
 const TIMEOUT_MS = 15_000
 const PAGE_SIZE = 50
 
-export type LinearIssue = { ref: IssueRef; title: string; description: string; priority: Priority }
+/** `blockers` are the issues that block this one through a `blocks` relation, from any team. */
+export type LinearIssue = { ref: IssueRef; title: string; description: string; priority: Priority; blockers: IssueBlocker[] }
 
 /** Linear's priority numbers: 0 No priority, 1 Urgent, 2 High, 3 Medium, 4 Low. */
 export const LINEAR_PRIORITY: Record<0 | 1 | 2 | 3 | 4, Priority> = { 0: 'normal', 1: 'high', 2: 'high', 3: 'normal', 4: 'low' }
@@ -57,7 +59,10 @@ export const CATALOG_QUERY = `query FactoryCatalog {
 
 export const ISSUES_QUERY = `query FactoryIssues($filter: IssueFilter!, $first: Int!, $after: String) {
   issues(filter: $filter, first: $first, after: $after) {
-    nodes { id identifier title description url branchName priority }
+    nodes {
+      id identifier title description url branchName priority
+      inverseRelations(first: 50) { nodes { type issue { id identifier url state { name type } } } }
+    }
     pageInfo { hasNextPage endCursor }
   }
 }`
@@ -96,7 +101,6 @@ export const CREATE_ATTACHMENT_MUTATION = `mutation FactoryCreateAttachment($inp
 
 const nodes = <T>(item: Parser<T>) => object<{ nodes: T[] }>({ nodes: array(item) })
 
-const stateType = oneOf('triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled')
 const workflowState = object<WorkflowState>({ id: string, name: string, type: stateType, position: number })
 
 const team = object<{ id: string; key: string; name: string; states: { nodes: WorkflowState[] }; projects: { nodes: Array<{ id: string; name: string }> } }>({
@@ -109,7 +113,12 @@ const team = object<{ id: string; key: string; name: string; states: { nodes: Wo
 
 const catalogData = object({ teams: nodes(team) })
 
-type IssueNode = { id: string; identifier: string; title: string; description: string | null; url: string; branchName: string; priority: number }
+// "A blocks B" is a `blocks` relation stored on A, so B's blockers are the `issue` of B's inverse `blocks` relations.
+type Relation = { type: string; issue: IssueBlocker }
+type IssueNode = {
+  id: string; identifier: string; title: string; description: string | null; url: string; branchName: string; priority: number
+  inverseRelations: { nodes: Relation[] }
+}
 type StateNode = { id: string; state: IssueState }
 type Page<T> = { nodes: T[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } }
 
@@ -117,7 +126,10 @@ const issuePage = <T>(node: Parser<T>) => object({
   issues: object<Page<T>>({ nodes: array(node), pageInfo: object({ hasNextPage: boolean, endCursor: nullable(string) }) }),
 })
 
-const issuesData = issuePage(object<IssueNode>({ id: string, identifier: string, title: string, description: nullable(string), url: string, branchName: string, priority: number }))
+const issuesData = issuePage(object<IssueNode>({
+  id: string, identifier: string, title: string, description: nullable(string), url: string, branchName: string, priority: number,
+  inverseRelations: nodes(object<Relation>({ type: string, issue: issueBlocker })),
+}))
 const issueStatesData = issuePage(object<StateNode>({ id: string, state: object<IssueState>({ id: string, name: string, type: stateType }) }))
 
 const issueStateData = object({ issue: object({ id: string, state: object({ id: string }) }) })
@@ -213,6 +225,7 @@ export function createLinearClient(options: {
         title: n.title,
         description: n.description ?? '',
         priority: priorityOf(n.priority),
+        blockers: n.inverseRelations.nodes.filter((r) => r.type === 'blocks').map((r) => r.issue),
       }))
     },
     async issueStates(ids) {

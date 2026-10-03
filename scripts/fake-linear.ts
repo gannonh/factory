@@ -17,6 +17,8 @@ type Attachment = { id: string; url: string; title: string }
 type Issue = {
   id: string; identifier: string; title: string; description: string; url: string; branchName: string; priority: number
   team: string; state: string; project: string | null; comments: Comment[]; attachments: Attachment[]; deleted: boolean
+  /** ids of the issues that block this one, from any team */
+  blockedBy: string[]
 }
 
 export type FakeLinear = { url: string; controlUrl: string; close: () => Promise<void> }
@@ -62,6 +64,7 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
   const stateByName = (team: Team, name: string) => team.states.find((s) => s.name === name) ?? missing(`state ${name}`)
   const issueBy = (identifier: string) => issues.find((i) => i.identifier === identifier) ?? missing(`issue ${identifier}`)
   const issueById = (id: string | undefined) => issues.find((i) => i.id === id) ?? notFound()
+  const stateOf = (issue: Issue) => teams.find((t) => t.id === issue.team)!.states.find((s) => s.id === issue.state)!
   const view = (issue: Issue) => {
     const team = teams.find((t) => t.id === issue.team)
     return {
@@ -87,6 +90,7 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
         url: `https://linear.app/fake/issue/${identifier}/${slug(title)}`,
         branchName: `${identifier.toLowerCase()}-${slug(title)}`,
         priority: Number(body.priority ?? 0),
+        blockedBy: (Array.isArray(body.blockedBy) ? body.blockedBy : []).map((blocker) => issueBy(String(blocker)).id),
         team: team.id,
         state: stateByName(team, String(body.state ?? 'Todo')).id,
         project: project?.id ?? null,
@@ -101,6 +105,18 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       const issue = issueBy(String(body.identifier))
       const team = teams.find((t) => t.id === issue.team)!
       issue.state = stateByName(team, String(body.state)).id
+      return view(issue)
+    },
+    block(body) {
+      const issue = issueBy(String(body.identifier))
+      const blocker = issueBy(String(body.blockedBy)).id
+      if (!issue.blockedBy.includes(blocker)) issue.blockedBy.push(blocker)
+      return view(issue)
+    },
+    unblock(body) {
+      const issue = issueBy(String(body.identifier))
+      const blocker = issueBy(String(body.blockedBy)).id
+      issue.blockedBy = issue.blockedBy.filter((id) => id !== blocker)
       return view(issue)
     },
     setPriority(body) {
@@ -154,11 +170,20 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       teams: { nodes: teams.map((t) => ({ id: t.id, key: t.key, name: t.name, states: { nodes: t.states }, projects: { nodes: t.projects } })) },
     }),
     FactoryIssues: (variables) => ({
-      issues: page(variables, ({ id, identifier, title, description, url, branchName, priority }) => ({ id, identifier, title, description: description || null, url, branchName, priority })),
+      issues: page(variables, ({ id, identifier, title, description, url, branchName, priority, blockedBy }) => ({
+        id, identifier, title, description: description || null, url, branchName, priority,
+        inverseRelations: {
+          nodes: blockedBy.map((blockerId) => {
+            const blocker = issueById(blockerId)
+            const state = stateOf(blocker)
+            return { type: 'blocks', issue: { id: blocker.id, identifier: blocker.identifier, url: blocker.url, state: { name: state.name, type: state.type } } }
+          }),
+        },
+      })),
     }),
     FactoryIssueStates: (variables) => ({
       issues: page(variables, (issue) => {
-        const state = teams.find((t) => t.id === issue.team)!.states.find((s) => s.id === issue.state)!
+        const state = stateOf(issue)
         return { id: issue.id, state: { id: state.id, name: state.name, type: state.type } }
       }),
     }),

@@ -5,6 +5,7 @@ import {
   SANDBOX_TIMED,
   SANDBOX_TRANSITIONS,
   attachedEdges,
+  blockedReason,
   edgeKindFor,
   isCapacity,
   issueOfFlow,
@@ -886,7 +887,7 @@ export class MockServer {
         input: null,
       }, flowId)
       const states = { pickupState: settings.pickupState, startedState: settings.startedState }
-      const record: IntakeRecord = { issue: issue.ref, trigger: id, flowId, takenAt: this.clock(), phase: 'taken', writes: [], states, cancel: null }
+      const record: IntakeRecord = { issue: issue.ref, trigger: id, flowId, takenAt: this.clock(), phase: 'taken', writes: [], states, cancel: null, blockers: issue.blockers }
       this.world.intake = { ...this.world.intake, [issue.ref.id]: record }
       taken.push(issue.ref.identifier)
     }
@@ -897,9 +898,12 @@ export class MockServer {
     this.publish()
   }
 
-  /** Until its flow's first run starts, a taken issue's task follows the issue's priority in Linear. */
+  /** Until its flow's first run starts, a taken issue follows its priority and blockers in Linear. */
   private refreshUnstarted(record: IntakeRecord, issue: LinearIssue) {
     if (record.phase !== 'taken' || record.cancel !== null) return
+    if (JSON.stringify(record.blockers) !== JSON.stringify(issue.blockers)) {
+      this.world.intake = { ...this.world.intake, [record.issue.id]: { ...record, blockers: issue.blockers } }
+    }
     const task = Object.values(this.world.tasks)
       .find((t) => t.flowId === record.flowId && t.origin.kind === 'issue' && (t.status === 'queued' || t.status === 'waiting'))
     if (task && task.priority !== issue.priority) this.patchTask(task.id, { priority: issue.priority })
@@ -1135,7 +1139,8 @@ export class MockServer {
   }
 
   /**
-   * Phase 1 resolves dependency outcomes for every pending task from task
+   * Phase 1 holds an issue's task while its intake record lists unfinished
+   * Linear blockers, then resolves dependency outcomes for every pending task from task
    * records (never agent or run status), so terminal prerequisite failures
    * cannot hide behind paused, full, or retrying agents. Phase 2 runs the
    * existing admission checks (priority, concurrency, pause, retry deadline,
@@ -1163,8 +1168,24 @@ export class MockServer {
       byAgent.set(t.agentId, bucket)
       tasksByFlowAgent.set(t.flowId, byAgent)
     }
+    // an issue's flow waits for the issue's blockers in Linear until its first run starts
+    const issueBlocked = new Map<FlowId, string>()
+    for (const record of Object.values(w.intake)) {
+      const reason = record.phase === 'taken' && record.cancel === null ? blockedReason(record.blockers) : null
+      if (reason) issueBlocked.set(record.flowId, reason)
+    }
     const pending = Object.values(w.tasks).filter((t) => t.status === 'queued' || t.status === 'waiting')
     for (const task of pending) {
+      if (task.origin.kind === 'issue') {
+        const reason = issueBlocked.get(task.flowId)
+        if (reason) {
+          if (task.status !== 'waiting' || task.blockedOn !== reason) this.patchTask(task.id, { status: 'waiting', blockedOn: reason })
+          depBlocked.add(task.id)
+          continue
+        }
+        // blockers cleared: back to the queue so admission reasons show through
+        if (task.blockedOn?.startsWith('blocked by')) this.patchTask(task.id, { status: 'queued', blockedOn: null })
+      }
       const sources = dependsSources.get(task.agentId)
       if (!sources) {
         // the agent lost its depends-on edges: a stale waiting-on reason must not survive the pass
