@@ -890,7 +890,9 @@ export class MockServer {
         input: null,
       }, flowId)
       const states = { pickupState: settings.pickupState, startedState: settings.startedState }
-      const record: IntakeRecord = { issue: issue.ref, trigger: id, flowId, takenAt: this.clock(), phase: 'taken', writes: [], states, cancel: null, blockers: issue.blockers }
+      const record: IntakeRecord = { issue: issue.ref, trigger: id, flowId, takenAt: this.clock(), phase: 'taken', writes: [], states, cancel: null, blockers: issue.blockers,
+        round: 1, rework: null, result: null, left: false, past: [],
+      }
       this.world.intake = { ...this.world.intake, [issue.ref.id]: record }
       taken.push(issue.ref.identifier)
       if (issue.moreRelations) unread.push(issue.ref.identifier)
