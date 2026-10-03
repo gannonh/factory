@@ -93,7 +93,7 @@ test('an issue in the pickup state becomes one task on the joined agent', async 
     status: 'queued',
     origin: { kind: 'issue', trigger, issue },
   })
-  expect(f.world().intake).toEqual({ 'issue-eng-1': { issue, trigger, flowId: task.flowId, takenAt: 1_000_000, phase: 'taken', writes: [], states: { pickupState: 'state-eng-todo', startedState: null }, cancel: null } })
+  expect(f.world().intake).toEqual({ 'issue-eng-1': { issue, trigger, flowId: task.flowId, takenAt: 1_000_000, phase: 'taken', writes: [], states: { pickupState: 'state-eng-todo', startedState: null }, cancel: null, blockers: [] } })
   expect(f.world().intakePolls).toEqual({ [trigger]: { at: 1_000_000, error: null } })
   expect(f.world().triggers[trigger].fired).toBe(1)
   expect(f.world().events.at(-1)?.msg).toBe('Linear intake took ENG-1')
@@ -445,11 +445,11 @@ test('the recommended states follow the team workflow by position', async () => 
   const catalog = await f.api.linear.catalog()
   expect(catalog.teams.map((t) => [t.key, t.name, t.projects.map((p) => p.name)]))
     .toEqual([['ENG', 'Engineering', ['Alpha', 'Beta']], ['OPS', 'Operations', []], ['KAT', 'Kata', ['Gamma']]])
-  expect(catalog.teams[0].states.map((s) => s.name)).toEqual(['Backlog', 'Todo', 'In Progress', 'In Review', 'Done', 'Canceled'])
+  expect(catalog.teams[0].states.map((s) => s.name)).toEqual(['Backlog', 'Todo', 'In Progress', 'In Review', 'Done', 'Canceled', 'Duplicate'])
   expect(recommendedStates(catalog.teams[0].states))
     .toEqual({ pickupState: 'state-eng-todo', startedState: 'state-eng-in-progress', finishedState: 'state-eng-in-review', failedState: null })
   expect(catalog.teams[2].states.map((s) => s.name))
-    .toEqual(['Backlog', 'Todo', 'Start', 'In Progress', 'Agent Review', 'Human Review', 'Merging', 'Done', 'Canceled'])
+    .toEqual(['Backlog', 'Todo', 'Start', 'In Progress', 'Agent Review', 'Human Review', 'Merging', 'Done', 'Canceled', 'Duplicate'])
   expect(recommendedStates(catalog.teams[2].states))
     .toEqual({ pickupState: 'state-kat-start', startedState: 'state-kat-in-progress', finishedState: 'state-kat-agent-review', failedState: null })
 })

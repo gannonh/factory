@@ -15,19 +15,21 @@ type Team = { id: string; key: string; name: string; states: State[]; projects: 
 type Comment = { id: string; body: string }
 type Attachment = { id: string; url: string; title: string }
 type Issue = {
-  id: string; identifier: string; title: string; description: string; url: string; branchName: string
+  id: string; identifier: string; title: string; description: string; url: string; branchName: string; priority: number
   team: string; state: string; project: string | null; comments: Comment[]; attachments: Attachment[]; deleted: boolean
+  /** ids of the issues that block this one, from any team */
+  blockedBy: string[]
 }
 
 export type FakeLinear = { url: string; controlUrl: string; close: () => Promise<void> }
 
 const STATES: Array<[string, WorkflowStateType]> = [
-  ['Backlog', 'backlog'], ['Todo', 'unstarted'], ['In Progress', 'started'], ['In Review', 'started'], ['Done', 'completed'], ['Canceled', 'canceled'],
+  ['Backlog', 'backlog'], ['Todo', 'unstarted'], ['In Progress', 'started'], ['In Review', 'started'], ['Done', 'completed'], ['Canceled', 'canceled'], ['Duplicate', 'duplicate'],
 ]
 
 const START_STATES: Array<[string, WorkflowStateType]> = [
   ['Backlog', 'backlog'], ['Todo', 'unstarted'], ['Start', 'unstarted'], ['In Progress', 'started'], ['Agent Review', 'started'],
-  ['Human Review', 'started'], ['Merging', 'started'], ['Done', 'completed'], ['Canceled', 'canceled'],
+  ['Human Review', 'started'], ['Merging', 'started'], ['Done', 'completed'], ['Canceled', 'canceled'], ['Duplicate', 'duplicate'],
 ]
 
 function seedTeams(): Team[] {
@@ -62,6 +64,15 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
   const stateByName = (team: Team, name: string) => team.states.find((s) => s.name === name) ?? missing(`state ${name}`)
   const issueBy = (identifier: string) => issues.find((i) => i.identifier === identifier) ?? missing(`issue ${identifier}`)
   const issueById = (id: string | undefined) => issues.find((i) => i.id === id) ?? notFound()
+  const stateOf = (issue: Issue) => teams.find((t) => t.id === issue.team)!.states.find((s) => s.id === issue.state)!
+  const inverseRelations = (blockedBy: string[]) => ({
+    pageInfo: { hasNextPage: blockedBy.length > 100 },
+    nodes: blockedBy.slice(0, 100).map((blockerId) => {
+      const blocker = issueById(blockerId)
+      const state = stateOf(blocker)
+      return { type: 'blocks', issue: { id: blocker.id, identifier: blocker.identifier, url: blocker.url, state: { name: state.name, type: state.type } } }
+    }),
+  })
   const view = (issue: Issue) => {
     const team = teams.find((t) => t.id === issue.team)
     return {
@@ -86,6 +97,8 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
         description: String(body.description ?? ''),
         url: `https://linear.app/fake/issue/${identifier}/${slug(title)}`,
         branchName: `${identifier.toLowerCase()}-${slug(title)}`,
+        priority: Number(body.priority ?? 0),
+        blockedBy: (Array.isArray(body.blockedBy) ? body.blockedBy : []).map((blocker) => issueBy(String(blocker)).id),
         team: team.id,
         state: stateByName(team, String(body.state ?? 'Todo')).id,
         project: project?.id ?? null,
@@ -100,6 +113,23 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       const issue = issueBy(String(body.identifier))
       const team = teams.find((t) => t.id === issue.team)!
       issue.state = stateByName(team, String(body.state)).id
+      return view(issue)
+    },
+    block(body) {
+      const issue = issueBy(String(body.identifier))
+      const blocker = issueBy(String(body.blockedBy)).id
+      if (!issue.blockedBy.includes(blocker)) issue.blockedBy.push(blocker)
+      return view(issue)
+    },
+    unblock(body) {
+      const issue = issueBy(String(body.identifier))
+      const blocker = issueBy(String(body.blockedBy)).id
+      issue.blockedBy = issue.blockedBy.filter((id) => id !== blocker)
+      return view(issue)
+    },
+    setPriority(body) {
+      const issue = issueBy(String(body.identifier))
+      issue.priority = Number(body.priority)
       return view(issue)
     },
     /** Moves the issue to the trash: lists leave it out, but it still answers by id, as Linear's API does. */
@@ -148,12 +178,14 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       teams: { nodes: teams.map((t) => ({ id: t.id, key: t.key, name: t.name, states: { nodes: t.states }, projects: { nodes: t.projects } })) },
     }),
     FactoryIssues: (variables) => ({
-      issues: page(variables, ({ id, identifier, title, description, url, branchName }) => ({ id, identifier, title, description: description || null, url, branchName })),
+      issues: page(variables, ({ id, identifier, title, description, url, branchName, priority, blockedBy }) => ({
+        id, identifier, title, description: description || null, url, branchName, priority, inverseRelations: inverseRelations(blockedBy),
+      })),
     }),
     FactoryIssueStates: (variables) => ({
       issues: page(variables, (issue) => {
-        const state = teams.find((t) => t.id === issue.team)!.states.find((s) => s.id === issue.state)!
-        return { id: issue.id, state: { id: state.id, name: state.name, type: state.type } }
+        const state = stateOf(issue)
+        return { id: issue.id, state: { id: state.id, name: state.name, type: state.type }, priority: issue.priority, inverseRelations: inverseRelations(issue.blockedBy) }
       }),
     }),
     FactoryIssueState: ({ id }) => {

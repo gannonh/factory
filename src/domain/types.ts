@@ -178,10 +178,23 @@ export type TriggerStates = Pick<LinearSettings, 'pickupState' | 'startedState'>
  * One issue taken by intake. Retention never prunes these, so an issue never starts a second flow.
  * `writes` is the ordered write-back queue; each phase change appends to it and nothing removes from it.
  * `states` are the trigger's states when it took the issue, or null for a record saved before they were kept.
+ * `blockers` are the issues that block it in Linear, as of the last poll before its flow started.
  */
 export type IntakeRecord = {
   issue: IssueRef; trigger: TriggerId; flowId: FlowId; takenAt: number; phase: IntakePhase; writes: IssueWrite[]
-  states: TriggerStates | null; cancel: FlowCancel | null
+  states: TriggerStates | null; cancel: FlowCancel | null; blockers: IssueBlocker[]
+}
+
+/** An issue that blocks a taken issue in Linear, from any team, with its state when last read. */
+export type IssueBlocker = { id: IssueId; identifier: string; url: string; state: { name: string; type: WorkflowStateType } }
+
+/** A blocker stops blocking once Linear closes it: completed, canceled, or marked a duplicate. In Review still blocks. */
+export const blockerDone = (blocker: IssueBlocker) => blocker.state.type === 'completed' || blocker.state.type === 'canceled' || blocker.state.type === 'duplicate'
+
+/** The queue's reason for an issue held by its blockers, naming only the unfinished ones, or null when none is. */
+export function blockedReason(blockers: readonly IssueBlocker[]): string | null {
+  const open = blockers.filter((b) => !blockerDone(b))
+  return open.length === 0 ? null : `blocked by ${open.map((b) => `${b.identifier} (${b.state.name})`).join(', ')}`
 }
 
 export type IntakeError = { kind: 'missing-key' | 'auth' | 'network' | 'api'; message: string }
@@ -189,7 +202,7 @@ export type IntakeError = { kind: 'missing-key' | 'auth' | 'network' | 'api'; me
 /** The latest finished poll of one Linear trigger. Runtime only: not saved. `at` is wall-clock ms. */
 export type IntakePoll = { at: number; error: IntakeError | null }
 
-export type WorkflowStateType = 'triage' | 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled'
+export type WorkflowStateType = 'triage' | 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled' | 'duplicate'
 export type WorkflowState = { id: string; name: string; type: WorkflowStateType; position: number }
 export type LinearTeam = { id: string; key: string; name: string; states: WorkflowState[]; projects: Array<{ id: string; name: string }> }
 export type LinearCatalog = { teams: LinearTeam[] }

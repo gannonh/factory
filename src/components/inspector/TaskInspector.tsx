@@ -2,6 +2,7 @@ import { TASK_STATUS_COLOR, type Task } from '../../domain/types'
 import { useStore } from '../../store'
 import { Badge, Dot, Section, fmtDuration } from '../ui'
 import { TaskOrigin } from '../TaskOrigin'
+import { BlockersSection } from './BlockersSection'
 import { TaskInputSection } from './TaskInputSection'
 import { WriteBackSection } from './WriteBackSection'
 import { useWallNow } from '../../useWallNow'
@@ -52,6 +53,8 @@ export function TaskInspector({ task }: { task: Task }) {
       </Section>
 
       {task.input && <TaskInputSection input={task.input} />}
+
+      {intake && intake.blockers.length > 0 && <BlockersSection record={intake} />}
 
       {intake && <WriteBackSection record={intake} />}
 

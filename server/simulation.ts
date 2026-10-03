@@ -5,6 +5,7 @@ import {
   SANDBOX_TIMED,
   SANDBOX_TRANSITIONS,
   attachedEdges,
+  blockedReason,
   edgeKindFor,
   isCapacity,
   issueOfFlow,
@@ -56,7 +57,7 @@ import { ClaudeRunner, SimulatedRunner, deliver, gitArtifacts, prepareWorkdir, t
 import type { RunLogStore } from './runLogs'
 import { array, boolean, defaulted, id, number, object, oneOf, record } from './parse'
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
-import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type LinearClient, type LinearIssue } from './linear'
+import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type IssueStatus, type LinearClient, type LinearIssue } from './linear'
 import { cancelRecord, flowAction, flowOutcome, landed, nextWrite, reconcileRecord, workingStates } from './writeBack'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
@@ -858,14 +859,21 @@ export class MockServer {
   }
 
   private finishPoll(
-    id: TriggerId, settings: LinearSettings, issues: LinearIssue[], refreshed: IssueId[], states: Map<IssueId, IssueState>, error: IntakeError | null,
+    id: TriggerId, settings: LinearSettings, issues: LinearIssue[], refreshed: IssueId[], states: Map<IssueId, IssueStatus>, error: IntakeError | null,
   ) {
     const tr = this.world.triggers[id]
     if (!this.pollable(tr) || !sameSettings(tr.linear, settings)) return
     this.world.intakePolls = { ...this.world.intakePolls, [id]: { at: this.clock(), error } }
-    for (const issueId of refreshed) this.followIssue(issueId, states.get(issueId) ?? null, settings)
+    const queued = refreshed.length > 0 ? this.pendingIssueTasks() : new Map<FlowId, Task>()
+    const unread: string[] = []
+    for (const issueId of refreshed) {
+      const status = states.get(issueId)
+      this.followIssue(issueId, status?.state ?? null, settings)
+      if (status && this.refreshUnstarted(issueId, status, queued) && status.moreRelations) unread.push(this.world.intake[issueId].issue.identifier)
+    }
     const feed = Object.values(this.world.edges).find((e) => e.kind === 'triggers' && e.source === id && this.world.agents[e.target as AgentId])
     if (!feed) {
+      this.warnUnreadRelations(unread)
       this.publish()
       return
     }
@@ -877,20 +885,50 @@ export class MockServer {
       this.enqueueTaskSilently(agentId, {
         title: `${issue.ref.identifier} ${issue.title}`,
         prompt: [issue.title, issue.description, issue.ref.url].filter((part) => part !== '').join('\n\n'),
-        priority: 'normal',
+        priority: issue.priority,
         origin: { kind: 'issue', trigger: id, issue: issue.ref },
         input: null,
       }, flowId)
       const states = { pickupState: settings.pickupState, startedState: settings.startedState }
-      const record: IntakeRecord = { issue: issue.ref, trigger: id, flowId, takenAt: this.clock(), phase: 'taken', writes: [], states, cancel: null }
+      const record: IntakeRecord = { issue: issue.ref, trigger: id, flowId, takenAt: this.clock(), phase: 'taken', writes: [], states, cancel: null, blockers: issue.blockers }
       this.world.intake = { ...this.world.intake, [issue.ref.id]: record }
       taken.push(issue.ref.identifier)
+      if (issue.moreRelations) unread.push(issue.ref.identifier)
     }
+    this.warnUnreadRelations(unread)
     if (taken.length > 0) {
       this.patchTrigger(id, { lastFiredAt: this.world.now, fired: tr.fired + taken.length })
       this.event('trigger', { kind: 'trigger', id }, `${tr.name} took ${taken.join(', ')}`)
     }
     this.publish()
+  }
+
+  /** Each issue task that has not started yet, by flow. */
+  private pendingIssueTasks(): Map<FlowId, Task> {
+    const found = new Map<FlowId, Task>()
+    for (const t of Object.values(this.world.tasks)) {
+      if (t.origin.kind === 'issue' && (t.status === 'queued' || t.status === 'waiting')) found.set(t.flowId, t)
+    }
+    return found
+  }
+
+  private warnUnreadRelations(identifiers: string[]) {
+    if (identifiers.length > 0) this.log('warn', `${identifiers.join(', ')}: blockers beyond the first 100 relations are not read`)
+  }
+
+  /**
+   * Until its flow's first run starts, a taken issue follows its priority and blockers in Linear, wherever the issue sits.
+   * Returns whether the record was still unstarted.
+   */
+  private refreshUnstarted(issueId: IssueId, status: IssueStatus, queued: Map<FlowId, Task>): boolean {
+    const record = this.world.intake[issueId]
+    if (!record || record.phase !== 'taken' || record.cancel !== null) return false
+    if (JSON.stringify(record.blockers) !== JSON.stringify(status.blockers)) {
+      this.world.intake = { ...this.world.intake, [issueId]: { ...record, blockers: status.blockers } }
+    }
+    const task = queued.get(record.flowId)
+    if (task && task.priority !== status.priority) this.patchTask(task.id, { priority: status.priority })
+    return true
   }
 
   /** Cancels the issue's flow when the issue has left the trigger's states in Linear. */
@@ -1123,7 +1161,8 @@ export class MockServer {
   }
 
   /**
-   * Phase 1 resolves dependency outcomes for every pending task from task
+   * Phase 1 holds an issue's task while its intake record lists unfinished
+   * Linear blockers, then resolves dependency outcomes for every pending task from task
    * records (never agent or run status), so terminal prerequisite failures
    * cannot hide behind paused, full, or retrying agents. Phase 2 runs the
    * existing admission checks (priority, concurrency, pause, retry deadline,
@@ -1151,8 +1190,24 @@ export class MockServer {
       byAgent.set(t.agentId, bucket)
       tasksByFlowAgent.set(t.flowId, byAgent)
     }
+    // an issue's flow waits for the issue's blockers in Linear until its first run starts
+    const issueBlocked = new Map<FlowId, string>()
+    for (const record of Object.values(w.intake)) {
+      const reason = record.phase === 'taken' && record.cancel === null ? blockedReason(record.blockers) : null
+      if (reason) issueBlocked.set(record.flowId, reason)
+    }
     const pending = Object.values(w.tasks).filter((t) => t.status === 'queued' || t.status === 'waiting')
     for (const task of pending) {
+      if (task.origin.kind === 'issue') {
+        const reason = issueBlocked.get(task.flowId)
+        if (reason) {
+          if (task.status !== 'waiting' || task.blockedOn !== reason) this.patchTask(task.id, { status: 'waiting', blockedOn: reason })
+          depBlocked.add(task.id)
+          continue
+        }
+        // blockers cleared: back to the queue so admission reasons show through
+        if (task.blockedOn?.startsWith('blocked by')) this.patchTask(task.id, { status: 'queued', blockedOn: null })
+      }
       const sources = dependsSources.get(task.agentId)
       if (!sources) {
         // the agent lost its depends-on edges: a stale waiting-on reason must not survive the pass

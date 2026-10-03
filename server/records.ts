@@ -1,9 +1,9 @@
 import {
   DELIVERIES, EDGE_KINDS, MODELS, SANDBOX_TRANSITIONS, isCapacity,
   type Agent, type AgentId, type Artifact, type Edge, type EdgeId, type FactoryEvent, type FlowId, type Group, type GroupId,
-  type FlowCancel, type IntakeRecord, type IssueFilter, type IssueId, type IssueWrite, type IssueRef, type Lease, type LinearSettings, type Metrics, type NodeId, type Position, type Priority, type RetryPolicy, type Run, type RunId, type TriggerStates,
+  type FlowCancel, type IntakeRecord, type IssueBlocker, type IssueFilter, type IssueId, type IssueWrite, type IssueRef, type Lease, type LinearSettings, type Metrics, type NodeId, type Position, type Priority, type RetryPolicy, type Run, type RunId, type TriggerStates,
   type RunOutput, type Sandbox, type SandboxId, type SandboxKind, type SandboxState, type Subject,
-  type Task, type TaskId, type TaskInput, type Trigger, type TriggerId, type TriggerKind, type WriteStatus,
+  type Task, type TaskId, type TaskInput, type Trigger, type TriggerId, type TriggerKind, type WorkflowStateType, type WriteStatus,
 } from '../src/domain/types'
 import { array, boolean, defaulted, id, nullable, number, object, oneOf, refine, string, tagged, type Parser } from './parse'
 import { isRestorableInteger } from './storedNumber'
@@ -168,6 +168,12 @@ const issueWrite = tagged<IssueWrite>({
   attach: object({ kind: oneOf('attach'), url: string, title: string, status: writeStatus }),
 })
 
+export const workflowStateType: Parser<WorkflowStateType> = oneOf('triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled', 'duplicate')
+
+export const issueBlocker = object<IssueBlocker>({
+  id: id<IssueId>(), identifier: string, url: string, state: object<IssueBlocker['state']>({ name: string, type: workflowStateType }),
+})
+
 // A record saved before write-back counts as ended with nothing to write, so upgrading never posts notes for older flows.
 export const intakeRecord = object<IntakeRecord>({
   issue: issueRef,
@@ -181,6 +187,7 @@ export const intakeRecord = object<IntakeRecord>({
     linear: object({ kind: oneOf('linear'), reason: string }),
     factory: object({ kind: oneOf('factory'), task: string }),
   })), () => null),
+  blockers: defaulted(array(issueBlocker), () => []),
 })
 
 const subject = tagged<Subject>({
