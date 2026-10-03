@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest'
 import { startFakeLinear, type FakeLinear } from '../scripts/fake-linear'
 import { LINEAR_PRIORITY, createLinearClient } from '../server/linear'
 import { LINEAR_POLL_MS, type AgentId, type IssueId, type LinearSettings, type Task, type TriggerId } from '../src/domain/types'
+import { blockerStatesNote } from '../src/components/inspector/blockers'
 import { makeFixture, memoryStore, type Fixture } from './fixture'
 
 const KEY = 'lin_api_test_order'
@@ -307,4 +308,12 @@ test('an issue with more than 100 relations logs one warning per poll that the r
 
   await nextPoll(f, wall)
   expect(warnings()).toEqual(['ENG-102: blockers beyond the first 100 relations are not read', 'ENG-102: blockers beyond the first 100 relations are not read'])
+})
+
+test('the blockers note says the states are stale once the flow starts or is cancelled', () => {
+  const stale = 'States as Factory last read them. Factory stops reading them once the flow starts or is cancelled.'
+  expect(blockerStatesNote({ phase: 'taken', cancel: null })).toBeNull()
+  expect(blockerStatesNote({ phase: 'started', cancel: null })).toBe(stale)
+  expect(blockerStatesNote({ phase: 'ended', cancel: null })).toBe(stale)
+  expect(blockerStatesNote({ phase: 'taken', cancel: { kind: 'linear', reason: 'canceled in Linear' } })).toBe(stale)
 })

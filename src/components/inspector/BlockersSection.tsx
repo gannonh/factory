@@ -1,5 +1,6 @@
 import { blockerDone, type IntakeRecord } from '../../domain/types'
 import { Badge, IssueLink, Section } from '../ui'
+import { blockerStatesNote } from './blockers'
 
 const DONE = '#34d399'
 const OPEN = '#fbbf24'
@@ -7,6 +8,7 @@ const OPEN = '#fbbf24'
 /** The issues that block the flow's Linear issue, each linked, with its state when Factory last read it. */
 export function BlockersSection({ record }: { record: IntakeRecord }) {
   const open = record.blockers.filter((b) => !blockerDone(b)).length
+  const note = blockerStatesNote(record)
   return (
     <Section title="Blocked by" right={<span className="font-mono text-[10px] text-ink-500">{open} of {record.blockers.length} unfinished</span>}>
       <ul className="flex flex-col gap-1.5">
@@ -17,7 +19,7 @@ export function BlockersSection({ record }: { record: IntakeRecord }) {
           </li>
         ))}
       </ul>
-      {record.phase !== 'taken' && <div className="text-[10px] text-ink-500">States as of the flow’s first run. Factory stops reading them once a run starts.</div>}
+      {note && <div className="text-[10px] text-ink-500">{note}</div>}
     </Section>
   )
 }
