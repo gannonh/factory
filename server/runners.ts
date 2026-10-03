@@ -83,8 +83,8 @@ export type PreparedWorkdir = { path: string; initialHead: string | null; delive
 const NETWORK_TIMEOUT_MS = 120_000
 const LOCAL_TIMEOUT_MS = 15_000
 const MAX_REASON_CHARS = 300
-// Network git must fail rather than wait on a credential prompt nobody can answer.
-const gitEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: '0' })
+// Network git must fail rather than wait on a credential prompt nobody can answer, over HTTPS or SSH.
+const gitEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -o BatchMode=yes' })
 
 /**
  * Makes the run's working directory. With no delivery the worktree branches `factory-<runId>` from the
@@ -122,7 +122,18 @@ export async function prepareWorkdir(root: string, runId: RunId, delivery: { bra
   return { path: workdir, initialHead: null, delivery: null }
 }
 
-async function prepareDelivery(rootPath: string, workdir: string, requested: string): Promise<PreparedWorkdir> {
+// Two runs on one repository must not pick the same free branch name or fetch at once.
+const deliveryQueues = new Map<string, Promise<unknown>>()
+
+function prepareDelivery(rootPath: string, workdir: string, requested: string): Promise<PreparedWorkdir> {
+  const turn = (deliveryQueues.get(rootPath) ?? Promise.resolve()).then(() => prepareDeliveryNow(rootPath, workdir, requested))
+  const queued = turn.catch(() => undefined)
+  deliveryQueues.set(rootPath, queued)
+  void queued.then(() => { if (deliveryQueues.get(rootPath) === queued) deliveryQueues.delete(rootPath) })
+  return turn
+}
+
+async function prepareDeliveryNow(rootPath: string, workdir: string, requested: string): Promise<PreparedWorkdir> {
   const git = (step: string, args: string[], timeout = LOCAL_TIMEOUT_MS) =>
     execFileAsync('git', ['-C', rootPath, ...args], { timeout, env: gitEnv() }).then(({ stdout }) => stdout, (error: unknown) => {
       throw new Error(`delivery failed: ${step}: ${failureReason(error)}`)
@@ -146,12 +157,12 @@ async function prepareDelivery(rootPath: string, workdir: string, requested: str
 }
 
 /** The most telling line a failed child process printed, bounded for the run's failure reason. */
-function failureReason(error: unknown): string {
+export function failureReason(error: unknown): string {
   const stderr = typeof error === 'object' && error !== null && 'stderr' in error ? String(error.stderr) : ''
   const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
   const telling = lines.find((line) => /^(fatal|error):|^! |rejected/i.test(line)) ?? lines.at(-1)
   const killed = typeof error === 'object' && error !== null && 'killed' in error && error.killed === true
-  const reason = telling ?? (killed ? 'timed out' : error instanceof Error ? error.message.split('\n')[0] : String(error))
+  const reason = killed ? 'timed out' : telling ?? (error instanceof Error ? error.message.split('\n')[0] : String(error))
   return Array.from(reason).length > MAX_REASON_CHARS ? `${Array.from(reason).slice(0, MAX_REASON_CHARS - 1).join('')}…` : reason
 }
 
@@ -168,13 +179,24 @@ export async function deliver(prepared: PreparedWorkdir, pr: { title: string; bo
     execFileAsync(command, args, { cwd: prepared.path, timeout, env: gitEnv(), maxBuffer: 1024 * 1024 }).then(({ stdout }) => stdout, (error: unknown) => {
       throw new Error(`delivery failed: ${step}: ${failureReason(error)}`)
     })
-  const count = Number((await run('git', 'git rev-list', ['rev-list', '--count', `${prepared.initialHead}..refs/heads/${branch}`], LOCAL_TIMEOUT_MS)).trim())
+  // Deliver HEAD, as gitArtifacts lists it: an agent that switched branches or detached HEAD still has its commits shipped.
+  const count = Number((await run('git', 'git rev-list', ['rev-list', '--count', `${prepared.initialHead}..HEAD`], LOCAL_TIMEOUT_MS)).trim())
   if (count === 0) return [{ kind: 'note', label: 'No changes; no pull request opened', url: null }]
-  await run('git', 'git push', ['push', '-u', 'origin', `refs/heads/${branch}:refs/heads/${branch}`], NETWORK_TIMEOUT_MS)
-  const created = await run('gh', 'gh pr create', ['pr', 'create', '--head', branch, '--base', base, '--title', pr.title, '--body', pr.body], NETWORK_TIMEOUT_MS)
-  const url = created.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length <= 512 && PR_URL.test(line)).at(-1)
-  if (!url) throw new Error('delivery failed: gh pr create printed no pull request URL')
-  return [{ kind: 'pr', label: `Pull request #${PR_URL.exec(url)![1]}`, url }]
+  await run('git', 'git push', ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`], NETWORK_TIMEOUT_MS)
+  const remote = await run('git', 'git remote get-url', ['remote', 'get-url', 'origin'], LOCAL_TIMEOUT_MS)
+  const repository = githubUrl(remote.trim())?.slice('https://'.length)
+  const repoArgs = repository ? ['--repo', repository] : []
+  const asPullRequest = (url: string | undefined): Artifact[] | null =>
+    url && url.length <= 512 && PR_URL.test(url) ? [{ kind: 'pr', label: `Pull request #${PR_URL.exec(url)![1]}`, url }] : null
+  // The agent may have opened the pull request itself; a failing view means there is none.
+  const existing = await execFileAsync('gh', ['pr', 'view', branch, ...repoArgs, '--json', 'url', '--jq', '.url'], { cwd: prepared.path, timeout: 10_000, env: gitEnv() })
+    .then(({ stdout }) => stdout.trim(), () => undefined)
+  const found = asPullRequest(existing)
+  if (found) return found
+  const created = await run('gh', 'gh pr create', ['pr', 'create', '--head', branch, '--base', base, '--title', pr.title, '--body', pr.body, ...repoArgs], NETWORK_TIMEOUT_MS)
+  const opened = asPullRequest(created.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length <= 512 && PR_URL.test(line)).at(-1))
+  if (!opened) throw new Error('delivery failed: gh pr create printed no pull request URL')
+  return opened
 }
 
 function githubUrl(remote: string): string | null {

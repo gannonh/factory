@@ -944,7 +944,7 @@ export class MockServer {
 
   private async completeLocalRun(run: Run, agent: Agent, result: string) {
     const prepared = this.workdirs.get(run.id)
-    const delivering = agent.delivery === 'pull-request' && prepared?.delivery ? prepared : null
+    const delivering = prepared?.delivery ? prepared : null
     let artifacts: RunOutput['artifacts'] = []
     if (prepared) {
       try { artifacts = await gitArtifacts(prepared, { lookupPr: !delivering }) }

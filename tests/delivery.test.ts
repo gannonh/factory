@@ -13,10 +13,10 @@ import { createApi, type InProcessApi } from '../server/api'
 import { runCommand } from '../server/commands'
 import { createLinearClient, type LinearClient } from '../server/linear'
 import { MockServer } from '../server/simulation'
-import { SimulatedRunner, type Runner } from '../server/runners'
+import { SimulatedRunner, deliver, failureReason, prepareWorkdir, type Runner } from '../server/runners'
 import { fileStore } from '../server/worldFile'
 import { createHistory } from '../src/history'
-import type { AgentId, EdgeId, IssueId, Run, SandboxId, TriggerId } from '../src/domain/types'
+import type { AgentId, EdgeId, IssueId, Run, RunId, SandboxId, TriggerId } from '../src/domain/types'
 import { makeFixture, RNG } from './fixture'
 
 const roots: string[] = []
@@ -81,29 +81,45 @@ const remoteBranches = (origin: string) => git(origin, 'for-each-ref', '--format
 
 type GhCall = { cwd: string; argv: string[] }
 
-/** A fake `gh` first on PATH. It answers `pr create` with pull request 40 plus its call count, or fails once after `failNext`. */
+/**
+ * A fake `gh` first on PATH that keeps one pull request per head branch, as GitHub does. `pr view <branch>` prints
+ * that branch's PR or fails; `pr create` opens pull request 41, 42, … in order, or fails once after `failNext`.
+ */
 function fakeGh() {
   const dir = tempDir()
   const bin = join(dir, 'bin')
   mkdirSync(bin)
   const log = join(dir, 'gh.log')
+  const prs = join(dir, 'prs.json')
   const failMarker = join(dir, 'fail-next')
   writeFileSync(join(bin, 'gh'), `#!/usr/bin/env node
 const fs = require('node:fs')
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ cwd: process.cwd(), argv: process.argv.slice(2) }) + '\\n')
+const argv = process.argv.slice(2)
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ cwd: process.cwd(), argv }) + '\\n')
+const prs = fs.existsSync(${JSON.stringify(prs)}) ? JSON.parse(fs.readFileSync(${JSON.stringify(prs)}, 'utf8')) : {}
+if (argv[1] === 'view') {
+  if (!prs[argv[2]]) { console.error('no pull requests found for branch "' + argv[2] + '"'); process.exit(1) }
+  console.log(prs[argv[2]])
+  process.exit(0)
+}
 if (fs.existsSync(${JSON.stringify(failMarker)})) {
   fs.rmSync(${JSON.stringify(failMarker)})
   console.error('GraphQL: was submitted too quickly (createPullRequest)')
   process.exit(1)
 }
-const count = fs.readFileSync(${JSON.stringify(log)}, 'utf8').trim().split('\\n').length
-console.log('https://github.com/example/factory/pull/' + (40 + count))
+const url = 'https://github.com/example/factory/pull/' + (41 + Object.keys(prs).length)
+prs[argv[argv.indexOf('--head') + 1]] = url
+fs.writeFileSync(${JSON.stringify(prs)}, JSON.stringify(prs))
+console.log(url)
 `)
   chmodSync(join(bin, 'gh'), 0o755)
+  const calls = (): GhCall[] => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as GhCall) : []
   return {
     bin,
-    calls: (): GhCall[] => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as GhCall) : [],
+    calls,
+    creates: () => calls().filter((c) => c.argv[1] === 'create'),
     failNext: () => writeFileSync(failMarker, ''),
+    openPullRequest: (branch: string, url: string) => writeFileSync(prs, JSON.stringify({ [branch]: url })),
   }
 }
 
@@ -248,7 +264,7 @@ test('a delivering manual run pushes factory-<runId>, opens one PR without an is
   ] })
   expect(remoteBranches(repo.origin)).toEqual([branch, 'main'])
   expect(git(repo.origin, 'rev-parse', branch)).toBe(git(workdir, 'rev-parse', 'HEAD'))
-  expect(gh.calls()).toEqual([{ cwd: workdir, argv: ['pr', 'create', '--head', branch, '--base', 'main', '--title', 'Add change', '--body', 'Implemented Add change.'] }])
+  expect(gh.creates()).toEqual([{ cwd: workdir, argv: ['pr', 'create', '--head', branch, '--base', 'main', '--title', 'Add change', '--body', 'Implemented Add change.'] }])
 
   const handoff = Object.values(f.server.snapshot().tasks).find((t) => t.origin.kind === 'handoff' && t.origin.runId === run.id)!
   expect(handoff.agentId).toBe(REVIEWER)
@@ -275,7 +291,7 @@ test('an issue run cuts the issue branch from the fetched origin main, opens a P
   expect([existsSync(join(workdir, 'upstream.txt')), existsSync(join(workdir, 'local.txt'))]).toEqual([true, false])
   expect(f.server.snapshot().logs.map((l) => l.msg)).toContain(`working directory: ${workdir} on branch eng-1-fix-login from origin/main`)
   expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login')).toBe(git(workdir, 'rev-parse', 'HEAD'))
-  expect(gh.calls().map((c) => c.argv)).toEqual([[
+  expect(gh.creates().map((c) => c.argv)).toEqual([[
     'pr', 'create', '--head', 'eng-1-fix-login', '--base', 'main', '--title', 'ENG-1 Fix login', '--body', `Implemented ENG-1 Fix login.\n\n${ISSUE_URL}`,
   ]])
 
@@ -333,7 +349,7 @@ test('a rejected push fails the run with delivery failed, and the retry delivers
   const first = await takeIssue(f)
 
   expect(first.status).toBe('failed')
-  expect(first.error).toBe('delivery failed: git push: ! [remote rejected] eng-1-fix-login -> eng-1-fix-login (pre-receive hook declined)')
+  expect(first.error).toBe('delivery failed: git push: ! [remote rejected] HEAD -> eng-1-fix-login (pre-receive hook declined)')
   expect(f.server.snapshot().tasks[first.taskId].status).toBe('waiting')
   expect(gh.calls()).toEqual([])
 
@@ -343,7 +359,7 @@ test('a rejected push fails the run with delivery failed, and the retry delivers
   expect(git(workdir, 'branch', '--show-current')).toBe('eng-1-fix-login-2')
   expect(remoteBranches(repo.origin)).toEqual(['eng-1-fix-login-2', 'main'])
   expect(git(repo.root, 'rev-parse', 'refs/heads/eng-1-fix-login')).toBe(git(workdirOf(repo.root, first), 'rev-parse', 'HEAD'))
-  expect(gh.calls().map((c) => c.argv.slice(0, 4))).toEqual([['pr', 'create', '--head', 'eng-1-fix-login-2']])
+  expect(gh.creates().map((c) => c.argv.slice(0, 4))).toEqual([['pr', 'create', '--head', 'eng-1-fix-login-2']])
   expect((await issue('ENG-1')).attachments.map((a) => a.url)).toEqual(['https://github.com/example/factory/pull/41'])
   await f.server.close()
 })
@@ -364,9 +380,9 @@ test('a failed PR creation fails the run, the retry leaves the pushed branch unt
   expect(second.status).toBe('succeeded')
   expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login')).toBe(firstHead)
   expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login-2')).toBe(git(workdirOf(repo.root, second), 'rev-parse', 'HEAD'))
-  expect(gh.calls().map((c) => c.argv.slice(2, 4))).toEqual([['--head', 'eng-1-fix-login'], ['--head', 'eng-1-fix-login-2']])
+  expect(gh.creates().map((c) => c.argv.slice(2, 4))).toEqual([['--head', 'eng-1-fix-login'], ['--head', 'eng-1-fix-login-2']])
   const after = await issue('ENG-1')
-  expect(after.attachments).toEqual([{ id: 'attachment-1', url: 'https://github.com/example/factory/pull/42', title: 'Pull request #42' }])
+  expect(after.attachments).toEqual([{ id: 'attachment-1', url: 'https://github.com/example/factory/pull/41', title: 'Pull request #41' }])
   expect(after.comments).toHaveLength(1)
   expect(after.comments[0].body.match(/- pr: /g)).toHaveLength(1)
   expect(await requests()).toMatchObject({ FactoryCreateAttachment: 1 })
@@ -385,4 +401,79 @@ test('a delivering agent on a root with no origin remote fails the run before th
   const run = await nextAttempt(f)
   expect([run.status, run.error, starts]).toEqual(['failed', 'delivery failed: sandbox root has no origin remote', 0])
   await f.server.close()
+})
+
+test('a pull request the agent opened itself is reused, not opened twice', async () => {
+  const repo = repository()
+  const runner: Runner = {
+    execution: 'local',
+    start({ run, task, workdir }, emit) {
+      commitFile(workdir, 'change.txt', `change for ${task.title}`)
+      gh.openPullRequest(`factory-${run.id}`, 'https://github.com/example/factory/pull/7')
+      emit({ kind: 'complete', status: 'succeeded', result: 'Opened my own PR.' })
+    },
+    kill() {},
+  }
+  const f = factory(repo.root, runner)
+  f.api.agents.enqueue(CODER, { title: 'Add change', prompt: 'p', priority: 'normal' })
+  const run = await nextAttempt(f)
+
+  expect(run.status).toBe('succeeded')
+  expect(run.output?.artifacts.at(-1)).toEqual({ kind: 'pr', label: 'Pull request #7', url: 'https://github.com/example/factory/pull/7' })
+  expect(gh.creates()).toEqual([])
+  await f.server.close()
+})
+
+test('commits an agent made on a branch of its own are delivered on the planned branch', async () => {
+  const repo = repository()
+  const runner: Runner = {
+    execution: 'local',
+    start({ task, workdir }, emit) {
+      git(workdir, 'checkout', '--quiet', '-b', 'agent-side-branch')
+      commitFile(workdir, 'change.txt', `change for ${task.title}`)
+      emit({ kind: 'complete', status: 'succeeded', result: 'Committed on my own branch.' })
+    },
+    kill() {},
+  }
+  const f = factory(repo.root, runner)
+  f.api.agents.enqueue(CODER, { title: 'Add change', prompt: 'p', priority: 'normal' })
+  const run = await nextAttempt(f)
+
+  const workdir = workdirOf(repo.root, run)
+  expect(run.status).toBe('succeeded')
+  expect(git(repo.origin, 'rev-parse', `factory-${run.id}`)).toBe(git(workdir, 'rev-parse', 'HEAD'))
+  expect(gh.creates().map((c) => c.argv.slice(2, 4))).toEqual([['--head', `factory-${run.id}`]])
+  await f.server.close()
+})
+
+test('a pull request for a GitHub origin names that repository', async () => {
+  const repo = repository()
+  const workdir = join(repo.root, 'wt')
+  git(repo.root, 'worktree', 'add', '--quiet', '-b', 'feature-x', workdir, 'origin/main')
+  const initialHead = git(workdir, 'rev-parse', 'HEAD')
+  commitFile(workdir, 'change.txt', 'change')
+  git(repo.root, 'remote', 'set-url', 'origin', 'https://github.com/acme/widgets.git')
+  git(repo.root, 'remote', 'set-url', '--push', 'origin', repo.origin)
+
+  const artifacts = await deliver({ path: workdir, initialHead, delivery: { branch: 'feature-x', base: 'main' } }, { title: 'T', body: 'B' })
+
+  expect(artifacts).toEqual([{ kind: 'pr', label: 'Pull request #41', url: 'https://github.com/example/factory/pull/41' }])
+  expect(gh.calls().map((c) => c.argv)).toEqual([
+    ['pr', 'view', 'feature-x', '--repo', 'github.com/acme/widgets', '--json', 'url', '--jq', '.url'],
+    ['pr', 'create', '--head', 'feature-x', '--base', 'main', '--title', 'T', '--body', 'B', '--repo', 'github.com/acme/widgets'],
+  ])
+})
+
+test('two runs preparing the same branch at once get distinct names', async () => {
+  const repo = repository()
+  const [a, b] = await Promise.all([
+    prepareWorkdir(repo.root, 'run-a' as RunId, { branch: 'eng-1-fix-login' }),
+    prepareWorkdir(repo.root, 'run-b' as RunId, { branch: 'eng-1-fix-login' }),
+  ])
+  expect([a.delivery?.branch, b.delivery?.branch]).toEqual(['eng-1-fix-login', 'eng-1-fix-login-2'])
+})
+
+test('a git or gh step that times out reports the timeout, not its last output line', () => {
+  expect(failureReason(Object.assign(new Error('Command failed'), { killed: true, stderr: 'Creating pull request for x into main\n' }))).toBe('timed out')
+  expect(failureReason(Object.assign(new Error('Command failed'), { killed: false, stderr: 'remote: hi\nfatal: unable to access\n' }))).toBe('fatal: unable to access')
 })
