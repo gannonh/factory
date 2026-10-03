@@ -865,13 +865,15 @@ export class MockServer {
     if (!this.pollable(tr) || !sameSettings(tr.linear, settings)) return
     this.world.intakePolls = { ...this.world.intakePolls, [id]: { at: this.clock(), error } }
     const queued = refreshed.length > 0 ? this.pendingIssueTasks() : new Map<FlowId, Task>()
+    const unread: string[] = []
     for (const issueId of refreshed) {
       const status = states.get(issueId)
       this.followIssue(issueId, status?.state ?? null, settings)
-      if (status) this.refreshUnstarted(issueId, status, queued)
+      if (status && this.refreshUnstarted(issueId, status, queued) && status.moreRelations) unread.push(this.world.intake[issueId].issue.identifier)
     }
     const feed = Object.values(this.world.edges).find((e) => e.kind === 'triggers' && e.source === id && this.world.agents[e.target as AgentId])
     if (!feed) {
+      this.warnUnreadRelations(unread)
       this.publish()
       return
     }
@@ -891,7 +893,9 @@ export class MockServer {
       const record: IntakeRecord = { issue: issue.ref, trigger: id, flowId, takenAt: this.clock(), phase: 'taken', writes: [], states, cancel: null, blockers: issue.blockers }
       this.world.intake = { ...this.world.intake, [issue.ref.id]: record }
       taken.push(issue.ref.identifier)
+      if (issue.moreRelations) unread.push(issue.ref.identifier)
     }
+    this.warnUnreadRelations(unread)
     if (taken.length > 0) {
       this.patchTrigger(id, { lastFiredAt: this.world.now, fired: tr.fired + taken.length })
       this.event('trigger', { kind: 'trigger', id }, `${tr.name} took ${taken.join(', ')}`)
@@ -908,15 +912,23 @@ export class MockServer {
     return found
   }
 
-  /** Until its flow's first run starts, a taken issue follows its priority and blockers in Linear, wherever the issue sits. */
-  private refreshUnstarted(issueId: IssueId, status: IssueStatus, queued: Map<FlowId, Task>) {
+  private warnUnreadRelations(identifiers: string[]) {
+    if (identifiers.length > 0) this.log('warn', `${identifiers.join(', ')}: blockers beyond the first 100 relations are not read`)
+  }
+
+  /**
+   * Until its flow's first run starts, a taken issue follows its priority and blockers in Linear, wherever the issue sits.
+   * Returns whether the record was still unstarted.
+   */
+  private refreshUnstarted(issueId: IssueId, status: IssueStatus, queued: Map<FlowId, Task>): boolean {
     const record = this.world.intake[issueId]
-    if (!record || record.phase !== 'taken' || record.cancel !== null) return
+    if (!record || record.phase !== 'taken' || record.cancel !== null) return false
     if (JSON.stringify(record.blockers) !== JSON.stringify(status.blockers)) {
       this.world.intake = { ...this.world.intake, [issueId]: { ...record, blockers: status.blockers } }
     }
     const task = queued.get(record.flowId)
     if (task && task.priority !== status.priority) this.patchTask(task.id, { priority: status.priority })
+    return true
   }
 
   /** Cancels the issue's flow when the issue has left the trigger's states in Linear. */

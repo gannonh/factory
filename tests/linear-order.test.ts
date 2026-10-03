@@ -87,18 +87,22 @@ test('Linear priority maps Urgent and High to high, Medium and No priority to no
   ])
 })
 
-test('the Linear client reads an unknown priority as normal and takes blockers only from inverse blocks relations', async () => {
+test('the Linear client reads an unknown priority as normal, takes blockers only from inverse blocks relations, and reports unread relations', async () => {
   const related = (type: string, identifier: string, state: { name: string; type: string }) =>
     ({ type, issue: { id: `id-${identifier}`, identifier, url: `https://linear.app/x/${identifier}`, state } })
   const node = {
     id: 'issue-1', identifier: 'ENG-1', title: 'Fix login', description: null, url: 'https://linear.app/x/ENG-1', branchName: 'eng-1', priority: 7,
-    inverseRelations: { nodes: [related('blocks', 'OPS-4', { name: 'In Review', type: 'started' }), related('related', 'ENG-9', { name: 'Todo', type: 'unstarted' })] },
+    inverseRelations: {
+      nodes: [related('blocks', 'OPS-4', { name: 'In Review', type: 'started' }), related('related', 'ENG-9', { name: 'Todo', type: 'unstarted' })],
+      pageInfo: { hasNextPage: true },
+    },
   }
   const page = { data: { issues: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } }
   const fetch = () => Promise.resolve(new Response(JSON.stringify(page)))
   const [issue] = await client({ fetch }).issues(LIFECYCLE)
   expect(issue.priority).toBe('normal')
   expect(issue.blockers).toEqual([{ id: 'id-OPS-4', identifier: 'OPS-4', url: 'https://linear.app/x/OPS-4', state: { name: 'In Review', type: 'started' } }])
+  expect(issue.moreRelations).toBe(true)
 })
 
 test('with one agent slot, waiting issues at Low, Urgent and Medium start Urgent, Medium, Low', async () => {
@@ -283,5 +287,24 @@ test('issueStates reads each issue’s state, priority and blockers', async () =
     state: { id: 'state-eng-todo', name: 'Todo', type: 'unstarted' },
     priority: 'high',
     blockers: [{ id: 'issue-ops-1', identifier: 'OPS-1', url: 'https://linear.app/fake/issue/OPS-1/ship-schema', state: { name: 'In Progress', type: 'started' } }],
+    moreRelations: false,
   }]])
+})
+
+test('an issue with more than 100 relations logs one warning per poll that the rest are not read', async () => {
+  const blockers: string[] = []
+  for (let n = 1; n <= 101; n++) {
+    await addIssue(`Prerequisite ${n}`, { state: 'Backlog' })
+    blockers.push(`ENG-${n}`)
+  }
+  await addIssue('Use everything', { blockedBy: blockers })
+  const wall = wallClock()
+  const f = oneSlot(wall)
+  const warnings = () => f.world().logs.filter((l) => l.level === 'warn').map((l) => l.msg)
+  await start(f)
+  expect(warnings()).toEqual(['ENG-102: blockers beyond the first 100 relations are not read'])
+  expect(f.world().intake['issue-eng-102' as IssueId].blockers).toHaveLength(100)
+
+  await nextPoll(f, wall)
+  expect(warnings()).toEqual(['ENG-102: blockers beyond the first 100 relations are not read', 'ENG-102: blockers beyond the first 100 relations are not read'])
 })

@@ -34,7 +34,7 @@ Refreshing only on the pickup poll keeps the cost at one request per trigger per
 
 ## Limits
 
-Blockers refresh only while the flow has not started. A blocker added after the first run starts does not stop the flow, and the inspector then shows the states from the last read. A disabled trigger does not poll, so its waiting issues keep their last known blockers until it is enabled again. Factory reads the first 50 relations of each issue. Within one priority, issues start in the order Factory took them, and estimates and cycles play no part. The canvas draws no edges for relations.
+Blockers refresh only while the flow has not started. A blocker added after the first run starts does not stop the flow, and the inspector then shows the states from the last read. A disabled trigger does not poll, so its waiting issues keep their last known blockers until it is enabled again. Linear cannot filter an issue's inverse relations by type, so Factory reads the first 100 relations of any type and picks the `blocks` ones. When an issue has more, each poll logs a warning naming the issue, and blockers beyond the first 100 relations are not read. Within one priority, issues start in the order Factory took them, and estimates and cycles play no part. The canvas draws no edges for relations.
 
 ## When to reopen
 

@@ -66,7 +66,8 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
   const issueById = (id: string | undefined) => issues.find((i) => i.id === id) ?? notFound()
   const stateOf = (issue: Issue) => teams.find((t) => t.id === issue.team)!.states.find((s) => s.id === issue.state)!
   const inverseRelations = (blockedBy: string[]) => ({
-    nodes: blockedBy.map((blockerId) => {
+    pageInfo: { hasNextPage: blockedBy.length > 100 },
+    nodes: blockedBy.slice(0, 100).map((blockerId) => {
       const blocker = issueById(blockerId)
       const state = stateOf(blocker)
       return { type: 'blocks', issue: { id: blocker.id, identifier: blocker.identifier, url: blocker.url, state: { name: state.name, type: state.type } } }

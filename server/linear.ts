@@ -6,8 +6,11 @@ export const LINEAR_URL = 'https://api.linear.app/graphql'
 const TIMEOUT_MS = 15_000
 const PAGE_SIZE = 50
 
-/** `blockers` are the issues that block this one through a `blocks` relation, from any team. */
-export type LinearIssue = { ref: IssueRef; title: string; description: string; priority: Priority; blockers: IssueBlocker[] }
+/**
+ * `blockers` are the issues that block this one through a `blocks` relation, from any team.
+ * `moreRelations` is true when the issue has relations beyond the first 100, whose blockers are not read.
+ */
+export type LinearIssue = { ref: IssueRef; title: string; description: string; priority: Priority; blockers: IssueBlocker[]; moreRelations: boolean }
 
 /** Linear's priority numbers: 0 No priority, 1 Urgent, 2 High, 3 Medium, 4 Low. */
 export const LINEAR_PRIORITY: Record<0 | 1 | 2 | 3 | 4, Priority> = { 0: 'normal', 1: 'high', 2: 'high', 3: 'normal', 4: 'low' }
@@ -18,7 +21,7 @@ const priorityOf = (n: number): Priority => LINEAR_PRIORITY[n as keyof typeof LI
 export type IssueState = { id: string; name: string; type: WorkflowStateType }
 
 /** What a poll reads of a taken issue: where it sits, and the priority and blockers that order it until its flow starts. */
-export type IssueStatus = { state: IssueState; priority: Priority; blockers: IssueBlocker[] }
+export type IssueStatus = { state: IssueState; priority: Priority; blockers: IssueBlocker[]; moreRelations: boolean }
 
 /** The write methods converge: each checks Linear first, so repeating one after a lost answer changes nothing. */
 export type LinearClient = {
@@ -60,7 +63,8 @@ export const CATALOG_QUERY = `query FactoryCatalog {
   }
 }`
 
-const RELATIONS = 'inverseRelations(first: 50) { nodes { type issue { id identifier url state { name type } } } }'
+// Linear cannot filter inverseRelations by type, so the blocks relations are picked from the first 100 of any type.
+const RELATIONS = 'inverseRelations(first: 100) { nodes { type issue { id identifier url state { name type } } } pageInfo { hasNextPage } }'
 
 export const ISSUES_QUERY = `query FactoryIssues($filter: IssueFilter!, $first: Int!, $after: String) {
   issues(filter: $filter, first: $first, after: $after) {
@@ -117,7 +121,7 @@ const catalogData = object({ teams: nodes(team) })
 
 // "A blocks B" is a `blocks` relation stored on A, so B's blockers are the `issue` of B's inverse `blocks` relations.
 type Relation = { type: string; issue: IssueBlocker }
-type Relations = { nodes: Relation[] }
+type Relations = { nodes: Relation[]; pageInfo: { hasNextPage: boolean } }
 type IssueNode = {
   id: string; identifier: string; title: string; description: string | null; url: string; branchName: string; priority: number
   inverseRelations: Relations
@@ -129,7 +133,7 @@ const issuePage = <T>(node: Parser<T>) => object({
   issues: object<Page<T>>({ nodes: array(node), pageInfo: object({ hasNextPage: boolean, endCursor: nullable(string) }) }),
 })
 
-const relations = nodes(object<Relation>({ type: string, issue: issueBlocker }))
+const relations = object<Relations>({ nodes: array(object<Relation>({ type: string, issue: issueBlocker })), pageInfo: object({ hasNextPage: boolean }) })
 const blockersOf = (r: Relations): IssueBlocker[] => r.nodes.filter((relation) => relation.type === 'blocks').map((relation) => relation.issue)
 
 const issuesData = issuePage(object<IssueNode>({
@@ -234,12 +238,15 @@ export function createLinearClient(options: {
         description: n.description ?? '',
         priority: priorityOf(n.priority),
         blockers: blockersOf(n.inverseRelations),
+        moreRelations: n.inverseRelations.pageInfo.hasNextPage,
       }))
     },
     async issueStates(ids) {
       if (ids.length === 0) return new Map()
       const nodes = await pages('FactoryIssueStates', ISSUE_STATES_QUERY, { id: { in: ids } }, issueStatesData)
-      return new Map(nodes.map((n) => [n.id as IssueId, { state: n.state, priority: priorityOf(n.priority), blockers: blockersOf(n.inverseRelations) }]))
+      return new Map(nodes.map((n) => [n.id as IssueId, {
+        state: n.state, priority: priorityOf(n.priority), blockers: blockersOf(n.inverseRelations), moreRelations: n.inverseRelations.pageInfo.hasNextPage,
+      }]))
     },
     async ensureState(issueId, stateId, from) {
       const { issue } = await request('FactoryIssueState', ISSUE_STATE_QUERY, { id: issueId }, issueStateData)
