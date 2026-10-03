@@ -188,15 +188,17 @@ export type IntakePreview = { count: number; issues: Array<{ identifier: string;
 export type RecommendedStates = Pick<LinearSettings, 'startedState' | 'finishedState' | 'failedState'> & { pickupState: string | null }
 
 /**
- * Epic decision 8, by position: pickup is the first `unstarted` state (Todo), started is the
- * first `started` state (In Progress), finished is the first `started` state named like review,
- * and failed leaves the issue where it is.
+ * Epic decision 8, by position: pickup is the first `unstarted` state with the word Start, else the
+ * first `unstarted` state (Todo). A Start state is the explicit signal to build, so a workflow
+ * that has one keeps Todo as a queue. Started is the first `started` state (In Progress),
+ * finished is the first `started` state named like review, and failed leaves the issue where it is.
  */
 export function recommendedStates(states: readonly WorkflowState[]): RecommendedStates {
   const ordered = [...states].sort((a, b) => a.position - b.position)
+  const unstarted = ordered.filter((s) => s.type === 'unstarted')
   const started = ordered.filter((s) => s.type === 'started')
   return {
-    pickupState: ordered.find((s) => s.type === 'unstarted')?.id ?? null,
+    pickupState: (unstarted.find((s) => /\bstart\b/i.test(s.name)) ?? unstarted[0])?.id ?? null,
     startedState: started[0]?.id ?? null,
     finishedState: started.find((s) => /review/i.test(s.name))?.id ?? null,
     failedState: null,
