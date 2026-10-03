@@ -18,7 +18,9 @@ async function control(body: Record<string, unknown>): Promise<unknown> {
   return response.json()
 }
 const addIssue = (title: string, fields: Record<string, unknown> = {}) => control({ op: 'addIssue', title, ...fields })
-const issue = (identifier: string) => control({ op: 'issue', identifier }) as Promise<{ state: string; comments: Array<{ id: string; body: string }> }>
+const issue = (identifier: string) => control({ op: 'issue', identifier }) as Promise<{
+  state: string; comments: Array<{ id: string; body: string }>; attachments: Array<{ id: string; url: string; title: string }>
+}>
 const requests = async () => ((await control({ op: 'stats' })) as { requests: Record<string, number> }).requests
 
 const client = () => createLinearClient({ url: fake.url, apiKey: KEY })
@@ -56,7 +58,8 @@ async function untilFlowEnds(f: Fixture) {
 }
 
 const runsInOrder = (f: Fixture): Run[] => Object.values(f.world().runs).sort((a, b) => a.startedAt - b.startedAt)
-const writeSteps = (f: Fixture) => f.world().intake[ENG_1].writes.map((w) => [w.kind === 'move' ? `move ${w.step}` : `note ${w.outcome}`, w.status.state])
+const writeSteps = (f: Fixture) => f.world().intake[ENG_1].writes.map((w) =>
+  [w.kind === 'move' ? `move ${w.step}` : w.kind === 'attach' ? `attach ${w.url}` : `note ${w.outcome}`, w.status.state])
 const failFast = (f: Fixture, agent: AgentId, maxAttempts: number) =>
   f.api.agents.update(agent, { timeoutMs: 5000, retry: { maxAttempts, backoffMs: 1000, backoff: 'fixed' } })
 
@@ -74,6 +77,15 @@ test('ensureComment creates the comment under its id once', async () => {
   await client().ensureComment(ENG_1, COMMENT_ID, 'Factory finished this issue.')
   expect((await issue('ENG-1')).comments).toEqual([{ id: COMMENT_ID, body: 'Factory finished this issue.' }])
   expect(await requests()).toEqual({ FactoryIssueComment: 2, FactoryCreateComment: 1 })
+})
+
+test('ensureAttachment links a URL once, however often it is repeated', async () => {
+  await addIssue('Fix login')
+  const url = 'https://github.com/example/factory/pull/41'
+  await client().ensureAttachment(ENG_1, url, 'Pull request #41')
+  await client().ensureAttachment(ENG_1, url, 'Pull request #41')
+  expect((await issue('ENG-1')).attachments).toEqual([{ id: 'attachment-1', url, title: 'Pull request #41' }])
+  expect(await requests()).toEqual({ FactoryIssueAttachment: 2, FactoryCreateAttachment: 1 })
 })
 
 test('a failed write rejects with the api error, and the fake refuses a second comment with the same id', async () => {
@@ -206,6 +218,7 @@ function dying(dies: (write: string) => boolean) {
       await real.ensureComment(issueId, commentId, body)
       if (dies('note')) return hang()
     },
+    ensureAttachment: (issueId, url, title) => real.ensureAttachment(issueId, url, title),
   }
   return { linear, died }
 }
@@ -378,4 +391,18 @@ Reviewed.
 Failed: timeout
 
 Signed by Factory. Runs: run-r, run-q2. Agents: ag-gone, Reviewer, QA.`)
+})
+
+test('a simulated run’s demo PR link is listed in the note but never attached to the issue', async () => {
+  await addIssue('Review login')
+  const f = makeFixture({ linear: client(), clock: wallClock().read })
+  linearTrigger(f, f.agent('Reviewer'))
+  await step(f, 0)
+  await step(f, 1)
+  await step(f, 12_500)
+  expect(writeSteps(f)).toEqual([['move started', 'landed'], ['move finished', 'landed'], ['note finished', 'landed']])
+  const after = await issue('ENG-1')
+  expect(after.attachments).toEqual([])
+  expect(after.comments[0].body).toMatch(/- pr: \[Pull request #\d+\]\(https:\/\/github\.com\/factory-demo\/factory\/pull\/\d+\)/)
+  expect(Object.keys(await requests())).not.toContain('FactoryCreateAttachment')
 })

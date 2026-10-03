@@ -2,7 +2,7 @@ import { Pause, Play, Plus, Send, X } from 'lucide-react'
 import { useState } from 'react'
 import { api } from '../../api/client'
 import { TOOL_CATALOG } from '../../domain/seed'
-import { AGENT_STATUS_COLOR, MODELS, TASK_STATUS_COLOR, type Agent, type AgentPatch, type ModelName, type Priority } from '../../domain/types'
+import { AGENT_STATUS_COLOR, MODELS, TASK_STATUS_COLOR, type Agent, type AgentPatch, type Delivery, type ModelName, type Priority } from '../../domain/types'
 import { history, useStore } from '../../store'
 import { Badge, Button, Dot, DraftInput, DraftTextarea, Field, Input, Section, Select, Textarea, cx, fmtDuration } from '../ui'
 import { useWallNow } from '../../useWallNow'
@@ -95,6 +95,11 @@ export function AgentInspector({ agent }: { agent: Agent }) {
             </Select>
           </Field>
         </div>
+        <Field label="Delivery">
+          <Select value={agent.delivery} onChange={(e) => update({ delivery: e.target.value as Delivery })}>
+            <option value="none">None</option><option value="pull-request">Pull request</option>
+          </Select>
+        </Field>
       </Section>
 
       <Section title="Tools">

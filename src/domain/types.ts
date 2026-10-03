@@ -28,6 +28,10 @@ export type AgentStatus = 'idle' | 'working' | 'paused' | 'error'
 
 export type RetryPolicy = { maxAttempts: number; backoffMs: number; backoff: 'fixed' | 'exponential' }
 
+/** What Factory does with a succeeded local run's commits: nothing, or push the branch and open a pull request (ADR 0009). */
+export type Delivery = 'none' | 'pull-request'
+export const DELIVERIES: Delivery[] = ['none', 'pull-request']
+
 export type Agent = {
   id: AgentId
   name: string
@@ -39,6 +43,7 @@ export type Agent = {
   retry: RetryPolicy
   tools: string[]
   systemPrompt: string
+  delivery: Delivery
   status: AgentStatus
   position: Position
   completed: number
@@ -151,10 +156,14 @@ export type IssueRef = { backend: 'linear'; id: IssueId; identifier: string; url
 /** Where a write to Linear stands. `at` is wall-clock ms. */
 export type WriteStatus = { state: 'pending' } | { state: 'landed'; at: number } | { state: 'failed'; at: number; error: string }
 
-/** One write-back to the taken issue. A note's body and comment id are fixed when the write becomes due. The body is dropped once the note lands. */
+/**
+ * One write-back to the taken issue. A note's body and comment id are fixed when the write becomes due. The body is dropped once the note lands.
+ * An attach links one pull request a run delivered to the issue, keyed by its URL.
+ */
 export type IssueWrite =
   | { kind: 'move'; step: 'started' | 'finished' | 'failed'; stateId: string; status: WriteStatus }
   | { kind: 'note'; outcome: 'finished' | 'failed'; commentId: string; body: string | null; status: WriteStatus }
+  | { kind: 'attach'; url: string; title: string; status: WriteStatus }
 
 /** How far the issue's flow has gone: no run yet, a run started, or every task terminal. */
 export type IntakePhase = 'taken' | 'started' | 'ended'

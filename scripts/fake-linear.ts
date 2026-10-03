@@ -13,9 +13,10 @@ import type { WorkflowStateType } from '../src/domain/types'
 type State = { id: string; name: string; type: WorkflowStateType; position: number }
 type Team = { id: string; key: string; name: string; states: State[]; projects: Array<{ id: string; name: string }> }
 type Comment = { id: string; body: string }
+type Attachment = { id: string; url: string; title: string }
 type Issue = {
   id: string; identifier: string; title: string; description: string; url: string; branchName: string
-  team: string; state: string; project: string | null; comments: Comment[]
+  team: string; state: string; project: string | null; comments: Comment[]; attachments: Attachment[]
 }
 
 export type FakeLinear = { url: string; controlUrl: string; close: () => Promise<void> }
@@ -45,7 +46,8 @@ const slug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, '-').
 type Eq = { id?: { eq?: string } } | undefined
 type Variables = {
   filter?: { team?: Eq; state?: Eq; project?: Eq }; first?: number; after?: string | null
-  id?: string; stateId?: string; commentId?: string; input?: { id?: string; issueId?: string; body?: string }
+  id?: string; stateId?: string; commentId?: string; url?: string
+  input?: { id?: string; issueId?: string; body?: string; url?: string; title?: string }
 }
 
 export function startFakeLinear(options: { port?: number; apiKey?: string } = {}): Promise<FakeLinear> {
@@ -88,6 +90,7 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
         state: stateByName(team, String(body.state ?? 'Todo')).id,
         project: project?.id ?? null,
         comments: [],
+        attachments: [],
       }
       issues.push(issue)
       return view(issue)
@@ -161,6 +164,19 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       if (issues.some((i) => i.comments.some((c) => c.id === id))) throw new Error(`a comment with id ${id} already exists`)
       issue.comments.push({ id, body: input.body })
       return { commentCreate: { success: true } }
+    },
+    FactoryIssueAttachment: ({ id, url }) => {
+      const issue = issueById(id)
+      return { issue: { id: issue.id, attachments: { nodes: issue.attachments.filter((a) => a.url === url).map((a) => ({ id: a.id })) } } }
+    },
+    // Linear keeps one attachment per URL on an issue: creating it again updates the existing one.
+    FactoryCreateAttachment: ({ input = {} }) => {
+      const issue = issueById(input.issueId)
+      if (typeof input.url !== 'string' || typeof input.title !== 'string') throw new Error('Argument Validation Error: url and title are required')
+      const existing = issue.attachments.find((a) => a.url === input.url)
+      if (existing) existing.title = input.title
+      else issue.attachments.push({ id: `attachment-${issues.flatMap((i) => i.attachments).length + 1}`, url: input.url, title: input.title })
+      return { attachmentCreate: { success: true } }
     },
   }
 

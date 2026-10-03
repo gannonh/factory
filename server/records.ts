@@ -1,5 +1,5 @@
 import {
-  EDGE_KINDS, MODELS, SANDBOX_TRANSITIONS, isCapacity,
+  DELIVERIES, EDGE_KINDS, MODELS, SANDBOX_TRANSITIONS, isCapacity,
   type Agent, type AgentId, type Artifact, type Edge, type EdgeId, type FactoryEvent, type FlowId, type Group, type GroupId,
   type IntakeRecord, type IssueFilter, type IssueId, type IssueWrite, type IssueRef, type Lease, type LinearSettings, type Metrics, type NodeId, type Position, type Priority, type RetryPolicy, type Run, type RunId,
   type RunOutput, type Sandbox, type SandboxId, type SandboxKind, type SandboxState, type Subject,
@@ -35,12 +35,15 @@ export const agentFields = {
   timeoutMs: number,
   tools: array(string),
   systemPrompt: string,
+  delivery: oneOf(...DELIVERIES),
   completed: number,
   failed: number,
 }
 
+// `delivery` arrived after worlds were first saved; ADR 0002 has no migrations, so it defaults to off.
 export const agent = object<Agent>({
   ...agentFields,
+  delivery: defaulted(agentFields.delivery, () => 'none' as const),
   id: agentId,
   retry: object<RetryPolicy>(retryFields),
   status: oneOf('idle', 'working', 'paused', 'error'),
@@ -161,6 +164,7 @@ const writeStatus: Parser<WriteStatus> = (value, path) =>
 const issueWrite = tagged<IssueWrite>({
   move: object({ kind: oneOf('move'), step: oneOf('started', 'finished', 'failed'), stateId: string, status: writeStatus }),
   note: object({ kind: oneOf('note'), outcome: oneOf('finished', 'failed'), commentId: string, body: nullable(string), status: writeStatus }),
+  attach: object({ kind: oneOf('attach'), url: string, title: string, status: writeStatus }),
 })
 
 // A record saved before write-back counts as ended with nothing to write, so upgrading never posts notes for older flows.

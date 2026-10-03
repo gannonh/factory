@@ -14,6 +14,7 @@ function agent(p: Partial<Agent> & Pick<Agent, 'id' | 'name' | 'role' | 'positio
     retry: { maxAttempts: 3, backoffMs: 2000, backoff: 'exponential' },
     tools: ['read_file', 'write_file', 'bash'],
     systemPrompt: `You are ${p.name}, the ${p.role} for this team. Work in the assigned sandbox and hand off when done.`,
+    delivery: 'none',
     status: 'idle',
     completed: 0,
     failed: 0,

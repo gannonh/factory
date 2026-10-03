@@ -54,7 +54,7 @@ Canvas (React Flow v12)
 Agents
 
 - Roster with fleet KPIs: utilization, throughput, failure rate, average run time, tokens.
-- Inspector: name, role, model, temperature, concurrency, timeout, retry policy, tools editor, system prompt, live workload with per-run progress, pause and resume.
+- Inspector: name, role, model, temperature, concurrency, timeout, retry policy, delivery, tools editor, system prompt, live workload with per-run progress, pause and resume.
 - Task composer: title, prompt, priority. Tasks land in the queue and run when a sandbox is free.
 
 Sandboxes
@@ -103,12 +103,13 @@ Factory writes the flow's progress back to the issue. The decision is recorded i
 - The trigger also stores a started, a finished and a failed state. Each can be left unset, which leaves the issue where it is. Choosing a team fills the recommended states. Pickup is the first unstarted-type state whose name has the word Start, or the first unstarted-type state when no name has it. Started is the first started-type state, finished is the first started-type state named like review, and failed is unset.
 - The first run in the issue's flow moves the issue to the started state. Later runs in the flow do not move it again.
 - When every task in the flow has finished, the issue moves to the finished state and gets one comment. The comment lists each task in flow order with its agent, run id, summary and artifacts, and names Factory, the runs and the agents.
+- When the flow ends finished or failed, each pull request its real runs produced is attached to the issue once, keyed by URL.
 - When every task in the flow has ended and one failed with no retries left, the issue moves to the failed state and gets one comment with the failure reasons. A failed attempt that will retry, or a failed task whose siblings are still running, writes nothing yet.
 - Cancelling in Factory writes nothing yet.
-- The task inspector and the run inspector list each write and whether it landed, is pending or failed. A failed write shows its reason and retries on the next poll. A failed move holds back later moves but not the note. Task state does not change.
+- The task inspector and the run inspector list each write and whether it landed, is pending or failed. A failed write shows its reason and retries on the next poll. A failed move holds back later moves but not the note or an attachment. Task state does not change.
 - The server saves each comment's id before it posts the comment and checks for that id before posting, so a restart never posts a second comment. Issues taken before write-back existed are never written to.
 
-`scripts/fake-linear.ts` is a fake Linear API for tests and local trials. `npm run fake-linear -- --port 8790` starts it and prints its URL. Point the server at it with `FACTORY_LINEAR_URL=http://127.0.0.1:8790/graphql LINEAR_API_KEY=lin_api_fake`. It answers the write-back operations too and keeps each issue's comments. `POST /control` with a JSON body adds issues (`{"op":"addIssue","title":"...","state":"Todo","project":"Alpha"}`), moves them (`{"op":"moveIssue","identifier":"ENG-1","state":"Done"}`), shows one with its state name and comments (`{"op":"issue","identifier":"ENG-1"}`), forces a 401 (`{"op":"failAuth","on":true}`), makes the next requests of one operation answer an error (`{"op":"failNext","operation":"FactoryMoveIssue","times":1,"message":"rate limited"}`), counts requests by operation (`{"op":"stats"}`) and resets (`{"op":"reset"}`).
+`scripts/fake-linear.ts` is a fake Linear API for tests and local trials. `npm run fake-linear -- --port 8790` starts it and prints its URL. Point the server at it with `FACTORY_LINEAR_URL=http://127.0.0.1:8790/graphql LINEAR_API_KEY=lin_api_fake`. It answers the write-back operations too and keeps each issue's comments and attachments. `POST /control` with a JSON body adds issues (`{"op":"addIssue","title":"...","state":"Todo","project":"Alpha"}`), moves them (`{"op":"moveIssue","identifier":"ENG-1","state":"Done"}`), shows one with its state name, comments and attachments (`{"op":"issue","identifier":"ENG-1"}`), forces a 401 (`{"op":"failAuth","on":true}`), makes the next requests of one operation answer an error (`{"op":"failNext","operation":"FactoryMoveIssue","times":1,"message":"rate limited"}`), counts requests by operation (`{"op":"stats"}`) and resets (`{"op":"reset"}`).
 
 ## Real runs
 
@@ -117,12 +118,19 @@ A sandbox of kind `local` runs a real agent. Every other sandbox kind runs on th
 - The runner starts Claude Code in headless mode with a non-interactive permission mode and the agent's tool list. `claude` must be on the server's PATH and signed in.
 - The seeded local sandbox's root is `FACTORY_LOCAL_ROOT`, or the directory the server starts in. Each run works in `<root>/.factory-runs/<run id>`. When the root is the top of a git repository, that directory is a worktree on the branch `factory-<run id>`.
 - Logs and token counts stream into the dock. The run's output is the agent's final message plus git artifacts: the branch, the commits made during the run, and a PR link when `gh` finds one for the branch.
+
+An agent whose delivery is set to Pull request has Factory deliver its work. The decision is recorded in `docs/adr/0009-factory-delivers-pull-requests.md`.
+
+- The root must be the top of a git repository with an `origin` remote. The run fetches origin's default branch and cuts its worktree from it. The branch is the issue's Linear branch name for a task in an issue's flow, and `factory-<run id>` otherwise. A name already used locally or on origin gets a suffix: `-2`, `-3` and so on.
+- When the run succeeds with commits, Factory pushes the worktree's `HEAD` to `<branch>` on origin and runs `gh pr create`, or reuses a PR the agent already opened on that branch. The title is the task title. The body is the run summary, plus the issue URL for an issue task. The PR is a `pr` artifact in the run's output, so a handoff passes it to the next agent. `gh` must be on the server's PATH and signed in.
+- A run with no commits opens no PR. Its output has the note "No changes; no pull request opened".
+- A failed push or PR creation fails the run with `delivery failed: <reason>`, and the agent's retry policy applies. A retry pushes a new suffixed branch and never touches a branch an earlier attempt pushed.
 - Cancel and the agent's timeout kill the process. Pausing the simulation does not suspend a running process.
 - The seed's cron trigger that reaches the local sandbox is disabled, so starting Factory never starts a paid run by itself.
 
 ## Not built yet
 
-- Linking pull requests to Linear issues, reacting to changes made in Linear, other work backends, real webhook triggers, and Docker, VPS and remote sandboxes.
+- Pushing to an existing pull request, merging, review and CI handling, reacting to changes made in Linear, other work backends, real webhook triggers, and Docker, VPS and remote sandboxes.
 - Running the server on a remote host, auth, teams, multiple projects.
 
 ## License
