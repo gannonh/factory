@@ -53,7 +53,7 @@ import {
   type WriteStatus,
 } from '../src/domain/types'
 import type { WorldStore } from './worldFile'
-import { ClaudeRunner, SimulatedRunner, deliver, gitArtifacts, prepareWorkdir, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
+import { ClaudeRunner, SimulatedRunner, deliver, gitArtifacts, prepareWorkdir, type DeliveryRequest, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
 import type { RunLogStore } from './runLogs'
 import { array, boolean, defaulted, id, number, object, oneOf, record } from './parse'
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
@@ -1346,7 +1346,10 @@ export class MockServer {
       }, agent.timeoutMs)
       timeout.unref?.()
       this.localTimeouts.set(id, timeout)
-      const delivery = agent.delivery === 'pull-request' ? { branch: issueOfFlow(this.world, task.flowId)?.branchName ?? `factory-${id}` } : null
+      const rework = Object.values(this.world.intake).find((r) => r.flowId === task.flowId)?.rework
+      const delivery: DeliveryRequest | null = agent.delivery !== 'pull-request' ? null
+        : rework?.kind === 'continue' ? { kind: 'continue', branch: rework.branch, base: rework.base }
+        : { kind: 'new', branch: issueOfFlow(this.world, task.flowId)?.branchName ?? `factory-${id}` }
       void prepareWorkdir(sandbox.host, id, delivery).then((workdir) => {
         if (this.closed || this.world.runs[id]?.status !== 'running') return
         this.workdirs.set(id, workdir)

@@ -4,7 +4,7 @@
  * The agent is an in-process runner that commits a file in its working directory, like a real agent would.
  */
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'vitest'
@@ -17,6 +17,7 @@ import { SimulatedRunner, deliver, failureReason, prepareWorkdir, type Runner } 
 import { fileStore } from '../server/worldFile'
 import { createHistory } from '../src/history'
 import type { AgentId, EdgeId, IssueId, Run, RunId, SandboxId, TriggerId } from '../src/domain/types'
+import { fakeGh } from './fake-gh'
 import { makeFixture, RNG } from './fixture'
 
 const roots: string[] = []
@@ -79,55 +80,11 @@ function repository() {
 
 const remoteBranches = (origin: string) => git(origin, 'for-each-ref', '--format=%(refname:lstrip=2)', 'refs/heads/').split('\n')
 
-type GhCall = { cwd: string; argv: string[] }
-
-/**
- * A fake `gh` first on PATH that keeps one pull request per head branch, as GitHub does. `pr view <branch>` prints
- * that branch's PR as JSON or fails; `pr create` opens pull request 41, 42, … in order, or fails once after `failNext`.
- */
-function fakeGh() {
-  const dir = tempDir()
-  const bin = join(dir, 'bin')
-  mkdirSync(bin)
-  const log = join(dir, 'gh.log')
-  const prs = join(dir, 'prs.json')
-  const failMarker = join(dir, 'fail-next')
-  writeFileSync(join(bin, 'gh'), `#!/usr/bin/env node
-const fs = require('node:fs')
-const argv = process.argv.slice(2)
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ cwd: process.cwd(), argv }) + '\\n')
-const prs = fs.existsSync(${JSON.stringify(prs)}) ? JSON.parse(fs.readFileSync(${JSON.stringify(prs)}, 'utf8')) : {}
-if (argv[1] === 'view') {
-  if (!prs[argv[2]]) { console.error('no pull requests found for branch "' + argv[2] + '"'); process.exit(1) }
-  console.log(JSON.stringify(prs[argv[2]]))
-  process.exit(0)
-}
-if (fs.existsSync(${JSON.stringify(failMarker)})) {
-  fs.rmSync(${JSON.stringify(failMarker)})
-  console.error('GraphQL: was submitted too quickly (createPullRequest)')
-  process.exit(1)
-}
-const url = 'https://github.com/example/factory/pull/' + (41 + Object.keys(prs).length)
-prs[argv[argv.indexOf('--head') + 1]] = { url, state: 'OPEN', baseRefName: argv[argv.indexOf('--base') + 1] }
-fs.writeFileSync(${JSON.stringify(prs)}, JSON.stringify(prs))
-console.log(url)
-`)
-  chmodSync(join(bin, 'gh'), 0o755)
-  const calls = (): GhCall[] => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as GhCall) : []
-  return {
-    bin,
-    calls,
-    creates: () => calls().filter((c) => c.argv[1] === 'create'),
-    failNext: () => writeFileSync(failMarker, ''),
-    openPullRequest: (branch: string, url: string, baseRefName = 'main') => writeFileSync(prs, JSON.stringify({ [branch]: { url, state: 'OPEN', baseRefName } })),
-  }
-}
-
 let gh: ReturnType<typeof fakeGh>
 const previousPath = process.env.PATH
 beforeEach(async () => {
   await control({ op: 'reset' })
-  gh = fakeGh()
+  gh = fakeGh(tempDir())
   process.env.PATH = `${gh.bin}:${previousPath}`
 })
 afterEach(() => { process.env.PATH = previousPath })
@@ -468,8 +425,8 @@ test('a pull request for a GitHub origin names that repository', async () => {
 test('two runs preparing the same branch at once get distinct names', async () => {
   const repo = repository()
   const [a, b] = await Promise.all([
-    prepareWorkdir(repo.root, 'run-a' as RunId, { branch: 'eng-1-fix-login' }),
-    prepareWorkdir(repo.root, 'run-b' as RunId, { branch: 'eng-1-fix-login' }),
+    prepareWorkdir(repo.root, 'run-a' as RunId, { kind: 'new', branch: 'eng-1-fix-login' }),
+    prepareWorkdir(repo.root, 'run-b' as RunId, { kind: 'new', branch: 'eng-1-fix-login' }),
   ])
   expect([a.delivery?.branch, b.delivery?.branch]).toEqual(['eng-1-fix-login', 'eng-1-fix-login-2'])
 })
