@@ -12,7 +12,7 @@ import type { WorkflowStateType } from '../src/domain/types'
 
 type State = { id: string; name: string; type: WorkflowStateType; position: number }
 type Team = { id: string; key: string; name: string; states: State[]; projects: Array<{ id: string; name: string }> }
-type Comment = { id: string; body: string }
+type Comment = { id: string; body: string; createdAt: string; author: string | null }
 type Attachment = { id: string; url: string; title: string }
 type Issue = {
   id: string; identifier: string; title: string; description: string; url: string; branchName: string; priority: number
@@ -59,6 +59,9 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
   let failAuth = false
   let requests: Record<string, number> = {}
   let failures: Record<string, { times: number; message: string }> = {}
+  // Comment times only move forward, so a comment added right after another is always later.
+  let lastCommentAt = 0
+  const commentTime = () => new Date(lastCommentAt = Math.max(Date.now(), lastCommentAt + 1)).toISOString()
 
   const teamByKey = (key: string) => teams.find((t) => t.key === key) ?? missing(`team ${key}`)
   const stateByName = (team: Team, name: string) => team.states.find((s) => s.name === name) ?? missing(`state ${name}`)
@@ -138,6 +141,13 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       issue.deleted = true
       return view(issue)
     },
+    /** Adds a comment a person wrote. */
+    addComment(body) {
+      const issue = issueBy(String(body.identifier))
+      const comment = { id: `comment-${issues.flatMap((i) => i.comments).length + 1}`, body: String(body.body), createdAt: commentTime(), author: String(body.author ?? 'Someone') }
+      issue.comments.push(comment)
+      return comment
+    },
     issue: (body) => view(issueBy(String(body.identifier))),
     failAuth(body) {
       failAuth = body.on === true
@@ -208,8 +218,23 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       if (typeof input.body !== 'string' || input.body === '') throw new Error('Argument Validation Error: body should not be empty')
       const id = input.id ?? `comment-${issues.flatMap((i) => i.comments).length + 1}`
       if (issues.some((i) => i.comments.some((c) => c.id === id))) throw new Error(`a comment with id ${id} already exists`)
-      issue.comments.push({ id, body: input.body })
+      issue.comments.push({ id, body: input.body, createdAt: commentTime(), author: 'Factory' })
       return { commentCreate: { success: true } }
+    },
+    FactoryIssueComments: ({ id, first = 50, after = null }) => {
+      const issue = issueById(id)
+      const at = after === null ? -1 : issue.comments.findIndex((c) => c.id === after)
+      if (after !== null && at === -1) throw new Error(`invalid cursor ${after}`)
+      const nodes = issue.comments.slice(at + 1, at + 1 + first)
+      return {
+        issue: {
+          id: issue.id,
+          comments: {
+            nodes: nodes.map((c) => ({ id: c.id, body: c.body, createdAt: c.createdAt, user: c.author === null ? null : { name: c.author } })),
+            pageInfo: { hasNextPage: at + 1 + first < issue.comments.length, endCursor: nodes.at(-1)?.id ?? null },
+          },
+        },
+      }
     },
     FactoryIssueAttachment: ({ id, url }) => {
       const issue = issueById(id)

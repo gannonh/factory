@@ -174,15 +174,35 @@ export type FlowCancel = { kind: 'linear'; reason: string } | { kind: 'factory';
 /** The states a Linear trigger works in. An issue that leaves them while its flow is open cancels the flow. */
 export type TriggerStates = Pick<LinearSettings, 'pickupState' | 'startedState'>
 
+/** A pull request a round delivered. */
+export type PullRequestRef = Artifact & { url: string }
+
+/** How an ended round finished, the last pull request its flow delivered, and its last succeeded run's output for the next round. */
+export type RoundResult = { outcome: 'finished' | 'failed' | 'cancelled'; pr: PullRequestRef | null; output: TaskInput | null }
+
+/** An earlier round of the same issue. `result` is null for a round that ended before results were kept. */
+export type PastRound = { round: number; trigger: TriggerId; flowId: FlowId; takenAt: number; result: RoundResult | null }
+
 /**
- * One issue taken by intake. Retention never prunes these, so an issue never starts a second flow.
- * `writes` is the ordered write-back queue; each phase change appends to it and nothing removes from it.
+ * How a round after a delivered pull request starts its work: on the open PR's branch, or fresh from the default branch
+ * because the previous PR was merged or closed. Null for round 1 and for a round with no earlier PR.
+ */
+export type Rework =
+  | { kind: 'continue'; pr: PullRequestRef; branch: string; base: string }
+  | { kind: 'fresh'; pr: PullRequestRef; state: 'merged' | 'closed' }
+
+/**
+ * One issue taken by intake, keyed by issue across its rounds (ADR 0012). The flat fields describe the current round.
+ * Retention never prunes these, so an issue starts a new flow only as a new round.
+ * `writes` is the ordered write-back queue for every round; each phase change appends to it and nothing removes from it.
  * `states` are the trigger's states when it took the issue, or null for a record saved before they were kept.
  * `blockers` are the issues that block it in Linear, as of the last poll before its flow started.
+ * `left` is set once the issue has been seen outside the round's pickup state after the round ended, or Linear cancelled the round.
  */
 export type IntakeRecord = {
   issue: IssueRef; trigger: TriggerId; flowId: FlowId; takenAt: number; phase: IntakePhase; writes: IssueWrite[]
   states: TriggerStates | null; cancel: FlowCancel | null; blockers: IssueBlocker[]
+  round: number; rework: Rework | null; result: RoundResult | null; left: boolean; past: PastRound[]
 }
 
 /** An issue that blocks a taken issue in Linear, from any team, with its state when last read. */
@@ -422,8 +442,18 @@ export function taskOriginLabel(world: World, origin: Task['origin']): string {
   }
 }
 
+/** The intake record whose current or past round ran the flow, and that round's number. */
+export function roundOfFlow(world: World, flowId: FlowId): { record: IntakeRecord; round: number } | null {
+  for (const record of Object.values(world.intake)) {
+    if (record.flowId === flowId) return { record, round: record.round }
+    const past = record.past.find((r) => r.flowId === flowId)
+    if (past) return { record, round: past.round }
+  }
+  return null
+}
+
 export function issueOfFlow(world: World, flowId: FlowId): IssueRef | null {
-  return Object.values(world.intake).find((r) => r.flowId === flowId)?.issue ?? null
+  return roundOfFlow(world, flowId)?.record.issue ?? null
 }
 
 export function edgeKindFor(from: NodeKind, to: NodeKind): EdgeKind[] {
