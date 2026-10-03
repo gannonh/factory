@@ -257,3 +257,31 @@ test('an intake record saved before blockers were kept loads with none, and its 
   await step(second, 1)
   expect(queueRow(taskTitled(second, 'ENG-1 Fix login'))).toEqual({ status: 'running', blockedOn: null, attempts: 1 })
 })
+
+test('a blocked issue moved by hand to the trigger’s started state still follows its blockers and starts once they are done', async () => {
+  await addIssue('Ship schema', { state: 'In Review' })
+  await addIssue('Use schema', { blockedBy: ['ENG-1'] })
+  const wall = wallClock()
+  const f = oneSlot(wall)
+  await start(f)
+  expect(taskTitled(f, 'ENG-2 Use schema').blockedOn).toBe('blocked by ENG-1 (In Review)')
+
+  await moveIssue('ENG-2', 'In Progress')
+  await pollAndSchedule(f, wall)
+  expect(queueRow(taskTitled(f, 'ENG-2 Use schema'))).toEqual({ status: 'waiting', blockedOn: 'blocked by ENG-1 (In Review)', attempts: 0 })
+  expect(f.world().intake[ENG_2].cancel).toBeNull()
+
+  await moveIssue('ENG-1', 'Done')
+  await pollAndSchedule(f, wall)
+  expect(queueRow(taskTitled(f, 'ENG-2 Use schema'))).toEqual({ status: 'running', blockedOn: null, attempts: 1 })
+})
+
+test('issueStates reads each issue’s state, priority and blockers', async () => {
+  await addIssue('Ship schema', { team: 'OPS', state: 'In Progress' })
+  await addIssue('Use schema', { priority: URGENT, blockedBy: ['OPS-1'] })
+  expect([...(await client().issueStates(['issue-eng-1' as IssueId]))]).toEqual([['issue-eng-1', {
+    state: { id: 'state-eng-todo', name: 'Todo', type: 'unstarted' },
+    priority: 'high',
+    blockers: [{ id: 'issue-ops-1', identifier: 'OPS-1', url: 'https://linear.app/fake/issue/OPS-1/ship-schema', state: { name: 'In Progress', type: 'started' } }],
+  }]])
+})

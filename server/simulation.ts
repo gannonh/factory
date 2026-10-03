@@ -57,7 +57,7 @@ import { ClaudeRunner, SimulatedRunner, deliver, gitArtifacts, prepareWorkdir, t
 import type { RunLogStore } from './runLogs'
 import { array, boolean, defaulted, id, number, object, oneOf, record } from './parse'
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
-import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type LinearClient, type LinearIssue } from './linear'
+import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type IssueStatus, type LinearClient, type LinearIssue } from './linear'
 import { cancelRecord, flowAction, flowOutcome, landed, nextWrite, reconcileRecord, workingStates } from './writeBack'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
@@ -859,15 +859,16 @@ export class MockServer {
   }
 
   private finishPoll(
-    id: TriggerId, settings: LinearSettings, issues: LinearIssue[], refreshed: IssueId[], states: Map<IssueId, IssueState>, error: IntakeError | null,
+    id: TriggerId, settings: LinearSettings, issues: LinearIssue[], refreshed: IssueId[], states: Map<IssueId, IssueStatus>, error: IntakeError | null,
   ) {
     const tr = this.world.triggers[id]
     if (!this.pollable(tr) || !sameSettings(tr.linear, settings)) return
     this.world.intakePolls = { ...this.world.intakePolls, [id]: { at: this.clock(), error } }
-    for (const issueId of refreshed) this.followIssue(issueId, states.get(issueId) ?? null, settings)
-    for (const issue of issues) {
-      const record = this.world.intake[issue.ref.id]
-      if (record) this.refreshUnstarted(record, issue)
+    const queued = refreshed.length > 0 ? this.pendingIssueTasks() : new Map<FlowId, Task>()
+    for (const issueId of refreshed) {
+      const status = states.get(issueId)
+      this.followIssue(issueId, status?.state ?? null, settings)
+      if (status) this.refreshUnstarted(issueId, status, queued)
     }
     const feed = Object.values(this.world.edges).find((e) => e.kind === 'triggers' && e.source === id && this.world.agents[e.target as AgentId])
     if (!feed) {
@@ -898,15 +899,24 @@ export class MockServer {
     this.publish()
   }
 
-  /** Until its flow's first run starts, a taken issue follows its priority and blockers in Linear. */
-  private refreshUnstarted(record: IntakeRecord, issue: LinearIssue) {
-    if (record.phase !== 'taken' || record.cancel !== null) return
-    if (JSON.stringify(record.blockers) !== JSON.stringify(issue.blockers)) {
-      this.world.intake = { ...this.world.intake, [record.issue.id]: { ...record, blockers: issue.blockers } }
+  /** Each issue task that has not started yet, by flow. */
+  private pendingIssueTasks(): Map<FlowId, Task> {
+    const found = new Map<FlowId, Task>()
+    for (const t of Object.values(this.world.tasks)) {
+      if (t.origin.kind === 'issue' && (t.status === 'queued' || t.status === 'waiting')) found.set(t.flowId, t)
     }
-    const task = Object.values(this.world.tasks)
-      .find((t) => t.flowId === record.flowId && t.origin.kind === 'issue' && (t.status === 'queued' || t.status === 'waiting'))
-    if (task && task.priority !== issue.priority) this.patchTask(task.id, { priority: issue.priority })
+    return found
+  }
+
+  /** Until its flow's first run starts, a taken issue follows its priority and blockers in Linear, wherever the issue sits. */
+  private refreshUnstarted(issueId: IssueId, status: IssueStatus, queued: Map<FlowId, Task>) {
+    const record = this.world.intake[issueId]
+    if (!record || record.phase !== 'taken' || record.cancel !== null) return
+    if (JSON.stringify(record.blockers) !== JSON.stringify(status.blockers)) {
+      this.world.intake = { ...this.world.intake, [issueId]: { ...record, blockers: status.blockers } }
+    }
+    const task = queued.get(record.flowId)
+    if (task && task.priority !== status.priority) this.patchTask(task.id, { priority: status.priority })
   }
 
   /** Cancels the issue's flow when the issue has left the trigger's states in Linear. */

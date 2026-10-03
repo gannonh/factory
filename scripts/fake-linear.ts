@@ -65,6 +65,13 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
   const issueBy = (identifier: string) => issues.find((i) => i.identifier === identifier) ?? missing(`issue ${identifier}`)
   const issueById = (id: string | undefined) => issues.find((i) => i.id === id) ?? notFound()
   const stateOf = (issue: Issue) => teams.find((t) => t.id === issue.team)!.states.find((s) => s.id === issue.state)!
+  const inverseRelations = (blockedBy: string[]) => ({
+    nodes: blockedBy.map((blockerId) => {
+      const blocker = issueById(blockerId)
+      const state = stateOf(blocker)
+      return { type: 'blocks', issue: { id: blocker.id, identifier: blocker.identifier, url: blocker.url, state: { name: state.name, type: state.type } } }
+    }),
+  })
   const view = (issue: Issue) => {
     const team = teams.find((t) => t.id === issue.team)
     return {
@@ -171,20 +178,13 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
     }),
     FactoryIssues: (variables) => ({
       issues: page(variables, ({ id, identifier, title, description, url, branchName, priority, blockedBy }) => ({
-        id, identifier, title, description: description || null, url, branchName, priority,
-        inverseRelations: {
-          nodes: blockedBy.map((blockerId) => {
-            const blocker = issueById(blockerId)
-            const state = stateOf(blocker)
-            return { type: 'blocks', issue: { id: blocker.id, identifier: blocker.identifier, url: blocker.url, state: { name: state.name, type: state.type } } }
-          }),
-        },
+        id, identifier, title, description: description || null, url, branchName, priority, inverseRelations: inverseRelations(blockedBy),
       })),
     }),
     FactoryIssueStates: (variables) => ({
       issues: page(variables, (issue) => {
         const state = stateOf(issue)
-        return { id: issue.id, state: { id: state.id, name: state.name, type: state.type } }
+        return { id: issue.id, state: { id: state.id, name: state.name, type: state.type }, priority: issue.priority, inverseRelations: inverseRelations(issue.blockedBy) }
       }),
     }),
     FactoryIssueState: ({ id }) => {

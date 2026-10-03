@@ -17,13 +17,16 @@ const priorityOf = (n: number): Priority => LINEAR_PRIORITY[n as keyof typeof LI
 /** The workflow state an issue sits in now. */
 export type IssueState = { id: string; name: string; type: WorkflowStateType }
 
+/** What a poll reads of a taken issue: where it sits, and the priority and blockers that order it until its flow starts. */
+export type IssueStatus = { state: IssueState; priority: Priority; blockers: IssueBlocker[] }
+
 /** The write methods converge: each checks Linear first, so repeating one after a lost answer changes nothing. */
 export type LinearClient = {
   catalog(): Promise<LinearCatalog>
   /** Every issue matching the settings, across all pages. */
   issues(filter: IssueFilter): Promise<LinearIssue[]>
-  /** The current state of each listed issue that still exists. A deleted or archived issue is absent from the map. */
-  issueStates(ids: readonly IssueId[]): Promise<Map<IssueId, IssueState>>
+  /** The current status of each listed issue that still exists. A deleted or archived issue is absent from the map. */
+  issueStates(ids: readonly IssueId[]): Promise<Map<IssueId, IssueStatus>>
   /**
    * Leaves the issue in `stateId`, moving it only when it is elsewhere. With `from`, it moves only an issue in one of
    * those states and resolves false for any other, so Factory never undoes a move a person made in Linear.
@@ -57,19 +60,18 @@ export const CATALOG_QUERY = `query FactoryCatalog {
   }
 }`
 
+const RELATIONS = 'inverseRelations(first: 50) { nodes { type issue { id identifier url state { name type } } } }'
+
 export const ISSUES_QUERY = `query FactoryIssues($filter: IssueFilter!, $first: Int!, $after: String) {
   issues(filter: $filter, first: $first, after: $after) {
-    nodes {
-      id identifier title description url branchName priority
-      inverseRelations(first: 50) { nodes { type issue { id identifier url state { name type } } } }
-    }
+    nodes { id identifier title description url branchName priority ${RELATIONS} }
     pageInfo { hasNextPage endCursor }
   }
 }`
 
 export const ISSUE_STATES_QUERY = `query FactoryIssueStates($filter: IssueFilter!, $first: Int!, $after: String) {
   issues(filter: $filter, first: $first, after: $after) {
-    nodes { id state { id name type } }
+    nodes { id state { id name type } priority ${RELATIONS} }
     pageInfo { hasNextPage endCursor }
   }
 }`
@@ -115,22 +117,28 @@ const catalogData = object({ teams: nodes(team) })
 
 // "A blocks B" is a `blocks` relation stored on A, so B's blockers are the `issue` of B's inverse `blocks` relations.
 type Relation = { type: string; issue: IssueBlocker }
+type Relations = { nodes: Relation[] }
 type IssueNode = {
   id: string; identifier: string; title: string; description: string | null; url: string; branchName: string; priority: number
-  inverseRelations: { nodes: Relation[] }
+  inverseRelations: Relations
 }
-type StateNode = { id: string; state: IssueState }
+type StateNode = { id: string; state: IssueState; priority: number; inverseRelations: Relations }
 type Page<T> = { nodes: T[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } }
 
 const issuePage = <T>(node: Parser<T>) => object({
   issues: object<Page<T>>({ nodes: array(node), pageInfo: object({ hasNextPage: boolean, endCursor: nullable(string) }) }),
 })
 
+const relations = nodes(object<Relation>({ type: string, issue: issueBlocker }))
+const blockersOf = (r: Relations): IssueBlocker[] => r.nodes.filter((relation) => relation.type === 'blocks').map((relation) => relation.issue)
+
 const issuesData = issuePage(object<IssueNode>({
   id: string, identifier: string, title: string, description: nullable(string), url: string, branchName: string, priority: number,
-  inverseRelations: nodes(object<Relation>({ type: string, issue: issueBlocker })),
+  inverseRelations: relations,
 }))
-const issueStatesData = issuePage(object<StateNode>({ id: string, state: object<IssueState>({ id: string, name: string, type: stateType }) }))
+const issueStatesData = issuePage(object<StateNode>({
+  id: string, state: object<IssueState>({ id: string, name: string, type: stateType }), priority: number, inverseRelations: relations,
+}))
 
 const issueStateData = object({ issue: object({ id: string, state: object({ id: string }) }) })
 const issueCommentData = object({ issue: object({ id: string, comments: nodes(object({ id: string })) }) })
@@ -225,13 +233,13 @@ export function createLinearClient(options: {
         title: n.title,
         description: n.description ?? '',
         priority: priorityOf(n.priority),
-        blockers: n.inverseRelations.nodes.filter((r) => r.type === 'blocks').map((r) => r.issue),
+        blockers: blockersOf(n.inverseRelations),
       }))
     },
     async issueStates(ids) {
       if (ids.length === 0) return new Map()
       const nodes = await pages('FactoryIssueStates', ISSUE_STATES_QUERY, { id: { in: ids } }, issueStatesData)
-      return new Map(nodes.map((n) => [n.id as IssueId, n.state]))
+      return new Map(nodes.map((n) => [n.id as IssueId, { state: n.state, priority: priorityOf(n.priority), blockers: blockersOf(n.inverseRelations) }]))
     },
     async ensureState(issueId, stateId, from) {
       const { issue } = await request('FactoryIssueState', ISSUE_STATE_QUERY, { id: issueId }, issueStateData)
