@@ -192,6 +192,20 @@ test('with two blockers, finishing one leaves the reason naming only the other',
   expect(queueRow(taskTitled(f, 'ENG-3 Use both'))).toEqual({ status: 'waiting', blockedOn: 'blocked by ENG-2 (In Progress)', attempts: 0 })
 })
 
+test('a blocker marked a duplicate in Linear no longer blocks', async () => {
+  await addIssue('Ship schema', { state: 'In Progress' })
+  await addIssue('Use schema', { blockedBy: ['ENG-1'] })
+  const wall = wallClock()
+  const f = oneSlot(wall)
+  await start(f)
+  expect(taskTitled(f, 'ENG-2 Use schema').blockedOn).toBe('blocked by ENG-1 (In Progress)')
+
+  await moveIssue('ENG-1', 'Duplicate')
+  await pollAndSchedule(f, wall)
+  expect(f.world().intakePolls[Object.keys(f.world().intakePolls)[0] as TriggerId].error).toBe(null)
+  expect(queueRow(taskTitled(f, 'ENG-2 Use schema'))).toEqual({ status: 'running', blockedOn: null, attempts: 1 })
+})
+
 test('a blocker in another team blocks the issue, and Factory never takes the blocker', async () => {
   await addIssue('Open firewall', { team: 'OPS' })
   await addIssue('Call partner API', { blockedBy: ['OPS-1'] })

@@ -168,7 +168,7 @@ const issueWrite = tagged<IssueWrite>({
   attach: object({ kind: oneOf('attach'), url: string, title: string, status: writeStatus }),
 })
 
-export const workflowStateType: Parser<WorkflowStateType> = oneOf('triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled')
+export const workflowStateType: Parser<WorkflowStateType> = oneOf('triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled', 'duplicate')
 
 export const issueBlocker = object<IssueBlocker>({
   id: id<IssueId>(), identifier: string, url: string, state: object<IssueBlocker['state']>({ name: string, type: workflowStateType }),

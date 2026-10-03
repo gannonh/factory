@@ -120,7 +120,7 @@ Linear stays the source of truth for an issue Factory has taken. The decision is
 Waiting issues run in the order the team set in Linear. The decision is recorded in `docs/adr/0011-linear-priority-and-blockers-order-intake.md`.
 
 - An issue's task takes its priority from Linear: Urgent and High become `high`, Medium and No priority become `normal`, and Low becomes `low`. Raising a queued issue's priority in Linear moves it ahead on the next poll.
-- An issue blocked by another issue, from any team, waits until every blocker is in a completed or canceled state. A blocker in In Review still blocks. The queue shows the reason, such as "blocked by ENG-1 (In Review)", and the issue stays in the pickup state in Linear.
+- An issue blocked by another issue, from any team, waits until every blocker is in a completed, canceled or duplicate state. A blocker in In Review still blocks. The queue shows the reason, such as "blocked by ENG-1 (In Review)", and the issue stays in the pickup state in Linear.
 - The task inspector lists each blocker with a link to Linear and its state. Factory reads blockers but never takes one that does not match the trigger's filter.
 - The issue starts on the first poll after its last blocker is done. Priority and blockers stop refreshing once the flow's first run starts.
 

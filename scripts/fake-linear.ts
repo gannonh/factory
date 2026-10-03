@@ -24,12 +24,12 @@ type Issue = {
 export type FakeLinear = { url: string; controlUrl: string; close: () => Promise<void> }
 
 const STATES: Array<[string, WorkflowStateType]> = [
-  ['Backlog', 'backlog'], ['Todo', 'unstarted'], ['In Progress', 'started'], ['In Review', 'started'], ['Done', 'completed'], ['Canceled', 'canceled'],
+  ['Backlog', 'backlog'], ['Todo', 'unstarted'], ['In Progress', 'started'], ['In Review', 'started'], ['Done', 'completed'], ['Canceled', 'canceled'], ['Duplicate', 'duplicate'],
 ]
 
 const START_STATES: Array<[string, WorkflowStateType]> = [
   ['Backlog', 'backlog'], ['Todo', 'unstarted'], ['Start', 'unstarted'], ['In Progress', 'started'], ['Agent Review', 'started'],
-  ['Human Review', 'started'], ['Merging', 'started'], ['Done', 'completed'], ['Canceled', 'canceled'],
+  ['Human Review', 'started'], ['Merging', 'started'], ['Done', 'completed'], ['Canceled', 'canceled'], ['Duplicate', 'duplicate'],
 ]
 
 function seedTeams(): Team[] {
