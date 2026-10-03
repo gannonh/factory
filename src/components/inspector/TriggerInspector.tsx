@@ -27,6 +27,7 @@ export function TriggerInspector({ trigger }: { trigger: Trigger }) {
           {intake && (
             <>
               <div>{intake.polledAt !== null ? `polled ${fmtAgo(wallNow, intake.polledAt)}` : 'not polled yet'} · taken <span className="font-mono text-ink-100">{intake.taken}</span></div>
+              {intake.rounds.length > 0 && <div>rework <span className="text-violet-200">{intake.rounds.join(', ')}</span></div>}
               {intake.idle && <div className="text-amber-300">not polling: {intake.idle}</div>}
               {intake.error && <div className="text-red-300 break-words">{intake.error}</div>}
             </>

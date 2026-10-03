@@ -1,4 +1,4 @@
-import { TASK_STATUS_COLOR, type Task } from '../../domain/types'
+import { TASK_STATUS_COLOR, roundOfFlow, type Task } from '../../domain/types'
 import { useStore } from '../../store'
 import { Badge, Dot, Section, fmtDuration } from '../ui'
 import { TaskOrigin } from '../TaskOrigin'
@@ -15,7 +15,8 @@ export function TaskInspector({ task }: { task: Task }) {
   const select = useStore((state) => state.select)
   const agent = world.agents[task.agentId]
   const runs = Object.values(world.runs).filter((run) => run.taskId === task.id).sort((a, b) => a.startedAt - b.startedAt)
-  const intake = Object.values(world.intake).find((record) => record.flowId === task.flowId)
+  const round = roundOfFlow(world, task.flowId)
+  const intake = round?.record
 
   return (
     <>
@@ -33,6 +34,12 @@ export function TaskInspector({ task }: { task: Task }) {
           <dd>{agent?.name ?? `Deleted agent (${task.agentId})`}</dd>
           <dt className="text-ink-400">Flow</dt>
           <dd><span className="font-mono text-[11px] text-violet-200 select-text break-all" title="Flow id">{task.flowId}</span></dd>
+          {round && (
+            <>
+              <dt className="text-ink-400">Round</dt>
+              <dd className="font-mono tabular-nums">{round.round}</dd>
+            </>
+          )}
           <dt className="text-ink-400">Priority</dt>
           <dd>{task.priority}</dd>
           <dt className="text-ink-400">Origin</dt>
