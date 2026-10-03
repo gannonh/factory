@@ -59,6 +59,8 @@ import { array, boolean, defaulted, id, number, object, oneOf, record } from './
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
 import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type IssueStatus, type LinearClient, type LinearIssue } from './linear'
 import { cancelRecord, flowAction, flowOutcome, landed, nextWrite, reconcileRecord, workingStates } from './writeBack'
+import { latestOutput, latestPullRequest, linearFeedback, recent, reworkOf, reworkable, roundPrompt, roundTitle, startRound, type RoundContext } from './rounds'
+import { readPullRequest } from './github'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 
@@ -98,6 +100,10 @@ function fanOutRefusal(world: World, source: NodeId, kind: EdgeKind): string | n
 
 const sameSettings = (a: LinearSettings | null, b: LinearSettings | null) =>
   a?.team === b?.team && a?.project === b?.project && a?.pickupState === b?.pickupState
+
+/** Whether the record is still on the ended round a poll saw when it began. */
+const sameRound = (record: IntakeRecord | undefined, before: IntakeRecord | undefined): record is IntakeRecord =>
+  !!record && !!before && record.round === before.round && record.phase === 'ended'
 
 type Pollable = Trigger & { kind: 'linear'; linear: LinearSettings }
 
@@ -848,22 +854,55 @@ export class MockServer {
     const settings = tr.linear
     this.pollStarted.set(id, this.clock())
     const open = Object.values(this.world.intake).filter((r) => r.trigger === id && r.phase !== 'ended' && r.cancel === null).map((r) => r.issue.id)
+    // Only a poll begun after a round ended can show that its issue left, or came back.
+    const ended = new Map(Object.values(this.world.intake).filter((r) => r.phase === 'ended').map((r) => [r.issue.id, r]))
     const done = Promise.all([this.linear.issues(settings), this.linear.issueStates(open)])
+      .then(async ([issues, states]) => ({ issues, states, rounds: await this.roundContexts(issues, ended, settings) }))
       .then(
-        ([issues, states]) => this.finishPoll(id, settings, issues, open, states, null),
-        (err: unknown) => this.finishPoll(id, settings, [], [], new Map(), intakeErrorOf(err)),
+        ({ issues, states, rounds }) => this.finishPoll(id, settings, issues, open, states, null, ended, rounds),
+        (err: unknown) => this.finishPoll(id, settings, [], [], new Map(), intakeErrorOf(err), new Map(), new Map()),
       )
       .finally(() => this.polls.delete(id))
     this.polls.set(id, done)
     return done
   }
 
+  /**
+   * The context of each listed issue that starts a new round: the open pull request to continue or the closed one to
+   * replace, and the feedback since the last round. A Linear failure fails the poll. An issue whose pull request cannot be
+   * read waits for the next poll, so a round never guesses its branch.
+   */
+  private async roundContexts(issues: LinearIssue[], ended: Map<IssueId, IntakeRecord>, settings: LinearSettings): Promise<Map<IssueId, RoundContext>> {
+    const due = issues.map((issue) => ended.get(issue.ref.id)).filter((r): r is IntakeRecord => r !== undefined && reworkable(r, settings.pickupState))
+    const contexts = await Promise.all(due.map(async (record): Promise<[IssueId, RoundContext] | null> => {
+      const { since, feedback } = linearFeedback(record, await this.linear.comments(record.issue.id))
+      const pr = latestPullRequest(record)
+      if (!pr) return [record.issue.id, { rework: null, review: [], linear: feedback }]
+      try {
+        const { view, feedback: review } = await readPullRequest(pr.url)
+        return [record.issue.id, { rework: reworkOf(pr, view), review: recent(review, since), linear: feedback }]
+      } catch (error) {
+        this.log('warn', `${record.issue.identifier}: could not read ${pr.url}, so its next round waits for the next poll: ${error instanceof Error ? error.message : String(error)}`)
+        return null
+      }
+    }))
+    return new Map(contexts.filter((c) => c !== null))
+  }
+
   private finishPoll(
     id: TriggerId, settings: LinearSettings, issues: LinearIssue[], refreshed: IssueId[], states: Map<IssueId, IssueStatus>, error: IntakeError | null,
+    ended: Map<IssueId, IntakeRecord>, rounds: Map<IssueId, RoundContext>,
   ) {
     const tr = this.world.triggers[id]
     if (!this.pollable(tr) || !sameSettings(tr.linear, settings)) return
     this.world.intakePolls = { ...this.world.intakePolls, [id]: { at: this.clock(), error } }
+    const listed = new Set(issues.map((issue) => issue.ref.id))
+    for (const [issueId, before] of ended) {
+      const record = this.world.intake[issueId]
+      if (error || listed.has(issueId) || !sameRound(record, before) || record.left || record.trigger !== id) continue
+      if ((record.states?.pickupState ?? settings.pickupState) !== settings.pickupState) continue
+      this.world.intake = { ...this.world.intake, [issueId]: { ...record, left: true } }
+    }
     const queued = refreshed.length > 0 ? this.pendingIssueTasks() : new Map<FlowId, Task>()
     const unread: string[] = []
     for (const issueId of refreshed) {
@@ -880,21 +919,23 @@ export class MockServer {
     const agentId = feed.target as AgentId
     const taken: string[] = []
     for (const issue of issues) {
-      if (this.world.intake[issue.ref.id]) continue
+      const record = this.world.intake[issue.ref.id]
+      const context = record ? rounds.get(issue.ref.id) : null
+      // The round that ended before the poll must still be the issue's latest, or another poll already started the next.
+      if (record && (!context || !sameRound(record, ended.get(issue.ref.id)))) continue
+      const round = record ? record.round + 1 : 1
       const flowId = this.uid('fl') as FlowId
       this.enqueueTaskSilently(agentId, {
-        title: `${issue.ref.identifier} ${issue.title}`,
-        prompt: [issue.title, issue.description, issue.ref.url].filter((part) => part !== '').join('\n\n'),
+        title: roundTitle(issue.ref.identifier, issue.title, round),
+        prompt: roundPrompt({ title: issue.title, description: issue.description, url: issue.ref.url }, round, context ?? null, record?.result ?? null),
         priority: issue.priority,
         origin: { kind: 'issue', trigger: id, issue: issue.ref },
-        input: null,
+        input: record ? latestOutput(record) : null,
       }, flowId)
       const states = { pickupState: settings.pickupState, startedState: settings.startedState }
-      const record: IntakeRecord = { issue: issue.ref, trigger: id, flowId, takenAt: this.clock(), phase: 'taken', writes: [], states, cancel: null, blockers: issue.blockers,
-        round: 1, rework: null, result: null, left: false, past: [],
-      }
-      this.world.intake = { ...this.world.intake, [issue.ref.id]: record }
-      taken.push(issue.ref.identifier)
+      const next = startRound(record, issue.ref, { trigger: id, flowId, takenAt: this.clock(), states, blockers: issue.blockers, rework: context?.rework ?? null })
+      this.world.intake = { ...this.world.intake, [issue.ref.id]: next }
+      taken.push(round > 1 ? `${issue.ref.identifier} (round ${round})` : issue.ref.identifier)
       if (issue.moreRelations) unread.push(issue.ref.identifier)
     }
     this.warnUnreadRelations(unread)
@@ -903,6 +944,8 @@ export class MockServer {
       this.event('trigger', { kind: 'trigger', id }, `${tr.name} took ${taken.join(', ')}`)
     }
     this.publish()
+    // A new round must be on disk before its run starts, or a restart would start the round again.
+    if (taken.length > 0) this.flush()
   }
 
   /** Each issue task that has not started yet, by flow. */
@@ -991,9 +1034,13 @@ export class MockServer {
       }
       const current = this.world.intake[issueId]
       if (current) {
-        // A move dropped by a cancel from Linear while it was in flight stays dropped.
-        const writes = current.writes.map((w, i) => (i === index && w.status.state !== 'dropped' ? landed(w, status) : w))
-        this.world.intake = { ...this.world.intake, [issueId]: { ...current, writes } }
+        // A move dropped by a cancel from Linear, or by a new round, while it was in flight stays dropped.
+        const kept = current.writes[index]?.status.state !== 'dropped'
+        const writes = current.writes.map((w, i) => (i === index && kept ? landed(w, status) : w))
+        // An ended round's move out of its pickup state means a return to that state is a new entry.
+        const left = current.left || (kept && status.state === 'landed' && current.phase === 'ended' && write.kind === 'move' && write.step !== 'started'
+          && write.stateId !== (current.states ?? this.world.triggers[current.trigger]?.linear)?.pickupState)
+        this.world.intake = { ...this.world.intake, [issueId]: { ...current, writes, left } }
         this.publish()
       }
     }

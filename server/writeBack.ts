@@ -1,5 +1,6 @@
-import type { Artifact, FlowCancel, IntakePhase, IntakeRecord, IssueWrite, LinearSettings, Run, Task, TriggerStates, World, WriteStatus } from '../src/domain/types'
+import type { Artifact, FlowCancel, IntakePhase, IntakeRecord, IssueWrite, LinearSettings, PullRequestRef, Rework, Run, Task, TaskInput, TriggerStates, World, WriteStatus } from '../src/domain/types'
 import type { IssueState } from './linear'
+import { prNumber } from './rounds'
 
 type Outcome = 'finished' | 'failed' | 'cancelled'
 
@@ -8,11 +9,20 @@ const PENDING = { state: 'pending' } as const
 /** What a note reports: how the flow ended, or why it was cancelled. */
 export type NoteCause = 'finished' | 'failed' | FlowCancel
 
-function heading(cause: NoteCause): string {
-  if (cause === 'finished') return 'Factory finished this issue.'
-  if (cause === 'failed') return 'Factory could not finish this issue.'
-  if (cause.kind === 'linear') return `Factory stopped work on this issue: ${cause.reason}.`
-  return `Factory stopped work on this issue: “${cause.task}” was cancelled in Factory.`
+function heading(cause: NoteCause, round: number): string {
+  const which = round > 1 ? ` (round ${round})` : ''
+  if (cause === 'finished') return `Factory finished this issue${which}.`
+  if (cause === 'failed') return `Factory could not finish this issue${which}.`
+  if (cause.kind === 'linear') return `Factory stopped work on this issue${which}: ${cause.reason}.`
+  return `Factory stopped work on this issue${which}: “${cause.task}” was cancelled in Factory.`
+}
+
+/** Why a rework round worked where it did. A fresh round says it opened a new pull request only when it did. */
+function reworkLine(rework: Rework, delivered: readonly PullRequestRef[]): string {
+  const n = prNumber(rework.pr)
+  if (rework.kind === 'continue') return `Continued on pull request #${n}.`
+  const opened = delivered.some((d) => d.url !== rework.pr.url)
+  return `Pull request #${n} was ${rework.state}, so this round ${opened ? 'opened a new pull request' : 'started a fresh branch'}.`
 }
 
 export type FlowAction = { kind: 'none' } | { kind: 'cancel'; reason: string }
@@ -33,14 +43,14 @@ export function flowAction(issue: IssueState | null, open: boolean, states: Trig
 
 /**
  * Records why the flow was cancelled; the first cause wins. A cancel from Linear drops every move not yet landed,
- * since the person who moved the issue already chose where it sits.
+ * since the person who moved the issue already chose where it sits, and means the issue has left the round's pickup state.
  */
 export function cancelRecord(record: IntakeRecord, cancel: FlowCancel): IntakeRecord {
   if (record.cancel !== null || record.phase === 'ended') return record
   const writes = cancel.kind === 'linear'
     ? record.writes.map((w): IssueWrite => (w.kind === 'move' && w.status.state !== 'landed' ? { ...w, status: { state: 'dropped' } } : w))
     : record.writes
-  return { ...record, cancel, writes }
+  return { ...record, cancel, writes, left: record.left || cancel.kind === 'linear' }
 }
 
 /** How a flow ended, or null while any task can still run. A task waiting on a retry can still run. */
@@ -62,14 +72,23 @@ function latestRun(task: Task, runs: World['runs']): Run | null {
  * The distinct pull requests the flow's succeeded local runs produced, in flow order. Simulated runs only
  * invent demo links, so they never reach Linear as attachments.
  */
-function deliveredPullRequests(tasks: readonly Task[], runs: World['runs']): Array<Artifact & { url: string }> {
-  const found = new Map<string, Artifact & { url: string }>()
+function deliveredPullRequests(tasks: readonly Task[], runs: World['runs']): PullRequestRef[] {
+  const found = new Map<string, PullRequestRef>()
   for (const task of inFlowOrder(tasks)) {
     const run = latestRun(task, runs)
     if (run?.status !== 'succeeded' || run.execution !== 'local' || !run.output) continue
     for (const a of run.output.artifacts) if (a.kind === 'pr' && a.url && !found.has(a.url)) found.set(a.url, { ...a, url: a.url })
   }
   return [...found.values()]
+}
+
+/** The output of the flow's last succeeded run, in flow order: what the next round starts from. */
+function lastOutput(tasks: readonly Task[], runs: World['runs']): TaskInput | null {
+  for (const task of inFlowOrder(tasks).reverse()) {
+    const run = latestRun(task, runs)
+    if (run?.status === 'succeeded' && run.output) return { ...run.output, runId: run.id }
+  }
+  return null
 }
 
 const artifactLine = (a: Artifact) => `- ${a.kind}: ${a.url ? `[${a.label}](${a.url})` : a.label}`
@@ -80,8 +99,13 @@ function outcomeLines(task: Task, run: Run | null): string[] {
   return ['Cancelled before it finished.']
 }
 
-/** The comment Factory posts when a flow ends: each task in flow order, then a signature naming every run and agent. */
-export function noteBody(cause: NoteCause, tasks: readonly Task[], world: Pick<World, 'agents' | 'runs'>): string {
+/**
+ * The comment Factory posts when a flow ends: each task in flow order, then a signature naming every run and agent.
+ * A rework round's note names its round and why it worked where it did.
+ */
+export function noteBody(
+  cause: NoteCause, tasks: readonly Task[], world: Pick<World, 'agents' | 'runs'>, round: Pick<IntakeRecord, 'round' | 'rework'> = { round: 1, rework: null },
+): string {
   const runIds: string[] = []
   const agents: string[] = []
   const sections = inFlowOrder(tasks).map((task) => {
@@ -92,7 +116,8 @@ export function noteBody(cause: NoteCause, tasks: readonly Task[], world: Pick<W
     return [run ? `**${agent}** · run ${run.id}` : `**${agent}**`, ...outcomeLines(task, run)].join('\n')
   })
   const signature = `Signed by Factory. Runs: ${runIds.join(', ') || 'none'}. Agents: ${agents.join(', ')}.`
-  return [`**${heading(cause)}**`, ...sections, signature].join('\n\n')
+  const why = round.round > 1 && round.rework ? [reworkLine(round.rework, deliveredPullRequests(tasks, world.runs))] : []
+  return [`**${heading(cause, round.round)}**`, ...why, ...sections, signature].join('\n\n')
 }
 
 /** Where an ended flow moves its issue. A cancel from Linear leaves the issue where the person put it. */
@@ -124,18 +149,22 @@ export function reconcileRecord(
     if (startedState && !fromLinear) writes.push({ kind: 'move', step: 'started', stateId: startedState, status: PENDING })
   }
   const outcome = flowOutcome(tasks)
+  let result = record.result
   if (outcome !== null) {
     phase = 'ended'
     const cause: NoteCause = record.cancel
       ?? (outcome === 'cancelled' ? { kind: 'factory', task: inFlowOrder(tasks).find((t) => t.status === 'cancelled')?.title ?? 'a task' } : outcome)
     const move = moveFor(cause, settings)
     if (move) writes.push({ kind: 'move', ...move, status: PENDING })
-    for (const pr of deliveredPullRequests(tasks, world.runs)) {
+    const delivered = deliveredPullRequests(tasks, world.runs)
+    for (const pr of delivered) {
       if (!writes.some((w) => w.kind === 'attach' && w.url === pr.url)) writes.push({ kind: 'attach', url: pr.url, title: pr.label, status: PENDING })
     }
-    writes.push({ kind: 'note', outcome: typeof cause === 'string' ? cause : 'cancelled', commentId: newCommentId(), body: noteBody(cause, tasks, world), status: PENDING })
+    const ended = typeof cause === 'string' ? cause : 'cancelled'
+    writes.push({ kind: 'note', outcome: ended, commentId: newCommentId(), body: noteBody(cause, tasks, world, record), status: PENDING })
+    result = { outcome: ended, pr: delivered.at(-1) ?? null, output: lastOutput(tasks, world.runs) }
   }
-  return phase === record.phase ? record : { ...record, phase, writes }
+  return phase === record.phase ? record : { ...record, phase, writes, result }
 }
 
 /**

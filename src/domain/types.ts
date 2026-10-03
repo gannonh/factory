@@ -197,7 +197,7 @@ export type Rework =
  * `writes` is the ordered write-back queue for every round; each phase change appends to it and nothing removes from it.
  * `states` are the trigger's states when it took the issue, or null for a record saved before they were kept.
  * `blockers` are the issues that block it in Linear, as of the last poll before its flow started.
- * `left` is set once the issue has been seen outside the round's pickup state after the round ended.
+ * `left` is set once the issue has been seen outside the round's pickup state after the round ended, or Linear cancelled the round.
  */
 export type IntakeRecord = {
   issue: IssueRef; trigger: TriggerId; flowId: FlowId; takenAt: number; phase: IntakePhase; writes: IssueWrite[]

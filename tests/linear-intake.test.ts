@@ -38,6 +38,7 @@ function switchable(initial: LinearClient) {
     catalog: () => current.catalog(),
     issues: (filter) => current.issues(filter),
     issueStates: (ids) => current.issueStates(ids),
+    comments: (issueId) => current.comments(issueId),
     ensureState: (issueId, stateId, from) => current.ensureState(issueId, stateId, from),
     ensureComment: (issueId, commentId, body) => current.ensureComment(issueId, commentId, body),
     ensureAttachment: (issueId, url, title) => current.ensureAttachment(issueId, url, title),
@@ -93,7 +94,8 @@ test('an issue in the pickup state becomes one task on the joined agent', async 
     status: 'queued',
     origin: { kind: 'issue', trigger, issue },
   })
-  expect(f.world().intake).toEqual({ 'issue-eng-1': { issue, trigger, flowId: task.flowId, takenAt: 1_000_000, phase: 'taken', writes: [], states: { pickupState: 'state-eng-todo', startedState: null }, cancel: null, blockers: [] } })
+  expect(f.world().intake).toEqual({ 'issue-eng-1': { issue, trigger, flowId: task.flowId, takenAt: 1_000_000, phase: 'taken', writes: [], states: { pickupState: 'state-eng-todo', startedState: null }, cancel: null, blockers: [],
+    round: 1, rework: null, result: null, left: false, past: [] } })
   expect(f.world().intakePolls).toEqual({ [trigger]: { at: 1_000_000, error: null } })
   expect(f.world().triggers[trigger].fired).toBe(1)
   expect(f.world().events.at(-1)?.msg).toBe('Linear intake took ENG-1')
