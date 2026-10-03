@@ -65,8 +65,8 @@ const failFast = (f: Fixture, agent: AgentId, maxAttempts: number) =>
 
 test('ensureState moves an issue once and leaves it alone when it is already there', async () => {
   await addIssue('Fix login')
-  await client().ensureState(ENG_1, 'state-eng-in-progress')
-  await client().ensureState(ENG_1, 'state-eng-in-progress')
+  await client().ensureState(ENG_1, 'state-eng-in-progress', null)
+  await client().ensureState(ENG_1, 'state-eng-in-progress', null)
   expect((await issue('ENG-1')).state).toBe('In Progress')
   expect(await requests()).toEqual({ FactoryIssueState: 2, FactoryMoveIssue: 1 })
 })
@@ -91,12 +91,12 @@ test('ensureAttachment links a URL once, however often it is repeated', async ()
 test('a failed write rejects with the api error, and the fake refuses a second comment with the same id', async () => {
   await addIssue('Fix login')
   await control({ op: 'failNext', operation: 'FactoryMoveIssue', times: 1, message: 'rate limited' })
-  await expect(client().ensureState(ENG_1, 'state-eng-done')).rejects.toMatchObject({ intake: { kind: 'api', message: 'Linear error: rate limited' } })
+  await expect(client().ensureState(ENG_1, 'state-eng-done', null)).rejects.toMatchObject({ intake: { kind: 'api', message: 'Linear error: rate limited' } })
   expect((await issue('ENG-1')).state).toBe('Todo')
-  await client().ensureState(ENG_1, 'state-eng-done')
+  await client().ensureState(ENG_1, 'state-eng-done', null)
   expect((await issue('ENG-1')).state).toBe('Done')
 
-  await expect(client().ensureState('issue-gone' as IssueId, 'state-eng-done'))
+  await expect(client().ensureState('issue-gone' as IssueId, 'state-eng-done', null))
     .rejects.toMatchObject({ intake: { kind: 'api', message: 'Linear error: Entity not found: Issue' } })
 
   const create = (body: string) => fetch(fake.url, {
@@ -206,13 +206,15 @@ function dying(dies: (write: string) => boolean) {
   const real = client()
   let reached = () => {}
   const died = new Promise<void>((resolve) => { reached = resolve })
-  const hang = () => { reached(); return new Promise<void>(() => {}) }
+  const hang = <T>() => { reached(); return new Promise<T>(() => {}) }
   const linear: LinearClient = {
     catalog: () => real.catalog(),
     issues: (filter) => real.issues(filter),
-    ensureState: async (issueId, stateId) => {
-      await real.ensureState(issueId, stateId)
-      if (dies(stateId)) return hang()
+    issueStates: (ids) => real.issueStates(ids),
+    ensureState: async (issueId, stateId, from) => {
+      const moved = await real.ensureState(issueId, stateId, from)
+      if (dies(stateId)) return hang<boolean>()
+      return moved
     },
     ensureComment: async (issueId, commentId, body) => {
       await real.ensureComment(issueId, commentId, body)
@@ -306,7 +308,7 @@ test('an unset finished state posts the note and leaves the issue in the started
   expect(after.comments).toHaveLength(1)
 })
 
-test('cancelling an issue’s task while it waits on a retry ends its flow without a terminal write', async () => {
+test('cancelling an issue’s task while it waits on a retry moves the issue to the failed state with one note naming the task', async () => {
   await addIssue('Fix login')
   const f = makeFixture({ linear: client(), clock: wallClock().read })
   const coder = f.agent('Coder')
@@ -320,8 +322,14 @@ test('cancelling an issue’s task while it waits on a retry ends its flow witho
   f.api.tasks.cancel(run.taskId)
   await f.api.sim.settled()
   expect(f.world().intake[ENG_1].phase).toBe('ended')
-  expect(writeSteps(f)).toEqual([['move started', 'landed']])
-  expect(await issue('ENG-1')).toMatchObject({ state: 'In Progress', comments: [] })
+  expect(writeSteps(f)).toEqual([['move started', 'landed'], ['move failed', 'landed'], ['note cancelled', 'landed']])
+  const after = await issue('ENG-1')
+  expect(after.state).toBe('Backlog')
+  expect(after.comments.map((c) => c.body)).toEqual([
+    `**Factory stopped work on this issue: “ENG-1 Fix login” was cancelled in Factory.**\n\n**Coder** · run ${run.id}\nCancelled before it finished.\n\nSigned by Factory. Runs: ${run.id}. Agents: Coder.`,
+  ])
+  expect(f.world().runs[run.id].status).toBe('failed')
+  expect(f.world().tasks[run.taskId]).toMatchObject({ status: 'cancelled', retryAt: null })
 })
 
 test('a manual task never writes to Linear', async () => {

@@ -41,8 +41,8 @@ Each term is marked **built** when it exists in code today, or **planned** when 
 - **Intake record.** Factory's saved record of an issue it has taken: the issue, the trigger, its flows and the writes it has made to the issue. It is never pruned, so an issue is never taken twice by mistake. **Built.**
 - **Pickup state.** The Linear state a Linear trigger takes issues from, such as Start or Todo. **Built.**
 - **Started, finished and failed states.** The Linear states a Linear trigger moves an issue to when its flow's first run starts, when the flow finishes, and when the flow fails. Each can be left unset. **Built.**
-- **Write-back.** Factory's writes to an issue: state moves, notes and pull request attachments. Each write is idempotent and retries until it lands. **Built.**
-- **Note.** A comment Factory posts on an issue when a flow ends. It lists each task's summary and artifacts or the failure reason, and it is signed with the runs and agents. **Built.**
+- **Write-back.** Factory's writes to an issue: state moves, notes and pull request attachments. Each write is idempotent and retries until it lands. A move is dropped instead when the issue has left its trigger's pickup and started states, because a person moved it. **Built.**
+- **Note.** A comment Factory posts on an issue when a flow ends. It lists each task's summary and artifacts or the failure reason, and it is signed with the runs and agents. A cancelled flow's note says why: the issue was canceled or moved in Linear, or a task was cancelled in Factory. **Built.**
 - **Attachment.** A link Factory adds to an issue when its flow ends, one per pull request the flow's real runs produced. Factory keys it by URL, so it lands once. **Built.**
 
 ## The pipeline

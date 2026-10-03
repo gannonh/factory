@@ -4,12 +4,18 @@ import { useWallNow } from '../../useWallNow'
 import { Badge, Section, fmtAgo } from '../ui'
 import { useLoaded } from './useLoaded'
 
-const STATUS_COLOR: Record<WriteStatus['state'], string> = { pending: '#94a3b8', landed: '#34d399', failed: '#f87171' }
+const STATUS_COLOR: Record<WriteStatus['state'], string> = { pending: '#94a3b8', landed: '#34d399', failed: '#f87171', dropped: '#64748b' }
+const NOTE_LABEL: Record<Extract<IssueWrite, { kind: 'note' }>['outcome'], string> = { finished: 'Completion note', failed: 'Failure note', cancelled: 'Cancel note' }
 
 function writeLabel(write: IssueWrite, stateName: (id: string) => string): string {
   if (write.kind === 'move') return `Move to ${write.step} state (${stateName(write.stateId)})`
   if (write.kind === 'attach') return `Attach ${write.title}`
-  return write.outcome === 'finished' ? 'Completion note' : 'Failure note'
+  return NOTE_LABEL[write.outcome]
+}
+
+function statusLine(status: Exclude<WriteStatus, { state: 'pending' }>, wallNow: number): string {
+  if (status.state === 'dropped') return 'not sent: the issue left Factory’s states in Linear'
+  return status.state === 'failed' ? `failed ${fmtAgo(wallNow, status.at)} · retries on the next poll` : `landed ${fmtAgo(wallNow, status.at)}`
 }
 
 const CATALOG_TTL_MS = 60_000
@@ -44,11 +50,7 @@ export function WriteBackSection({ record }: { record: IntakeRecord }) {
                   <Badge color={STATUS_COLOR[write.status.state]} className="ml-auto">{write.status.state}</Badge>
                 </div>
                 {write.status.state === 'failed' && <div className="text-[11px] text-red-300 break-words">{write.status.error}</div>}
-                {write.status.state !== 'pending' && (
-                  <div className="text-[10px] text-ink-500">
-                    {write.status.state === 'failed' ? `failed ${fmtAgo(wallNow, write.status.at)} · retries on the next poll` : `landed ${fmtAgo(wallNow, write.status.at)}`}
-                  </div>
-                )}
+                {write.status.state !== 'pending' && <div className="text-[10px] text-ink-500">{statusLine(write.status, wallNow)}</div>}
               </li>
             ))}
           </ol>}

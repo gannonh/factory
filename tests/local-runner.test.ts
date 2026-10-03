@@ -3,11 +3,13 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, test } from 'vitest'
+import { startFakeLinear } from '../scripts/fake-linear'
+import { createLinearClient } from '../server/linear'
 import { ClaudeRunner, claudeArgs, prepareWorkdir } from '../server/runners'
 import type { Emit, Runner } from '../server/runners'
 import { createApi } from '../server/api'
 import { MockServer } from '../server/simulation'
-import type { AgentId, RunId, SandboxId } from '../src/domain/types'
+import { LINEAR_POLL_MS, type AgentId, type RunId, type SandboxId, type TriggerId } from '../src/domain/types'
 
 const roots: string[] = []
 const temporaryRoot = () => {
@@ -136,7 +138,7 @@ test('closing while a working directory is prepared never starts the process', a
   expect(starts).toBe(0)
 })
 
-function waitingProcess(timeoutMs = 120_000) {
+function waitingProcess(timeoutMs = 120_000, options: { linear?: ReturnType<typeof createLinearClient>; clock?: () => number } = {}) {
   const root = temporaryRoot()
   const executable = join(root, 'fake-claude')
   writeFileSync(executable, `#!/usr/bin/env node
@@ -147,7 +149,7 @@ fs.writeFileSync('pids.json', JSON.stringify({ parent: process.pid, child: child
 setInterval(() => {}, 1000)
 `)
   chmodSync(executable, 0o755)
-  const server = new MockServer({ manual: true, localRunner: new ClaudeRunner(executable), localRoot: root })
+  const server = new MockServer({ manual: true, localRunner: new ClaudeRunner(executable), localRoot: root, ...options })
   for (const trigger of Object.values(server.snapshot().triggers)) server.updateTrigger(trigger.id, { enabled: false })
   const coder = server.snapshot().agents['ag-coder' as AgentId]
   server.removeEdges(Object.values(server.snapshot().edges).filter((edge) => edge.kind === 'runs-in' && edge.source === coder.id).map((edge) => edge.id))
@@ -190,6 +192,44 @@ test('cancelling a running local task kills its process tree and does not retry'
     expect(server.snapshot().tasks[taskId].status).toBe('cancelled')
     expect(server.snapshot().sandboxes[run.sandboxId].leases).toEqual([])
   } finally { server.close() }
+})
+
+test('an issue canceled in Linear kills its local process tree within one poll and gets one note', async () => {
+  const fake = await startFakeLinear({ apiKey: 'lin_api_local' })
+  const control = (body: Record<string, unknown>) => fetch(fake.controlUrl, { method: 'POST', body: JSON.stringify(body) }).then((r) => r.json())
+  const wall = { now: 1_000_000 }
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const { server, taskId, pidsFile } = waitingProcess(120_000, { linear: createLinearClient({ url: fake.url, apiKey: 'lin_api_local' }), clock: () => wall.now })
+  try {
+    server.cancelTask(taskId)
+    const trigger = server.createNode('trigger', { x: 0, y: 0 }) as TriggerId
+    server.updateTrigger(trigger, { kind: 'linear' })
+    server.connect(trigger, 'ag-coder' as AgentId, 'triggers')
+    server.updateTrigger(trigger, {
+      enabled: true,
+      linear: { team: 'team-eng', project: null, pickupState: 'state-eng-todo', startedState: 'state-eng-in-progress', finishedState: null, failedState: 'state-eng-backlog' },
+    })
+    server.advance(0)
+    await server.settled()
+    server.advance(1)
+    const run = Object.values(server.snapshot().runs).find((r) => r.title === 'ENG-1 Fix login')!
+    const pids = await processIds(join(pidsFile, '..', '..', run.id, 'pids.json'))
+    expect(running(pids.parent)).toBe(true)
+
+    await control({ op: 'moveIssue', identifier: 'ENG-1', state: 'Canceled' })
+    wall.now += LINEAR_POLL_MS
+    server.advance(1)
+    await server.settled()
+    await until(() => !running(pids.parent) && !running(pids.child))
+    expect(server.snapshot().runs[run.id]).toMatchObject({ status: 'cancelled', error: 'canceled in Linear' })
+    expect(server.snapshot().tasks[run.taskId]).toMatchObject({ status: 'cancelled', retryAt: null })
+    const issue = await control({ op: 'issue', identifier: 'ENG-1' }) as { state: string; comments: unknown[] }
+    expect(issue.state).toBe('Canceled')
+    expect(issue.comments).toHaveLength(1)
+  } finally {
+    await server.close()
+    await fake.close()
+  }
 })
 
 for (const mode of ['paused', 'fast'] as const) {

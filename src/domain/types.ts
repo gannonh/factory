@@ -153,8 +153,8 @@ export type Trigger = {
 
 export type IssueRef = { backend: 'linear'; id: IssueId; identifier: string; url: string; branchName: string }
 
-/** Where a write to Linear stands. `at` is wall-clock ms. */
-export type WriteStatus = { state: 'pending' } | { state: 'landed'; at: number } | { state: 'failed'; at: number; error: string }
+/** Where a write to Linear stands. `at` is wall-clock ms. A dropped move is never sent: the issue left Factory's states before it landed. */
+export type WriteStatus = { state: 'pending' } | { state: 'landed'; at: number } | { state: 'failed'; at: number; error: string } | { state: 'dropped' }
 
 /**
  * One write-back to the taken issue. A note's body and comment id are fixed when the write becomes due. The body is dropped once the note lands.
@@ -162,17 +162,27 @@ export type WriteStatus = { state: 'pending' } | { state: 'landed'; at: number }
  */
 export type IssueWrite =
   | { kind: 'move'; step: 'started' | 'finished' | 'failed'; stateId: string; status: WriteStatus }
-  | { kind: 'note'; outcome: 'finished' | 'failed'; commentId: string; body: string | null; status: WriteStatus }
+  | { kind: 'note'; outcome: 'finished' | 'failed' | 'cancelled'; commentId: string; body: string | null; status: WriteStatus }
   | { kind: 'attach'; url: string; title: string; status: WriteStatus }
 
 /** How far the issue's flow has gone: no run yet, a run started, or every task terminal. */
 export type IntakePhase = 'taken' | 'started' | 'ended'
 
+/** Why an issue's flow was cancelled: the issue left the trigger's states in Linear, or an operator cancelled one of its tasks. */
+export type FlowCancel = { kind: 'linear'; reason: string } | { kind: 'factory'; task: string }
+
+/** The states a Linear trigger works in. An issue that leaves them while its flow is open cancels the flow. */
+export type TriggerStates = Pick<LinearSettings, 'pickupState' | 'startedState'>
+
 /**
  * One issue taken by intake. Retention never prunes these, so an issue never starts a second flow.
  * `writes` is the ordered write-back queue; each phase change appends to it and nothing removes from it.
+ * `states` are the trigger's states when it took the issue, or null for a record saved before they were kept.
  */
-export type IntakeRecord = { issue: IssueRef; trigger: TriggerId; flowId: FlowId; takenAt: number; phase: IntakePhase; writes: IssueWrite[] }
+export type IntakeRecord = {
+  issue: IssueRef; trigger: TriggerId; flowId: FlowId; takenAt: number; phase: IntakePhase; writes: IssueWrite[]
+  states: TriggerStates | null; cancel: FlowCancel | null
+}
 
 export type IntakeError = { kind: 'missing-key' | 'auth' | 'network' | 'api'; message: string }
 

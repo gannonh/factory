@@ -1,12 +1,46 @@
-import type { Artifact, IntakePhase, IntakeRecord, IssueWrite, Run, Task, World, WriteStatus } from '../src/domain/types'
+import type { Artifact, FlowCancel, IntakePhase, IntakeRecord, IssueWrite, LinearSettings, Run, Task, TriggerStates, World, WriteStatus } from '../src/domain/types'
+import type { IssueState } from './linear'
 
 type Outcome = 'finished' | 'failed' | 'cancelled'
 
 const PENDING = { state: 'pending' } as const
 
-const HEADING: Record<'finished' | 'failed', string> = {
-  finished: 'Factory finished this issue.',
-  failed: 'Factory could not finish this issue.',
+/** What a note reports: how the flow ended, or why it was cancelled. */
+export type NoteCause = 'finished' | 'failed' | FlowCancel
+
+function heading(cause: NoteCause): string {
+  if (cause === 'finished') return 'Factory finished this issue.'
+  if (cause === 'failed') return 'Factory could not finish this issue.'
+  if (cause.kind === 'linear') return `Factory stopped work on this issue: ${cause.reason}.`
+  return `Factory stopped work on this issue: “${cause.task}” was cancelled in Factory.`
+}
+
+export type FlowAction = { kind: 'none' } | { kind: 'cancel'; reason: string }
+
+/** The state ids a trigger works in. Factory moves an issue only out of these. */
+export const workingStates = (states: TriggerStates): string[] => [states.pickupState, ...(states.startedState ? [states.startedState] : [])]
+
+/**
+ * What to do with an issue's flow given the issue's current state in Linear, or null when the issue is gone.
+ * Only an open flow reacts, and only to the issue leaving the trigger's pickup and started states.
+ */
+export function flowAction(issue: IssueState | null, open: boolean, states: TriggerStates): FlowAction {
+  if (!open) return { kind: 'none' }
+  if (issue && workingStates(states).includes(issue.id)) return { kind: 'none' }
+  if (!issue || issue.type === 'canceled') return { kind: 'cancel', reason: 'canceled in Linear' }
+  return { kind: 'cancel', reason: `moved to ${issue.name} in Linear` }
+}
+
+/**
+ * Records why the flow was cancelled; the first cause wins. A cancel from Linear drops every move not yet landed,
+ * since the person who moved the issue already chose where it sits.
+ */
+export function cancelRecord(record: IntakeRecord, cancel: FlowCancel): IntakeRecord {
+  if (record.cancel !== null || record.phase === 'ended') return record
+  const writes = cancel.kind === 'linear'
+    ? record.writes.map((w): IssueWrite => (w.kind === 'move' && w.status.state !== 'landed' ? { ...w, status: { state: 'dropped' } } : w))
+    : record.writes
+  return { ...record, cancel, writes }
 }
 
 /** How a flow ended, or null while any task can still run. A task waiting on a retry can still run. */
@@ -47,7 +81,7 @@ function outcomeLines(task: Task, run: Run | null): string[] {
 }
 
 /** The comment Factory posts when a flow ends: each task in flow order, then a signature naming every run and agent. */
-export function noteBody(outcome: 'finished' | 'failed', tasks: readonly Task[], world: Pick<World, 'agents' | 'runs'>): string {
+export function noteBody(cause: NoteCause, tasks: readonly Task[], world: Pick<World, 'agents' | 'runs'>): string {
   const runIds: string[] = []
   const agents: string[] = []
   const sections = inFlowOrder(tasks).map((task) => {
@@ -58,7 +92,15 @@ export function noteBody(outcome: 'finished' | 'failed', tasks: readonly Task[],
     return [run ? `**${agent}** · run ${run.id}` : `**${agent}**`, ...outcomeLines(task, run)].join('\n')
   })
   const signature = `Signed by Factory. Runs: ${runIds.join(', ') || 'none'}. Agents: ${agents.join(', ')}.`
-  return [`**${HEADING[outcome]}**`, ...sections, signature].join('\n\n')
+  return [`**${heading(cause)}**`, ...sections, signature].join('\n\n')
+}
+
+/** Where an ended flow moves its issue. A cancel from Linear leaves the issue where the person put it. */
+function moveFor(cause: NoteCause, settings: LinearSettings | null): { step: 'finished' | 'failed'; stateId: string } | null {
+  if (typeof cause !== 'string' && cause.kind === 'linear') return null
+  const step = cause === 'finished' ? 'finished' : 'failed'
+  const stateId = step === 'finished' ? settings?.finishedState : settings?.failedState
+  return stateId ? { step, stateId } : null
 }
 
 /**
@@ -75,21 +117,23 @@ export function reconcileRecord(
   const settings = world.triggers[record.trigger]?.linear ?? null
   let phase: IntakePhase = record.phase
   const writes: IssueWrite[] = [...record.writes]
+  const fromLinear = record.cancel?.kind === 'linear'
   if (phase === 'taken' && tasks.some((t) => t.attempts > 0)) {
     phase = 'started'
-    if (settings?.startedState) writes.push({ kind: 'move', step: 'started', stateId: settings.startedState, status: PENDING })
+    const startedState = record.states ? record.states.startedState : settings?.startedState
+    if (startedState && !fromLinear) writes.push({ kind: 'move', step: 'started', stateId: startedState, status: PENDING })
   }
   const outcome = flowOutcome(tasks)
   if (outcome !== null) {
     phase = 'ended'
-    if (outcome !== 'cancelled') {
-      const stateId = outcome === 'finished' ? settings?.finishedState : settings?.failedState
-      if (stateId) writes.push({ kind: 'move', step: outcome, stateId, status: PENDING })
-      for (const pr of deliveredPullRequests(tasks, world.runs)) {
-        if (!writes.some((w) => w.kind === 'attach' && w.url === pr.url)) writes.push({ kind: 'attach', url: pr.url, title: pr.label, status: PENDING })
-      }
-      writes.push({ kind: 'note', outcome, commentId: newCommentId(), body: noteBody(outcome, tasks, world), status: PENDING })
+    const cause: NoteCause = record.cancel
+      ?? (outcome === 'cancelled' ? { kind: 'factory', task: inFlowOrder(tasks).find((t) => t.status === 'cancelled')?.title ?? 'a task' } : outcome)
+    const move = moveFor(cause, settings)
+    if (move) writes.push({ kind: 'move', ...move, status: PENDING })
+    for (const pr of deliveredPullRequests(tasks, world.runs)) {
+      if (!writes.some((w) => w.kind === 'attach' && w.url === pr.url)) writes.push({ kind: 'attach', url: pr.url, title: pr.label, status: PENDING })
     }
+    writes.push({ kind: 'note', outcome: typeof cause === 'string' ? cause : 'cancelled', commentId: newCommentId(), body: noteBody(cause, tasks, world), status: PENDING })
   }
   return phase === record.phase ? record : { ...record, phase, writes }
 }
@@ -104,7 +148,7 @@ export function nextWrite(writes: readonly IssueWrite[], now: number, retryMs: n
   for (let i = 0; i < writes.length; i++) {
     const write = writes[i]
     const { status } = write
-    if (status.state === 'landed' || (write.kind === 'note' && write.body === null)) continue
+    if (status.state === 'landed' || status.state === 'dropped' || (write.kind === 'note' && write.body === null)) continue
     if (write.kind === 'move' && movesOpen) continue
     if (write.kind === 'move') movesOpen = true
     if (status.state === 'pending' || now - status.at >= retryMs) return i
