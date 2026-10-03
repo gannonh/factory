@@ -70,7 +70,7 @@ export function startRound(record: IntakeRecord | undefined, issue: IssueRef, st
  */
 export function linearFeedback(record: IntakeRecord, comments: ReadonlyArray<{ id: string; body: string; createdAt: string; author: string | null }>): Feedback[] {
   const notes = new Set(record.writes.flatMap((w) => (w.kind === 'note' ? [w.commentId] : [])))
-  const noteTimes = comments.filter((c) => notes.has(c.id)).map((c) => Date.parse(c.createdAt))
+  const noteTimes = comments.filter((c) => notes.has(c.id)).map((c) => Date.parse(c.createdAt)).filter(Number.isFinite)
   const since = noteTimes.length > 0 ? Math.max(...noteTimes) : record.takenAt
   const feedback = comments
     .filter((c) => !notes.has(c.id))

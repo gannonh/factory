@@ -14,8 +14,10 @@ export function RunInspector({ run }: { run: Run }) {
   const sandbox = world.sandboxes[run.sandboxId]
   const task = world.tasks[run.taskId]
   const input = task?.input ?? null
-  const intake = task ? roundOfFlow(world, task.flowId)?.record : undefined
-  const issue = intake?.issue ?? null
+  const round = task ? roundOfFlow(world, task.flowId) : null
+  const issue = round?.record.issue ?? null
+  // A past round keeps no writes of its own, so only the current round shows the record's.
+  const intake = round && round.round === round.record.round ? round.record : undefined
   const logs = world.logs.filter((line) => line.runId === run.id)
   const elapsedMs = Math.max(0, (run.endedAt ?? (run.execution === 'local' ? wallNow : world.now)) - run.startedAt)
 

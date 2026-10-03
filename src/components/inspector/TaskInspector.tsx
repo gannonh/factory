@@ -16,7 +16,8 @@ export function TaskInspector({ task }: { task: Task }) {
   const agent = world.agents[task.agentId]
   const runs = Object.values(world.runs).filter((run) => run.taskId === task.id).sort((a, b) => a.startedAt - b.startedAt)
   const round = roundOfFlow(world, task.flowId)
-  const intake = round?.record
+  // A past round keeps no blockers or writes of its own, so only the current round shows the record's.
+  const intake = round && round.round === round.record.round ? round.record : undefined
 
   return (
     <>

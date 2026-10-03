@@ -11,7 +11,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'vitest
 import { startFakeLinear, type FakeLinear } from '../scripts/fake-linear'
 import { createApi, type InProcessApi } from '../server/api'
 import { createLinearClient } from '../server/linear'
-import { reworkable } from '../server/rounds'
+import { linearFeedback, reworkable } from '../server/rounds'
 import { MockServer } from '../server/simulation'
 import type { WorldStore } from '../server/worldFile'
 import { intakeStatus } from '../src/components/linearIntake'
@@ -487,4 +487,12 @@ test.each([
   ['an ended round saved before states were kept', ended({ states: null }), false],
 ] as const)('reworkable: %s in Todo is %s', (_label, round, expected) => {
   expect(reworkable(round, 'state-eng-todo')).toBe(expected)
+})
+
+test('a Factory note with an unreadable time does not hide the Linear comments after the round started', () => {
+  const record = ended({ takenAt: Date.parse('2026-10-01T00:00:00Z'), writes: [{ kind: 'note', outcome: 'finished', commentId: 'note-1', body: null, status: { state: 'landed', at: 0 } }] })
+  expect(linearFeedback(record, [
+    { id: 'note-1', body: 'Signed by Factory.', createdAt: 'not a time', author: 'Factory' },
+    { id: 'c-1', body: 'Please handle the empty case.', createdAt: '2026-10-02T00:00:00Z', author: 'carol' },
+  ])).toEqual([{ author: 'carol', body: 'Please handle the empty case.', at: Date.parse('2026-10-02T00:00:00Z'), kind: 'comment', place: null }])
 })

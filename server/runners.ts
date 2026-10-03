@@ -149,6 +149,7 @@ async function prepareDeliveryNow(rootPath: string, workdir: string, runBranch: 
   if (!hasOrigin) throw new Error('delivery failed: sandbox root has no origin remote')
   if (request.kind === 'continue') {
     const { base } = request
+    await git('check branch name', ['check-ref-format', '--branch', base])
     await git('git fetch', ['fetch', '--no-tags', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`, `+refs/heads/${requested}:refs/remotes/origin/${requested}`], NETWORK_TIMEOUT_MS)
     const initialHead = (await git('git rev-parse', ['rev-parse', '--verify', `refs/remotes/origin/${requested}^{commit}`])).trim()
     await git('git worktree add', ['worktree', 'add', '--no-track', '-b', runBranch, workdir, initialHead])
