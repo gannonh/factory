@@ -121,7 +121,7 @@
       <div class="state">Start<small>then In Progress</small></div>
       <div class="card">
         <div class="head"><span class="kind">Stage</span><span class="name">Build</span></div>
-        <p class="desc">Factory moves the issue to In Progress when the run starts. The agent implements and keeps the workpad comment. Factory pushes the branch and opens the PR.</p>
+        <p class="desc">Factory moves the issue to In Progress when the run starts. The agent implements and keeps the workpad comment. Factory pushes the branch and opens the PR. An issue blocked by an unfinished issue waits in the pickup state until every blocker is Done or Canceled, and waiting issues start in Linear priority order (ADR 0011).</p>
         <div class="flow"><span class="label">FLOW</span><span class="agent">Implementer</span></div>
         <div class="exits"><span class="fwd">PR opened: Agent Review</span></div>
       </div>
