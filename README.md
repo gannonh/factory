@@ -122,7 +122,7 @@ A sandbox of kind `local` runs a real agent. Every other sandbox kind runs on th
 An agent whose delivery is set to Pull request has Factory deliver its work. The decision is recorded in `docs/adr/0009-factory-delivers-pull-requests.md`.
 
 - The root must be the top of a git repository with an `origin` remote. The run fetches origin's default branch and cuts its worktree from it. The branch is the issue's Linear branch name for a task in an issue's flow, and `factory-<run id>` otherwise. A name already used locally or on origin gets a suffix: `-2`, `-3` and so on.
-- When the run succeeds with commits, Factory runs `git push -u origin <branch>` and `gh pr create`. The title is the task title. The body is the run summary, plus the issue URL for an issue task. The PR is a `pr` artifact in the run's output, so a handoff passes it to the next agent. `gh` must be on the server's PATH and signed in.
+- When the run succeeds with commits, Factory pushes the worktree's `HEAD` to `<branch>` on origin and runs `gh pr create`, or reuses a PR the agent already opened on that branch. The title is the task title. The body is the run summary, plus the issue URL for an issue task. The PR is a `pr` artifact in the run's output, so a handoff passes it to the next agent. `gh` must be on the server's PATH and signed in.
 - A run with no commits opens no PR. Its output has the note "No changes; no pull request opened".
 - A failed push or PR creation fails the run with `delivery failed: <reason>`, and the agent's retry policy applies. A retry pushes a new suffixed branch and never touches a branch an earlier attempt pushed.
 - Cancel and the agent's timeout kill the process. Pausing the simulation does not suspend a running process.
