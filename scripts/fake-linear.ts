@@ -40,7 +40,7 @@ function seedTeams(): Team[] {
     states: states.map(([state, type], i) => ({ id: `state-${key.toLowerCase()}-${state.toLowerCase().replace(/\s+/g, '-')}`, name: state, type, position: i })),
     projects: projects.map((project) => ({ id: `project-${project.toLowerCase()}`, name: project })),
   })
-  return [team('ENG', 'Engineering', ['Alpha', 'Beta']), team('OPS', 'Operations', []), team('KAT', 'Kata', ['Gamma'], START_STATES)]
+  return [team('ENG', 'Engineering', ['Alpha', 'Beta', 'Shared']), team('OPS', 'Operations', []), team('KAT', 'Kata', ['Gamma', 'Shared'], START_STATES)]
 }
 
 const slug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)
@@ -169,20 +169,6 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
     },
   }
 
-  const page = <T>({ filter = {}, first = 50, after = null }: Variables, node: (issue: Issue) => T) => {
-    const matches = issues.filter((i) =>
-      !i.deleted
-      && (filter.team?.id?.eq === undefined || i.team === filter.team.id.eq)
-      && (filter.state?.id?.eq === undefined || i.state === filter.state.id.eq)
-      && (filter.project?.id?.eq === undefined || i.project === filter.project.id.eq)
-      && (filter.id?.in === undefined || filter.id.in.includes(i.id)))
-    const at = after === null ? -1 : matches.findIndex((i) => i.id === after)
-    if (after !== null && at === -1) throw new Error(`invalid cursor ${after}`)
-    const start = at + 1
-    const nodes = matches.slice(start, start + first)
-    return { nodes: nodes.map(node), pageInfo: { hasNextPage: start + first < matches.length, endCursor: nodes.at(-1)?.id ?? null } }
-  }
-
   const list = <T extends { id: string }>(items: T[], { first = 50, after = null }: Variables) => {
     const at = after === null ? -1 : items.findIndex((item) => item.id === after)
     if (after !== null && at === -1) throw new Error(`invalid cursor ${after}`)
@@ -190,10 +176,32 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
     return { nodes, pageInfo: { hasNextPage: at + 1 + first < items.length, endCursor: nodes.at(-1)?.id ?? null } }
   }
 
+  const page = <T>(variables: Variables, node: (issue: Issue) => T) => {
+    const { filter = {} } = variables
+    const matches = issues.filter((i) =>
+      !i.deleted
+      && (filter.team?.id?.eq === undefined || i.team === filter.team.id.eq)
+      && (filter.state?.id?.eq === undefined || i.state === filter.state.id.eq)
+      && (filter.project?.id?.eq === undefined || i.project === filter.project.id.eq)
+      && (filter.id?.in === undefined || filter.id.in.includes(i.id)))
+    const { nodes, pageInfo } = list(matches, variables)
+    return { nodes: nodes.map(node), pageInfo }
+  }
+
+  // A project shared by several teams is one node listing each of them, as in Linear.
+  const projects = () => {
+    const byId = new Map<string, { id: string; name: string; teams: { nodes: Array<{ id: string }> } }>()
+    for (const t of teams) for (const p of t.projects) {
+      const project = byId.get(p.id) ?? byId.set(p.id, { ...p, teams: { nodes: [] } }).get(p.id)!
+      project.teams.nodes.push({ id: t.id })
+    }
+    return [...byId.values()]
+  }
+
   const operations: Record<string, (variables: Variables) => unknown> = {
     FactoryTeams: (variables) => ({ teams: list(teams.map(({ id, key, name }) => ({ id, key, name })), variables) }),
     FactoryWorkflowStates: (variables) => ({ workflowStates: list(teams.flatMap((t) => t.states.map((s) => ({ ...s, team: { id: t.id } }))), variables) }),
-    FactoryProjects: (variables) => ({ projects: list(teams.flatMap((t) => t.projects.map((p) => ({ ...p, teams: { nodes: [{ id: t.id }] } }))), variables) }),
+    FactoryProjects: (variables) => ({ projects: list(projects(), variables) }),
     FactoryIssues: (variables) => ({
       issues: page(variables, ({ id, identifier, title, description, url, branchName, priority, blockedBy }) => ({
         id, identifier, title, description: description || null, url, branchName, priority, inverseRelations: inverseRelations(blockedBy),
@@ -313,22 +321,25 @@ const COMPLEXITY_LIMIT = 10_000
 
 /**
  * A lower bound of Linear's query complexity. Each connection costs its page size times the cost of what it selects,
- * so a connection nested in another multiplies their page sizes. Real Linear charges more per field.
+ * so a connection nested in another multiplies their page sizes. A connection read without `first` gets Linear's
+ * default page size of 50. Real Linear charges more per field.
  */
-export function complexity(query: string, variables: { first?: number }): number {
+export function complexity(query: string, variables: Record<string, unknown>): number {
   let total = 0
-  let pending = 1
+  let first: number | null = null
   const scale = [1]
-  for (const [token] of query.matchAll(/\([^)]*\)|[{}]/g)) {
+  for (const match of query.matchAll(/\([^)]*\)|[{}]/g)) {
+    const token = match[0]
     if (token === '{') {
-      const size = scale.at(-1)! * pending
-      if (pending > 1) total += size
+      const connection = /^\s*nodes\b/.test(query.slice(match.index + 1))
+      const size = scale.at(-1)! * (connection ? first ?? 50 : 1)
+      if (connection) total += size
       scale.push(size)
-      pending = 1
+      first = null
     } else if (token === '}') scale.pop()
     else {
-      const first = /(?<![$\w])first:\s*(\d+|\$first)/.exec(token)?.[1]
-      pending = first === undefined ? 1 : first === '$first' ? variables.first ?? 50 : Number(first)
+      const value = /(?<![$\w])first:\s*(\d+|\$\w+)/.exec(token)?.[1]
+      first = value === undefined ? null : value.startsWith('$') ? Number(variables[value.slice(1)] ?? 50) : Number(value)
     }
   }
   return total

@@ -446,7 +446,7 @@ test('the recommended states follow the team workflow by position', async () => 
   const f = makeFixture({ linear: client(), clock: wallClock().read })
   const catalog = await f.api.linear.catalog()
   expect(catalog.teams.map((t) => [t.key, t.name, t.projects.map((p) => p.name)]))
-    .toEqual([['ENG', 'Engineering', ['Alpha', 'Beta']], ['OPS', 'Operations', []], ['KAT', 'Kata', ['Gamma']]])
+    .toEqual([['ENG', 'Engineering', ['Alpha', 'Beta', 'Shared']], ['OPS', 'Operations', []], ['KAT', 'Kata', ['Shared', 'Gamma']]])
   expect(catalog.teams[0].states.map((s) => s.name)).toEqual(['Backlog', 'Todo', 'In Progress', 'In Review', 'Done', 'Canceled', 'Duplicate'])
   expect(recommendedStates(catalog.teams[0].states))
     .toEqual({ pickupState: 'state-eng-todo', startedState: 'state-eng-in-progress', finishedState: 'state-eng-in-review', failedState: null })
@@ -459,13 +459,14 @@ test('the recommended states follow the team workflow by position', async () => 
 test('the catalog reads every page of teams, states and projects, each under Linear\'s complexity limit', async () => {
   const catalog = await client({ pageSize: 1 }).catalog()
   expect(catalog.teams.map((t) => [t.key, t.states.length, t.projects.map((p) => p.id)]))
-    .toEqual([['ENG', 7, ['project-alpha', 'project-beta']], ['OPS', 7, []], ['KAT', 10, ['project-gamma']]])
+    .toEqual([['ENG', 7, ['project-alpha', 'project-beta', 'project-shared']], ['OPS', 7, []], ['KAT', 10, ['project-shared', 'project-gamma']]])
   expect(catalog.teams[2].states[2]).toEqual({ id: 'state-kat-start', name: 'Start', type: 'unstarted', position: 2 })
   expect(((await control({ op: 'stats' })) as { requests: Record<string, number> }).requests)
-    .toEqual({ FactoryTeams: 3, FactoryWorkflowStates: 24, FactoryProjects: 3 })
+    .toEqual({ FactoryTeams: 3, FactoryWorkflowStates: 24, FactoryProjects: 4 })
 
   const nested = 'query { teams(first: 100) { nodes { id states(first: 100) { nodes { id } } projects(first: 100) { nodes { id } } } } }'
   expect(complexity(nested, {})).toBe(20_100)
+  expect(complexity('query { teams(first: 100) { nodes { id states { nodes { id } } } } }', {})).toBe(5_100)
   expect(complexity(PROJECTS_QUERY, { first: 50 })).toBe(2_550)
 })
 

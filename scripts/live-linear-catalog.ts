@@ -18,6 +18,9 @@ const client = createLinearClient({
   },
 })
 
-const catalog = await client.catalog()
-for (const line of recorded) console.log(line)
-for (const team of catalog.teams) console.log(`${team.key} ${team.name}: ${team.states.length} states, ${team.projects.length} projects`)
+try {
+  const catalog = await client.catalog()
+  for (const team of catalog.teams) console.log(`${team.key} ${team.name}: ${team.states.length} states, ${team.projects.length} projects`)
+} finally {
+  for (const line of recorded) console.log(line)
+}
