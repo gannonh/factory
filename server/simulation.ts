@@ -1373,7 +1373,10 @@ export class MockServer {
         this.log('info', `working directory: ${workdir.path}${branch}`, { runId: id, agentId: agent.id }, Date.now())
         this.publish()
         this.runners.local.start({ run, agent, task, workdir: workdir.path }, (event) => this.handleRunnerEvent(id, event))
-      }).catch((error: unknown) => this.handleRunnerEvent(id, { kind: 'complete', status: 'failed', result: null, reason: error instanceof Error ? error.message : String(error) }))
+      }).catch((error: unknown) => {
+        if (this.closed) return
+        this.handleRunnerEvent(id, { kind: 'complete', status: 'failed', result: null, reason: error instanceof Error ? error.message : String(error) })
+      })
     } else this.runners.simulated.start({ run, agent, task, workdir: '' }, (event) => this.handleRunnerEvent(id, event))
   }
 

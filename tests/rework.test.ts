@@ -401,6 +401,23 @@ test('a run cancelled while it reads its pull request prepares no worktree and l
   await f.server.close()
 })
 
+test('a server closed while a run reads its pull request saves nothing after it closed', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const store = memoryStore()
+  const f = factory(repo.root, agentRunner(), LIFECYCLE, store)
+  await roundTwoTaken(f)
+  gh.delayView(500)
+  const views = prViews()
+  f.api.sim.advance(1)
+  await until(() => prViews() === views + 1)
+  await f.server.close()
+  const saved = store.text
+  await new Promise((resolve) => setTimeout(resolve, 1200))
+  expect(store.text).toBe(saved)
+  expect(coderRuns(f)[1].status).toBe('running')
+})
+
 test('a failed issue that never left Todo does not loop, and runs again as a new round once moved away and back', async () => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
