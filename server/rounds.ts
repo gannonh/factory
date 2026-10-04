@@ -91,7 +91,7 @@ export const roundTitle = (identifier: string, title: string, round: number) => 
 
 const ENDED: Record<RoundResult['outcome'], string> = { finished: 'finished', failed: 'failed', cancelled: 'was cancelled' }
 
-function reworkLine(rework: Rework | null, previous: RoundResult | null): string {
+export function reworkLine(rework: Rework | null, previous: RoundResult | null): string {
   if (!rework) return `The previous round ${previous ? ENDED[previous.outcome] : 'ended'} without a pull request, so this round starts fresh.`
   const pr = `#${prNumber(rework.pr)} (${rework.pr.url})`
   if (rework.kind === 'continue') {

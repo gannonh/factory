@@ -233,6 +233,7 @@ Continue on pull request #41 (${PR_41}). Commit your changes on top of the curre
   const workdir = workdirOf(f, secondRun)
   expect(secondRun.status).toBe('succeeded')
   expect(prViews()).toBe(3)
+  expect(seen.at(-1)?.prompt).toBe(second.prompt)
   expect(git(workdir, 'branch', '--show-current')).toBe(`factory-${secondRun.id}`)
   expect(git(workdir, 'rev-parse', 'HEAD~1')).toBe(firstHead)
   expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login')).toBe(git(workdir, 'rev-parse', 'HEAD'))
@@ -331,6 +332,9 @@ test.each([
   expect(run.output?.artifacts.at(-1)).toEqual({ kind: 'pr', label: 'Pull request #42', url: PR_42 })
   expect(record(f)).toMatchObject({ round: 2, phase: 'ended', rework: { kind: 'fresh', pr: { url: PR_41 }, state: 'merged' }, result: { pr: { url: PR_42 } } })
   expect(f.server.snapshot().logs.map((l) => l.msg)).toContain('pull request #41 was merged, so this run starts a fresh branch')
+  const merged = `Pull request #41 (${PR_41}) was merged, so this round starts a fresh branch and opens a new pull request.`
+  expect(seen.at(-1)?.prompt.split('\n\n').slice(-2)).toEqual(['## Rework round 2', merged])
+  expect(issueTasks(f)[1].prompt).toBe(seen.at(-1)?.prompt)
   const after = await issue('ENG-1')
   expect(after.attachments.map((a) => a.url)).toEqual([PR_41, PR_42])
   expect(after.comments.at(-1)?.body.split('\n\n').slice(0, 2)).toEqual(['**Factory finished this issue (round 2).**', 'Pull request #41 was merged, so this round opened a new pull request.'])
@@ -371,9 +375,12 @@ test('a restart after round 2’s run read the merge retries fresh without readi
   const server = new MockServer({ manual: true, rng: RNG, localRunner: agentRunner(), localRoot: repo.root, linear: linear(), clock: () => wall, store })
   const g = { server, api: createApi(server), trigger: f.trigger, root: repo.root }
   expect(record(g).rework).toMatchObject({ kind: 'fresh', pr: { url: PR_41 }, state: 'closed' })
+  const closed = `Pull request #41 (${PR_41}) was closed, so this round starts a fresh branch and opens a new pull request.`
+  expect(seen.at(-1)?.prompt.split('\n\n').at(-1)).toBe(closed)
   const views = prViews()
   const retried = await nextRun(g)
   expect(retried).toMatchObject({ status: 'succeeded', attempt: 2 })
+  expect(seen.at(-1)?.prompt.split('\n\n').at(-1)).toBe(closed)
   expect(prViews()).toBe(views)
   expect(git(workdirOf(g, retried), 'branch', '--show-current')).toBe('eng-1-fix-login-3')
   expect((await issue('ENG-1')).comments.at(-1)?.body.split('\n\n')[1]).toBe('Pull request #41 was closed, so this round opened a new pull request.')
@@ -386,36 +393,42 @@ test('a run cancelled while it reads its pull request prepares no worktree and l
   const f = factory(repo.root, agentRunner())
   await roundTwoTaken(f)
   gh.setState('eng-1-fix-login', 'MERGED')
-  gh.delayView(500)
+  gh.holdView()
   const views = prViews()
   f.api.sim.advance(1)
-  await until(() => coderRuns(f).length === 2)
+  await until(() => prViews() === views + 1)
   const run = coderRuns(f)[1]
   f.api.tasks.cancel(run.taskId)
-  await until(() => prViews() === views + 1)
-  await new Promise((resolve) => setTimeout(resolve, 800))
+  gh.releaseView()
+  await f.api.sim.settled()
   expect(coderRuns(f)[1].status).toBe('cancelled')
   expect(existsSync(workdirOf(f, run))).toBe(false)
   expect(git(repo.root, 'branch', '--list', 'eng-1-fix-login-*')).toBe('')
   expect(record(f).rework).toMatchObject({ kind: 'continue' })
+  expect(seen.map((t) => t.title)).toEqual(['ENG-1 Fix login'])
   await f.server.close()
 })
 
-test('a server closed while a run reads its pull request saves nothing after it closed', async () => {
+test('a server closed while a run reads its merged pull request changes and saves nothing for that run', async () => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
   const store = memoryStore()
   const f = factory(repo.root, agentRunner(), LIFECYCLE, store)
   await roundTwoTaken(f)
-  gh.delayView(500)
+  gh.setState('eng-1-fix-login', 'MERGED')
+  gh.holdView()
   const views = prViews()
   f.api.sim.advance(1)
   await until(() => prViews() === views + 1)
-  await f.server.close()
-  const saved = store.text
-  await new Promise((resolve) => setTimeout(resolve, 1200))
-  expect(store.text).toBe(saved)
+  const run = coderRuns(f)[1]
+  const closing = f.server.close()
+  gh.releaseView()
+  await closing
   expect(coderRuns(f)[1].status).toBe('running')
+  expect(record(f).rework).toMatchObject({ kind: 'continue' })
+  expect(existsSync(workdirOf(f, run))).toBe(false)
+  const saved = JSON.parse(store.text!) as { intake: Record<string, IntakeRecord>; runs: Record<string, Run> }
+  expect([saved.intake[ENG_1].rework?.kind, saved.runs[run.id].status]).toEqual(['continue', 'running'])
 })
 
 test('a failed issue that never left Todo does not loop, and runs again as a new round once moved away and back', async () => {

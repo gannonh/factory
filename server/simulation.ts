@@ -59,7 +59,7 @@ import { array, boolean, defaulted, id, number, object, oneOf, record } from './
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
 import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type IssueStatus, type LinearClient, type LinearIssue } from './linear'
 import { cancelRecord, flowAction, flowOutcome, landed, nextWrite, reconcileRecord, workingStates } from './writeBack'
-import { latestOutput, latestPullRequest, linearFeedback, prNumber, recent, reworkOf, reworkable, roundPrompt, roundTitle, startRound, type Feedback, type RoundContext } from './rounds'
+import { latestOutput, latestPullRequest, linearFeedback, prNumber, recent, reworkLine, reworkOf, reworkable, roundPrompt, roundTitle, startRound, type Feedback, type RoundContext } from './rounds'
 import { readPullRequest, viewPullRequest } from './github'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
@@ -154,6 +154,8 @@ export class MockServer {
   private localRunner: Runner
   private workdirs = new Map<RunId, PreparedWorkdir>()
   private pendingCompletions = new Map<RunId, Promise<void>>()
+  /** Local runs still reading their pull request or preparing their working directory. */
+  private setups = new Map<RunId, Promise<void>>()
   private seedOptions: { localRoot?: string; localCronEnabled?: boolean }
   private linear: LinearClient
   private clock: () => number
@@ -236,13 +238,13 @@ export class MockServer {
       if (run.status === 'running' && !this.pendingCompletions.has(run.id)) this.runners[run.execution ?? 'simulated'].kill(run.id)
     }
     if (this.pendingCompletions.size) await Promise.all(this.pendingCompletions.values())
-    if (this.polls.size || this.drains.size) await this.settled()
+    if (this.polls.size || this.drains.size || this.setups.size) await this.settled()
     this.flush()
   }
 
-  /** Resolves once no Linear poll or write-back is in flight. */
+  /** Resolves once no Linear poll, write-back or local run setup is in flight. */
   async settled() {
-    while (this.polls.size > 0 || this.drains.size > 0) await Promise.all([...this.polls.values(), ...this.drains.values()])
+    while (this.polls.size > 0 || this.drains.size > 0 || this.setups.size > 0) await Promise.all([...this.polls.values(), ...this.drains.values(), ...this.setups.values()])
   }
 
   /** Monotonic count of publishes. The initial seed is revision 1. */
@@ -1365,26 +1367,28 @@ export class MockServer {
       }, agent.timeoutMs)
       timeout.unref?.()
       this.localTimeouts.set(id, timeout)
-      const delivery = agent.delivery === 'pull-request' ? this.deliveryRequest(task.flowId, id, agent.id) : Promise.resolve(null)
-      void delivery.then((request) => prepareWorkdir(sandbox.host, id, request)).then((workdir) => {
+      const delivery = agent.delivery === 'pull-request' ? this.deliveryRequest(task, id, agent.id) : Promise.resolve(null)
+      const setup = delivery.then((request) => prepareWorkdir(sandbox.host, id, request)).then((workdir) => {
         if (this.closed || this.world.runs[id]?.status !== 'running') return
         this.workdirs.set(id, workdir)
         const branch = workdir.delivery ? ` on branch ${workdir.delivery.branch} from origin/${workdir.delivery.base}` : ''
         this.log('info', `working directory: ${workdir.path}${branch}`, { runId: id, agentId: agent.id }, Date.now())
         this.publish()
-        this.runners.local.start({ run, agent, task, workdir: workdir.path }, (event) => this.handleRunnerEvent(id, event))
+        this.runners.local.start({ run, agent, task: this.world.tasks[task.id] ?? task, workdir: workdir.path }, (event) => this.handleRunnerEvent(id, event))
       }).catch((error: unknown) => {
         if (this.closed) return
         this.handleRunnerEvent(id, { kind: 'complete', status: 'failed', result: null, reason: error instanceof Error ? error.message : String(error) })
       })
+      this.setups.set(id, setup)
+      void setup.finally(() => this.setups.delete(id))
     } else this.runners.simulated.start({ run, agent, task, workdir: '' }, (event) => this.handleRunnerEvent(id, event))
   }
 
   /**
    * A round that continues a pull request rereads the PR's state, since it may have merged or closed while the round
-   * waited. Saving the round as fresh makes its note say so and its retries start fresh (ADR 0012).
+   * waited. Saving the round as fresh makes its prompt and note say so and its retries start fresh (ADR 0012).
    */
-  private async deliveryRequest(flowId: FlowId, runId: RunId, agentId: AgentId): Promise<DeliveryRequest> {
+  private async deliveryRequest({ id: taskId, flowId }: Task, runId: RunId, agentId: AgentId): Promise<DeliveryRequest> {
     const rework = this.openRecord(flowId)?.rework
     if (rework?.kind === 'continue') {
       const view = await viewPullRequest(rework.pr.url).catch((error: unknown) => {
@@ -1396,6 +1400,8 @@ export class MockServer {
       const record = this.openRecord(flowId)
       if (record?.rework?.kind === 'continue') {
         this.world.intake = { ...this.world.intake, [record.issue.id]: { ...record, rework: now } }
+        const prompt = this.world.tasks[taskId]?.prompt
+        if (prompt) this.patchTask(taskId, { prompt: prompt.replace(reworkLine(rework, null), () => reworkLine(now, null)) })
         this.log('info', `pull request #${prNumber(rework.pr)} was ${now.state}, so this run starts a fresh branch`, { runId, agentId }, Date.now())
         this.publish()
       }
