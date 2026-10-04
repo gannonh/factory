@@ -165,10 +165,10 @@ export function roundPrompt(issue: { title: string; description: string; url: st
 }
 
 /**
- * A handoff task's prompt: the upstream run's summary and artifacts. A delivering agent's run in a round after the first
- * passes the round's record, and the prompt adds how the round continues, as the issue task's prompt does.
+ * A handoff task's prompt: the upstream run's summary and artifacts. Given the record of a round after the first, it adds
+ * how the round continues, as the issue task's prompt does.
  */
-export function handoffPrompt(upstream: RunOutput, record: IntakeRecord | null): string {
+export function handoffPrompt(upstream: RunOutput, record?: IntakeRecord): string {
   const output = [upstream.summary, ...upstream.artifacts.map((a) => `${a.kind}: ${a.label}${a.url ? ` (${a.url})` : ''}`)].join('\n')
   if (!record || record.round === 1) return output
   return [output, `## Rework round ${record.round}`, reworkLine(record.rework, record.past.at(-1)?.result ?? null)].join('\n\n')

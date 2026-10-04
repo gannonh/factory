@@ -1190,7 +1190,7 @@ export class MockServer {
       this.event('run', { kind: 'run', id: run.id }, `${this.nameOf(run.agentId)} finished “${run.title}”`)
       // A local run that was already finishing when its flow was cancelled still succeeds, but hands nothing on.
       if (output && !(task && this.openRecord(task.flowId)?.cancel)) {
-        const prompt = handoffPrompt(output, null)
+        const prompt = handoffPrompt(output)
         for (const e of Object.values(w.edges)) {
           if (e.kind === 'handoff' && e.source === run.agentId) {
             this.enqueueTaskSilently(e.target as AgentId, {
@@ -1413,8 +1413,7 @@ export class MockServer {
       }
       rework = now
     }
-    const current = this.openRecord(flowId)
-    if (origin.kind === 'handoff' && input && current) this.patchTask(taskId, { prompt: handoffPrompt(input, current) })
+    if (origin.kind === 'handoff' && input) this.patchTask(taskId, { prompt: handoffPrompt(input, this.openRecord(flowId)) })
     if (rework?.kind === 'continue') return { kind: 'continue', branch: rework.branch, base: rework.base }
     return { kind: 'new', branch: issueOfFlow(this.world, flowId)?.branchName ?? `factory-${runId}` }
   }
