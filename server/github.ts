@@ -26,7 +26,6 @@ async function list(host: string, path: string): Promise<Json[]> {
   return out.split('\n').filter((line) => line.trim() !== '').map((line) => JSON.parse(line) as unknown).filter(isJson)
 }
 
-/** A pull request's state and head and base branches, read with `gh pr view <url>`. */
 export async function viewPullRequest(url: string): Promise<PullRequestView> {
   if (!PR_URL.test(url)) throw new Error(`not a pull request URL: ${url}`)
   const view: unknown = JSON.parse(await gh(['pr', 'view', url, '--json', 'state,headRefName,baseRefName']))

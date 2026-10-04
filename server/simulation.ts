@@ -59,7 +59,7 @@ import { array, boolean, defaulted, id, number, object, oneOf, record } from './
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
 import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type IssueStatus, type LinearClient, type LinearIssue } from './linear'
 import { cancelRecord, flowAction, flowOutcome, landed, nextWrite, reconcileRecord, workingStates } from './writeBack'
-import { latestOutput, latestPullRequest, linearFeedback, prNumber, recent, reworkOf, reworkable, roundPrompt, roundTitle, startRound, type Feedback, type PullRequestView, type RoundContext } from './rounds'
+import { latestOutput, latestPullRequest, linearFeedback, prNumber, recent, reworkOf, reworkable, roundPrompt, roundTitle, startRound, type Feedback, type RoundContext } from './rounds'
 import { readPullRequest, viewPullRequest } from './github'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
@@ -1378,21 +1378,19 @@ export class MockServer {
   }
 
   /**
-   * The branch a delivering run works on. A round that continues a pull request reads the PR's state first, since it
-   * may have merged or closed while the round waited. A merged or closed PR makes the round fresh, as if it had been
-   * taken after the merge, so its note says so and a retry or restart starts fresh too (ADR 0012).
+   * A round that continues a pull request rereads the PR's state, since it may have merged or closed while the round
+   * waited. Saving the round as fresh makes its note say so and its retries start fresh (ADR 0012).
    */
   private async deliveryRequest(flowId: FlowId, runId: RunId, agentId: AgentId): Promise<DeliveryRequest> {
     const rework = this.openRecord(flowId)?.rework
     if (rework?.kind === 'continue') {
-      let view: PullRequestView
-      try { view = await viewPullRequest(rework.pr.url) } catch (error) {
+      const view = await viewPullRequest(rework.pr.url).catch((error: unknown) => {
         throw new Error(`delivery failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
+      })
       const now = reworkOf(rework.pr, view)
       if (now.kind === 'continue') return { kind: 'continue', branch: now.branch, base: now.base }
       const record = this.openRecord(flowId)
-      if (!this.closed && record?.rework?.kind === 'continue' && record.rework.pr.url === rework.pr.url) {
+      if (!this.closed && record?.rework?.kind === 'continue') {
         this.world.intake = { ...this.world.intake, [record.issue.id]: { ...record, rework: now } }
         this.log('info', `pull request #${prNumber(rework.pr)} was ${now.state}, so this run starts a fresh branch`, { runId, agentId }, Date.now())
         this.publish()
