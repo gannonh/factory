@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest'
 import { complexity, startFakeLinear, type FakeLinear } from '../scripts/fake-linear'
 import { createApi } from '../server/api'
 import { startFactoryServer } from '../server/http'
-import { LinearError, PROJECTS_QUERY, createLinearClient, type LinearClient } from '../server/linear'
+import { LinearError, PROJECTS_QUERY, PROJECT_TEAMS_QUERY, createLinearClient, type LinearClient } from '../server/linear'
 import { ClaudeRunner } from '../server/runners'
 import { MockServer } from '../server/simulation'
 import {
@@ -467,7 +467,18 @@ test('the catalog reads every page of teams, states and projects, each under Lin
   const nested = 'query { teams(first: 100) { nodes { id states(first: 100) { nodes { id } } projects(first: 100) { nodes { id } } } } }'
   expect(complexity(nested, {})).toBe(20_100)
   expect(complexity('query { teams(first: 100) { nodes { id states { nodes { id } } } } }', {})).toBe(5_100)
-  expect(complexity(PROJECTS_QUERY, { first: 50 })).toBe(2_550)
+  expect(complexity(PROJECTS_QUERY, { first: 50 })).toBe(550)
+  expect(complexity(PROJECT_TEAMS_QUERY, { first: 50 })).toBe(50)
+})
+
+test('the catalog lists a project under every team it is shared with, past the first page of its teams', async () => {
+  for (let n = 1; n <= 51; n++) await control({ op: 'addTeam', key: `T${n}`, projects: ['Shared'] })
+  const catalog = await client().catalog()
+  expect(catalog.teams).toHaveLength(54)
+  expect(catalog.teams.filter((t) => t.projects.some((p) => p.id === 'project-shared')).map((t) => t.key))
+    .toEqual(['ENG', 'KAT', ...Array.from({ length: 51 }, (_, i) => `T${i + 1}`)])
+  expect(((await control({ op: 'stats' })) as { requests: Record<string, number> }).requests)
+    .toEqual({ FactoryTeams: 2, FactoryWorkflowStates: 8, FactoryProjects: 1, FactoryProjectTeams: 2 })
 })
 
 test('the recommended pickup is Start when the workflow has one, else the first unstarted state', () => {

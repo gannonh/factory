@@ -69,7 +69,11 @@ export const WORKFLOW_STATES_QUERY = `query FactoryWorkflowStates($first: Int!, 
 }`
 
 export const PROJECTS_QUERY = `query FactoryProjects($first: Int!, $after: String) {
-  projects(first: $first, after: $after) { nodes { id name teams(first: 50) { nodes { id } } } pageInfo { hasNextPage endCursor } }
+  projects(first: $first, after: $after) { nodes { id name teams(first: 10) { nodes { id } pageInfo { hasNextPage endCursor } } } pageInfo { hasNextPage endCursor } }
+}`
+
+export const PROJECT_TEAMS_QUERY = `query FactoryProjectTeams($id: String!, $first: Int!, $after: String) {
+  project(id: $id) { id teams(first: $first, after: $after) { nodes { id } pageInfo { hasNextPage endCursor } } }
 }`
 
 // Linear cannot filter inverseRelations by type, so the blocks relations are picked from the first 100 of any type.
@@ -126,13 +130,14 @@ const page = <T>(node: Parser<T>) => object<Page<T>>({ nodes: array(node), pageI
 
 type TeamNode = { id: string; key: string; name: string }
 type StateNode = WorkflowState & { team: { id: string } }
-type ProjectNode = { id: string; name: string; teams: { nodes: Array<{ id: string }> } }
+type ProjectNode = { id: string; name: string; teams: Page<{ id: string }> }
 
 const teamsData = object({ teams: page(object<TeamNode>({ id: string, key: string, name: string })) })
 const workflowStatesData = object({
   workflowStates: page(object<StateNode>({ id: string, name: string, type: stateType, position: number, team: object({ id: string }) })),
 })
-const projectsData = object({ projects: page(object<ProjectNode>({ id: string, name: string, teams: nodes(object({ id: string })) })) })
+const projectsData = object({ projects: page(object<ProjectNode>({ id: string, name: string, teams: page(object({ id: string })) })) })
+const projectTeamsData = object({ project: object({ id: string, teams: page(object({ id: string })) }) })
 
 // "A blocks B" is a `blocks` relation stored on A, so B's blockers are the `issue` of B's inverse `blocks` relations.
 type Relation = { type: string; issue: IssueBlocker }
@@ -241,6 +246,10 @@ export function createLinearClient(options: {
   const issuePages = <T>(operationName: string, query: string, filter: object, data: Parser<{ issues: Page<T> }>) =>
     pages(async (after) => (await request(operationName, query, { filter, first: pageSize, after }, data)).issues)
 
+  // A project shared by more teams than the projects query's first page of them reads all its teams on its own.
+  const projectTeams = async (project: ProjectNode) => !project.teams.pageInfo.hasNextPage ? project.teams.nodes
+    : pages(async (after) => (await request('FactoryProjectTeams', PROJECT_TEAMS_QUERY, { id: project.id, first: pageSize, after }, projectTeamsData)).project.teams)
+
   return {
     async catalog() {
       const [teams, states, projects] = await Promise.all([
@@ -248,13 +257,14 @@ export function createLinearClient(options: {
         pages(async (after) => (await request('FactoryWorkflowStates', WORKFLOW_STATES_QUERY, { first: pageSize, after }, workflowStatesData)).workflowStates),
         pages(async (after) => (await request('FactoryProjects', PROJECTS_QUERY, { first: pageSize, after }, projectsData)).projects),
       ])
+      const teamsOf = new Map(await Promise.all(projects.map(async (p) => [p.id, new Set((await projectTeams(p)).map((pt) => pt.id))] as const)))
       return {
         teams: teams.map((t): LinearTeam => ({
           id: t.id,
           key: t.key,
           name: t.name,
           states: states.filter((s) => s.team.id === t.id).map(({ id, name, type, position }) => ({ id, name, type, position })),
-          projects: projects.filter((p) => p.teams.nodes.some((pt) => pt.id === t.id)).map(({ id, name }) => ({ id, name })),
+          projects: projects.filter((p) => teamsOf.get(p.id)!.has(t.id)).map(({ id, name }) => ({ id, name })),
         })),
       }
     },

@@ -32,15 +32,16 @@ const START_STATES: Array<[string, WorkflowStateType]> = [
   ['Human Review', 'started'], ['Merging', 'started'], ['Done', 'completed'], ['Canceled', 'canceled'], ['Duplicate', 'duplicate'],
 ]
 
+const makeTeam = (key: string, name: string, projects: string[], states = STATES): Team => ({
+  id: `team-${key.toLowerCase()}`,
+  key,
+  name,
+  states: states.map(([state, type], i) => ({ id: `state-${key.toLowerCase()}-${state.toLowerCase().replace(/\s+/g, '-')}`, name: state, type, position: i })),
+  projects: projects.map((project) => ({ id: `project-${project.toLowerCase()}`, name: project })),
+})
+
 function seedTeams(): Team[] {
-  const team = (key: string, name: string, projects: string[], states = STATES): Team => ({
-    id: `team-${key.toLowerCase()}`,
-    key,
-    name,
-    states: states.map(([state, type], i) => ({ id: `state-${key.toLowerCase()}-${state.toLowerCase().replace(/\s+/g, '-')}`, name: state, type, position: i })),
-    projects: projects.map((project) => ({ id: `project-${project.toLowerCase()}`, name: project })),
-  })
-  return [team('ENG', 'Engineering', ['Alpha', 'Beta', 'Shared']), team('OPS', 'Operations', []), team('KAT', 'Kata', ['Gamma', 'Shared'], START_STATES)]
+  return [makeTeam('ENG', 'Engineering', ['Alpha', 'Beta', 'Shared']), makeTeam('OPS', 'Operations', []), makeTeam('KAT', 'Kata', ['Shared', 'Gamma'], START_STATES)]
 }
 
 const slug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)
@@ -87,6 +88,11 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
   }
 
   const control: Record<string, (body: Record<string, unknown>) => unknown> = {
+    addTeam(body) {
+      const team = makeTeam(String(body.key), String(body.name ?? body.key), (Array.isArray(body.projects) ? body.projects : []).map(String))
+      teams.push(team)
+      return team
+    },
     addIssue(body) {
       const team = teamByKey(typeof body.team === 'string' ? body.team : 'ENG')
       const title = String(body.title ?? 'Untitled')
@@ -188,12 +194,12 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
     return { nodes: nodes.map(node), pageInfo }
   }
 
-  // A project shared by several teams is one node listing each of them, as in Linear.
+  // A project shared by several teams is one project listing each of them, as in Linear.
   const projects = () => {
-    const byId = new Map<string, { id: string; name: string; teams: { nodes: Array<{ id: string }> } }>()
+    const byId = new Map<string, { id: string; name: string; teams: Array<{ id: string }> }>()
     for (const t of teams) for (const p of t.projects) {
-      const project = byId.get(p.id) ?? byId.set(p.id, { ...p, teams: { nodes: [] } }).get(p.id)!
-      project.teams.nodes.push({ id: t.id })
+      const project = byId.get(p.id) ?? byId.set(p.id, { ...p, teams: [] }).get(p.id)!
+      project.teams.push({ id: t.id })
     }
     return [...byId.values()]
   }
@@ -201,7 +207,14 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
   const operations: Record<string, (variables: Variables) => unknown> = {
     FactoryTeams: (variables) => ({ teams: list(teams.map(({ id, key, name }) => ({ id, key, name })), variables) }),
     FactoryWorkflowStates: (variables) => ({ workflowStates: list(teams.flatMap((t) => t.states.map((s) => ({ ...s, team: { id: t.id } }))), variables) }),
-    FactoryProjects: (variables) => ({ projects: list(projects(), variables) }),
+    FactoryProjects: (variables) => {
+      const { nodes, pageInfo } = list(projects(), variables)
+      return { projects: { nodes: nodes.map((p) => ({ ...p, teams: list(p.teams, { first: 10 }) })), pageInfo } }
+    },
+    FactoryProjectTeams: (variables) => {
+      const project = projects().find((p) => p.id === variables.id) ?? missing(`project ${variables.id}`)
+      return { project: { id: project.id, teams: list(project.teams, variables) } }
+    },
     FactoryIssues: (variables) => ({
       issues: page(variables, ({ id, identifier, title, description, url, branchName, priority, blockedBy }) => ({
         id, identifier, title, description: description || null, url, branchName, priority, inverseRelations: inverseRelations(blockedBy),
