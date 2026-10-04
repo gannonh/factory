@@ -2,7 +2,10 @@
  * A fake `gh` for the delivery and rework suites, put first on PATH. It keeps one pull request per head branch, as
  * GitHub does, and records each call. `pr view <branch|url>` prints that PR as JSON or fails; `pr create` opens pull
  * request 41, 42, … in order. `api` answers a PR's reviews, inline comments and conversation comments one JSON
- * document per line, as `--jq '.[] | @json'` prints them. `failNext` makes the next `pr create` or `pr view` fail, and `holdView` makes every `pr view` wait until `releaseView`.
+ * document per line, as `--jq '.[] | @json'` prints them. Each carries the author's `author_association` unless it is
+ * null, and a login ending in `[bot]` is a bot account. A conversation comment carries `performed_via_github_app`, as
+ * GitHub's does, and reviews and inline comments do not. `failNext` makes the next `pr create` or `pr view` fail, and
+ * `holdView` makes every `pr view` wait until `releaseView`.
  */
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -11,6 +14,9 @@ import { join } from 'node:path'
 export type GhCall = { cwd: string; argv: string[] }
 export type FakePr = { url: string; number: number; state: 'OPEN' | 'MERGED' | 'CLOSED'; baseRefName: string; headRefName: string }
 type Feedback = { reviews: unknown[]; pulls: unknown[]; issues: unknown[] }
+export type Association = 'OWNER' | 'MEMBER' | 'COLLABORATOR' | 'CONTRIBUTOR' | 'FIRST_TIME_CONTRIBUTOR' | 'FIRST_TIMER' | 'NONE'
+const user = (login: string) => ({ login, type: login.endsWith('[bot]') ? 'Bot' : 'User' })
+const by = (login: string, association: Association | null) => ({ user: user(login), ...(association === null ? {} : { author_association: association }) })
 
 export function fakeGh(dir = mkdtempSync(join(tmpdir(), 'factory-gh-'))) {
   const bin = join(dir, 'bin')
@@ -83,9 +89,12 @@ console.log(url)
       writeFileSync(prsFile, JSON.stringify({ ...all, [branch]: { ...all[branch], state } }))
     },
     /** A review summary; `at` is its ISO submission time. */
-    review: (number: number, login: string, body: string, at: string) => addFeedback(number, 'reviews', { user: { login }, body, submitted_at: at, state: 'COMMENTED' }),
-    inline: (number: number, login: string, body: string, path: string, line: number, at: string) =>
-      addFeedback(number, 'pulls', { user: { login }, body, path, line, created_at: at }),
-    conversation: (number: number, login: string, body: string, at: string) => addFeedback(number, 'issues', { user: { login }, body, created_at: at }),
+    review: (number: number, login: string, body: string, at: string, association: Association | null = 'COLLABORATOR') =>
+      addFeedback(number, 'reviews', { ...by(login, association), body, submitted_at: at, state: 'COMMENTED' }),
+    inline: (number: number, login: string, body: string, path: string, line: number, at: string, association: Association | null = 'COLLABORATOR') =>
+      addFeedback(number, 'pulls', { ...by(login, association), body, path, line, created_at: at }),
+    /** `app` is the GitHub App that posted the comment for `login`, or null when the person posted it. */
+    conversation: (number: number, login: string, body: string, at: string, association: Association | null = 'COLLABORATOR', app: string | null = null) =>
+      addFeedback(number, 'issues', { ...by(login, association), body, created_at: at, performed_via_github_app: app === null ? null : { name: app, slug: app } }),
   }
 }

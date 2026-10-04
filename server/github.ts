@@ -12,6 +12,18 @@ const isJson = (value: unknown): value is Json => typeof value === 'object' && v
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
 const login = (item: Json) => (isJson(item.user) && typeof item.user.login === 'string' ? item.user.login : 'unknown')
 
+/** The author associations that GitHub gives only to people with access to the repository (ADR 0012). */
+const TRUSTED = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
+
+// GitHub sets `performed_via_github_app` on conversation comments only; reviews and inline comments lack the field.
+function untrusted(item: Json): string | null {
+  const app = item.performed_via_github_app
+  if (isJson(app)) return `posted by app ${text(app.name) || text(app.slug) || 'unknown'}`
+  if (isJson(item.user) && item.user.type === 'Bot') return 'bot'
+  const association = typeof item.author_association === 'string' ? item.author_association : 'missing'
+  return TRUSTED.has(association) ? null : `author association ${association}`
+}
+
 async function gh(args: string[]): Promise<string> {
   try {
     return (await execFileAsync('gh', args, { timeout: GH_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 })).stdout
@@ -52,12 +64,13 @@ export async function readPullRequest(url: string): Promise<{ view: PullRequestV
   ])
   const at = (value: unknown) => Date.parse(text(value))
   const feedback: Feedback[] = [
-    ...reviews.map((r): Feedback => ({ author: login(r), body: text(r.body), at: at(r.submitted_at), kind: 'review', place: null })),
+    ...reviews.map((r): Feedback => ({ author: login(r), body: text(r.body), at: at(r.submitted_at), kind: 'review', place: null, untrusted: untrusted(r) })),
     ...inline.map((c): Feedback => {
       const line = typeof c.line === 'number' ? c.line : typeof c.original_line === 'number' ? c.original_line : null
-      return { author: login(c), body: text(c.body), at: at(c.created_at), kind: 'inline', place: typeof c.path === 'string' ? `${c.path}${line === null ? '' : `:${line}`}` : null }
+      const place = typeof c.path === 'string' ? `${c.path}${line === null ? '' : `:${line}`}` : null
+      return { author: login(c), body: text(c.body), at: at(c.created_at), kind: 'inline', place, untrusted: untrusted(c) }
     }),
-    ...conversation.map((c): Feedback => ({ author: login(c), body: text(c.body), at: at(c.created_at), kind: 'comment', place: null })),
+    ...conversation.map((c): Feedback => ({ author: login(c), body: text(c.body), at: at(c.created_at), kind: 'comment', place: null, untrusted: untrusted(c) })),
   ]
   return { view, feedback }
 }
