@@ -5,7 +5,7 @@
 import { existsSync } from 'node:fs'
 import { expect, test } from 'vitest'
 import { createApi } from '../server/api'
-import { linearFeedback, rereadRework, reworkable, screen, type Feedback } from '../server/rounds'
+import { linearFeedback, rereadRework, reworkable, reworkSection, screen, type Feedback } from '../server/rounds'
 import { MockServer } from '../server/simulation'
 import { intakeStatus } from '../src/components/linearIntake'
 import { LINEAR_POLL_MS, roundOfFlow, type EdgeId, type IntakeRecord, type IssueId, type Run, type Task, type TriggerId } from '../src/domain/types'
@@ -634,6 +634,11 @@ test('a merged read saves even after a parallel read moved the branch, and an op
   })
 })
 
+test('a rework line with a blank line in it fails loudly, since the next run would split the prompt inside it', () => {
+  const rework = { kind: 'continue' as const, pr: { kind: 'pr' as const, label: 'Pull request #41', url: PR_41 }, branch: 'eng-1\n\nlogin', base: 'main' }
+  expect(() => reworkSection(ended({ round: 2, rework }))).toThrow('the rework line for round 2 has a blank line, which would split the prompt inside it')
+})
+
 test('a round 2 issue task saved as main saves tasks gets the fresh line after a restart and a merge, and keeps its feedback', async () => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
@@ -665,7 +670,9 @@ test('a round 2 issue task saved as main saves tasks gets the fresh line after a
 test.each([
   ['head', 'a bidi override', 'eng-1-\u202Elogin', 'main', 'eng-1-\\u{202e}login'],
   ['head', 'a line separator', 'eng-1-\u2028login', 'main', 'eng-1-\\u{2028}login'],
-  ['base', 'a bidi isolate', 'eng-1-fix-login', 'release-\u2066x', 'release-\\u{2066}x'],
+  ['head', 'a zero-width space', 'eng-1-fix-login\u200B', 'main', 'eng-1-fix-login\\u{200b}'],
+  ['head', 'tag characters', 'eng-1-fix-login\u{E0049}\u{E0067}', 'main', 'eng-1-fix-login\\u{e0049}\\u{e0067}'],
+  ['base', 'a zero-width space', 'eng-1-fix-login', 'main\u200B', 'main\\u{200b}'],
 ] as const)('an open pull request whose %s branch has %s fails the run, and no log shows the raw name', async (which, _label, head, base, escaped) => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
@@ -673,11 +680,11 @@ test.each([
   await roundTwoTaken(f)
   gh.openPullRequest(head, PR_41, base)
   const failed = await nextRun(f)
-  const reason = `delivery failed: gh pr view: the pull request's ${which} branch has a control, line break or bidi character: ${escaped}`
+  const reason = `delivery failed: gh pr view: the pull request's ${which} branch has a control, format or line break character: ${escaped}`
   expect(failed).toMatchObject({ status: 'failed', attempt: 1, error: reason })
   const logs = f.server.snapshot().logs.map((l) => l.msg)
   expect(logs).toContain(`run failed (${reason}); retrying attempt 2/2 in 0s`)
-  expect(logs.filter((m) => /[\u202E\u2028\u2066]/.test(m))).toEqual([])
+  expect(logs.filter((m) => /[\u202E\u2028\u200B\u{E0049}]/u.test(m))).toEqual([])
   expect(record(f).rework).toMatchObject({ kind: 'continue', branch: 'eng-1-fix-login', base: 'main' })
   await f.server.close()
 })

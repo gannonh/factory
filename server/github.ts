@@ -39,11 +39,11 @@ async function list(host: string, path: string): Promise<Json[]> {
 }
 
 /**
- * Control characters, line and paragraph separators, and the bidi formatting characters. Git accepts bidi overrides in a
- * branch name, so a name with one would read differently in a prompt, log or note from the branch Factory pushes to.
- * Other format characters, such as the zero-width joiner inside an emoji, cannot reorder or break the text.
+ * Control, format, line separator and paragraph separator characters, except the zero-width joiner that emoji use. Git
+ * accepts format characters such as bidi overrides, zero-width spaces and tag characters in a branch name, so a name
+ * with one would read differently in a prompt, log or note from the branch Factory pushes to, or hide text in the prompt.
  */
-const UNSAFE_CHARS = /[\p{Cc}\p{Zl}\p{Zp}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/gu
+const UNSAFE_CHARS = /(?!\u200D)[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu
 
 export async function viewPullRequest(url: string): Promise<PullRequestView> {
   if (!PR_URL.test(url)) throw new Error(`not a pull request URL: ${url}`)
@@ -54,7 +54,7 @@ export async function viewPullRequest(url: string): Promise<PullRequestView> {
   if (view.state !== 'OPEN') return { state: view.state }
   for (const [which, name] of [['head', view.headRefName], ['base', view.baseRefName]]) {
     const escaped = name.replace(UNSAFE_CHARS, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`)
-    if (escaped !== name) throw new Error(`gh pr view: the pull request's ${which} branch has a control, line break or bidi character: ${escaped}`)
+    if (escaped !== name) throw new Error(`gh pr view: the pull request's ${which} branch has a control, format or line break character: ${escaped}`)
   }
   return { state: 'OPEN', head: view.headRefName, base: view.baseRefName }
 }

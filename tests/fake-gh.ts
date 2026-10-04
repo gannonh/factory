@@ -25,6 +25,7 @@ export function fakeGh(dir = mkdtempSync(join(tmpdir(), 'factory-gh-'))) {
   const prsFile = join(dir, 'prs.json')
   const feedbackFile = join(dir, 'feedback.json')
   const fail = (op: string) => join(dir, `fail-${op}`)
+  const holdFile = (state: FakePr['state'], head: string, base: string) => join(dir, `hold-${state}-${encodeURIComponent(head)}-${encodeURIComponent(base)}`)
   writeFileSync(join(bin, 'gh'), `#!/usr/bin/env node
 const fs = require('node:fs')
 const argv = process.argv.slice(2)
@@ -49,7 +50,7 @@ if (argv[1] === 'view') {
   const hold = ${JSON.stringify(dir)} + '/hold-view'
   while (fs.existsSync(hold)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
   const pr = prs[argv[2]] || Object.values(prs).find((p) => p.url === argv[2])
-  while (pr && fs.existsSync(${JSON.stringify(dir)} + '/hold-' + pr.state + '-' + pr.headRefName + '-' + pr.baseRefName)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
+  while (pr && fs.existsSync(${JSON.stringify(dir)} + '/hold-' + pr.state + '-' + encodeURIComponent(pr.headRefName) + '-' + encodeURIComponent(pr.baseRefName))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
   if (failing('view') || !pr) { console.error('no pull requests found for "' + argv[2] + '"'); process.exit(1) }
   console.log(JSON.stringify(pr))
   process.exit(0)
@@ -84,8 +85,8 @@ console.log(url)
     holdView: () => writeFileSync(join(dir, 'hold-view'), ''),
     releaseView: () => rmSync(join(dir, 'hold-view'), { force: true }),
     /** Holds each `pr view` that reads the PR on `head` into `base` in `state`, as it was when that `gh` started, until `releaseState`. */
-    holdState: (state: FakePr['state'], head: string, base = 'main') => writeFileSync(join(dir, `hold-${state}-${head}-${base}`), ''),
-    releaseState: (state: FakePr['state'], head: string, base = 'main') => rmSync(join(dir, `hold-${state}-${head}-${base}`), { force: true }),
+    holdState: (state: FakePr['state'], head: string, base = 'main') => writeFileSync(holdFile(state, head, base), ''),
+    releaseState: (state: FakePr['state'], head: string, base = 'main') => rmSync(holdFile(state, head, base), { force: true }),
     openPullRequest: (branch: string, url: string, baseRefName = 'main') =>
       writeFileSync(prsFile, JSON.stringify({ [branch]: { url, number: Number(url.split('/').at(-1)), state: 'OPEN', baseRefName, headRefName: branch } })),
     setState: (branch: string, state: FakePr['state']) => {

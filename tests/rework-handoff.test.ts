@@ -2,7 +2,7 @@
  * Rework rounds (ADR 0012) reached by handoff, and sibling runs of one round that reread its pull request at the same
  * time. See `rework-fixture.ts` for the repository, fake `gh` and fake Linear behind every test.
  */
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
@@ -14,6 +14,7 @@ import {
 
 const PLANNER = 'ag-planner' as AgentId
 const REVIEWER = 'ag-reviewer' as AgentId
+const QA = 'ag-qa' as AgentId
 
 /** `factory()` with the trigger feeding Planner, who hands off to Coder, who hands off to Reviewer, all on the local sandbox. Only Coder delivers. */
 function handoffFactory(root: string, runner = agentRunner(), settings = LIFECYCLE): Factory {
@@ -187,30 +188,30 @@ test('a handoff retry whose agent stopped delivering gets the upstream output al
   await f.server.close()
 })
 
-/** `factory()` with the trigger feeding Planner, who hands off to both Coder and Reviewer on the local sandbox. */
-function fanOutFactory(root: string, runner = agentRunner()): Factory {
+/** `factory()` with the trigger feeding Planner, who hands off to Coder and each sibling, all on the local sandbox. */
+function fanOutFactory(root: string, runner = agentRunner(), siblings = [REVIEWER]): Factory {
   const f = factory(root, runner)
-  const drop = Object.values(f.server.snapshot().edges).filter((e) => (e.kind === 'triggers' && e.source === f.trigger) || (e.kind === 'runs-in' && e.source === REVIEWER))
+  const drop = Object.values(f.server.snapshot().edges).filter((e) => (e.kind === 'triggers' && e.source === f.trigger) || (e.kind !== 'triggers' && siblings.includes(e.source as AgentId)))
   f.api.graph.removeEdges(drop.map((e) => e.id as EdgeId))
   f.api.graph.connect(f.trigger, PLANNER, 'triggers')
   f.api.graph.connect(PLANNER, CODER, 'handoff')
-  f.api.graph.connect(PLANNER, REVIEWER, 'handoff')
-  f.api.graph.connect(REVIEWER, LOCAL, 'runs-in')
+  for (const sibling of siblings) {
+    f.api.graph.connect(PLANNER, sibling, 'handoff')
+    f.api.graph.connect(sibling, LOCAL, 'runs-in')
+  }
   return f
 }
 
-/** Round 1 delivers #41 through Coder. Round 2 is taken with Reviewer delivering too, and only its Planner run has run. */
-async function roundTwoPlanned(f: Factory) {
+/** Round 1 delivers #41 through Coder. Round 2 is taken with each sibling delivering too, and only its Planner run has run. */
+async function roundTwoPlanned(f: Factory, siblings = [REVIEWER]) {
   await poll(f)
   await drain(f)
   expect(record(f)).toMatchObject({ round: 1, phase: 'ended', result: { pr: { url: PR_41 } } })
-  f.api.agents.update(REVIEWER, { delivery: 'pull-request', retry: { maxAttempts: 1, backoffMs: 0, backoff: 'fixed' } })
-  f.api.agents.update(CODER, { retry: { maxAttempts: 1, backoffMs: 0, backoff: 'fixed' } })
+  for (const agent of [CODER, ...siblings]) f.api.agents.update(agent, { delivery: 'pull-request', retry: { maxAttempts: 1, backoffMs: 0, backoff: 'fixed' } })
   f.api.sandboxes.update(LOCAL, { capacity: 3 })
   await moveIssue('ENG-1', 'Todo')
   await poll(f)
-  f.api.agents.setPaused(CODER, true)
-  f.api.agents.setPaused(REVIEWER, true)
+  for (const agent of [CODER, ...siblings]) f.api.agents.setPaused(agent, true)
   const planned = () => Object.values(f.server.snapshot().runs).filter((r) => r.agentId === PLANNER && r.status === 'succeeded').length === 2
   await drain(f, planned)
   expect(planned()).toBe(true)
@@ -271,7 +272,8 @@ test.each([
 ] as const)('sibling runs that read two retargets of the pull request, the %s read landing first, leave the round on the newest base', async (first, logs) => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
-  // Reviewer's round 2 agent never answers, so its delivery cannot open a pull request while Coder reads #41 again.
+  // Reviewer's round 2 agent never answers. When its older read lands first, its delivery would open a second pull request
+  // against the stale base (KAT-3664), and in the fake gh that replaces #41 before Coder reads it again.
   const f = fanOutFactory(repo.root, agentRunner((task) => (task.agentId === REVIEWER && task.title.includes('(round 2)') ? 'hang' : 'commit')))
   await roundTwoPlanned(f)
   for (const base of ['develop', 'release']) git(repo.origin, 'branch', base, 'main')
@@ -329,3 +331,51 @@ test('a merged read after a parallel read saved a branch move still makes the ru
   expect(git(workdirOf(f, reviewer), 'branch', '--show-current')).toBe(`factory-${reviewer.id}`)
   await f.server.close()
 }, 30_000)
+
+test('a run whose second read of the pull request is overtaken too fails without guessing its base', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const siblings = [REVIEWER, QA]
+  const f = fanOutFactory(repo.root, agentRunner((task) => (siblings.includes(task.agentId) && task.title.includes('(round 2)') ? 'hang' : 'commit')), siblings)
+  await roundTwoPlanned(f, siblings)
+  for (const base of ['b1', 'b2', 'b3', 'b4']) {
+    git(repo.origin, 'branch', base, 'main')
+    gh.holdState('OPEN', 'eng-1-fix-login', base)
+  }
+  const views = prViews()
+  const readFrom = async (agent: AgentId, base: string, reads: number) => {
+    gh.openPullRequest('eng-1-fix-login', PR_41, base)
+    f.api.agents.setPaused(agent, false)
+    f.api.sim.advance(1)
+    await until(() => prViews() === views + reads)
+  }
+  await readFrom(CODER, 'b1', 1)
+  await readFrom(REVIEWER, 'b2', 2)
+  gh.releaseState('OPEN', 'eng-1-fix-login', 'b2')
+  await until(() => pullRequestLogs(f).length === 1)
+  await readFrom(QA, 'b3', 3)
+  gh.openPullRequest('eng-1-fix-login', PR_41, 'b4')
+  gh.releaseState('OPEN', 'eng-1-fix-login', 'b1')
+  await until(() => prViews() === views + 4)
+  gh.releaseState('OPEN', 'eng-1-fix-login', 'b3')
+  await until(() => pullRequestLogs(f).length === 2)
+  gh.releaseState('OPEN', 'eng-1-fix-login', 'b4')
+  await until(() => lastRunOf(f, CODER).status === 'failed')
+  expect(lastRunOf(f, CODER).error).toBe('delivery failed: pull request #41 changed again while this run read it')
+  expect(pullRequestLogs(f)).toEqual(['pull request #41 was retargeted to b2', 'pull request #41 was retargeted to b3'])
+  expect(record(f).rework).toMatchObject({ kind: 'continue', branch: 'eng-1-fix-login', base: 'b3' })
+  await f.server.close()
+}, 30_000)
+
+test('the fake gh holds a read of a pull request whose branches contain a slash until it is released', async () => {
+  gh.openPullRequest('feature/login', PR_41, 'release/1')
+  gh.holdState('OPEN', 'feature/login', 'release/1')
+  let answer: string | null = null
+  const read = new Promise<void>((resolve) => execFile('gh', ['pr', 'view', PR_41], (_error, stdout) => { answer = stdout; resolve() }))
+  await until(() => prViews() === 1)
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  expect(answer).toBeNull()
+  gh.releaseState('OPEN', 'feature/login', 'release/1')
+  await read
+  expect(JSON.parse(answer!)).toMatchObject({ headRefName: 'feature/login', baseRefName: 'release/1', state: 'OPEN' })
+})

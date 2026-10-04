@@ -1396,17 +1396,19 @@ export class MockServer {
   /** Gives a local run its prompt before its worktree is prepared, during which a parallel run may save a merge (ADR 0012). */
   private writePrompt({ id, flowId }: Task, delivers: boolean) {
     const task = this.world.tasks[id]
-    if (task) this.patchTask(id, { prompt: runPrompt(task, this.openRecord(flowId), delivers) })
+    const prompt = task && runPrompt(task, this.openRecord(flowId), delivers)
+    if (!task || prompt === task.prompt) return
+    this.patchTask(id, { prompt })
     this.publish()
   }
 
   /**
    * A round that continues a pull request rereads the PR, which may have merged, closed, moved or been retargeted while the
    * round waited, and saves what changed, so the run's prompt, the round's note and its later runs follow it. A read that a
-   * parallel run's save overtook is read once more (ADR 0012).
+   * parallel run's save overtook is read once more, and a second such read fails the run rather than guess (ADR 0012).
    */
   private async deliveryRequest({ flowId }: Task, runId: RunId, agentId: AgentId): Promise<DeliveryRequest> {
-    for (let reads = 0; reads < 2; reads++) {
+    for (let reads = 1; ; reads++) {
       const seen = this.openRecord(flowId)?.rework
       if (seen?.kind !== 'continue') break
       const view = await viewPullRequest(seen.pr.url).catch((error: unknown) => {
@@ -1415,6 +1417,7 @@ export class MockServer {
       if (this.closed || this.world.runs[runId]?.status !== 'running') throw new Error('run ended while its pull request was read')
       const record = this.openRecord(flowId)
       const reread = record ? rereadRework(record.rework, seen, view) : null
+      if (reread === 'again' && reads === 2) throw new Error(`delivery failed: pull request #${prNumber(seen.pr)} changed again while this run read it`)
       if (reread === 'again') continue
       if (record && reread) {
         this.world.intake = { ...this.world.intake, [record.issue.id]: { ...record, rework: reread.rework } }

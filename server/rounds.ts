@@ -153,10 +153,15 @@ function fenced(sections: string[]): string {
 
 const joined = (parts: ReadonlyArray<string | null>) => parts.filter((part) => part !== null && part !== '').join('\n\n')
 
-/** The `Rework round N` heading and how the round continues, read from the record, or null for round 1. */
+/**
+ * The `Rework round N` heading and how the round continues, read from the record, or null for round 1. The line must not
+ * hold a blank line, since `issueParts` ends the section at the first one.
+ */
 export function reworkSection(record: IntakeRecord): string | null {
   if (record.round === 1) return null
-  return `## Rework round ${record.round}\n\n${reworkLine(record.rework, record.past.at(-1)?.result ?? null)}`
+  const line = reworkLine(record.rework, record.past.at(-1)?.result ?? null)
+  if (line.includes('\n\n')) throw new Error(`the rework line for round ${record.round} has a blank line, which would split the prompt inside it`)
+  return `## Rework round ${record.round}\n\n${line}`
 }
 
 /** The task prompt: the issue, then for a round after the first how it continues and the feedback since the last round. */
@@ -169,9 +174,10 @@ export function roundPrompt(issue: { title: string; description: string; url: st
 
 /**
  * An issue task's prompt as `roundPrompt` wrote it, split around its `Rework round N` section: the issue up to its URL,
- * and the fenced feedback after the section. The section is the last heading that follows the URL, since the free-text
- * description comes before it and the quoted feedback indents every line after a comment's first. Null when the prompt
- * has no section.
+ * and the fenced feedback after the section. Null when the prompt has no section. The split holds while three things do:
+ * the section is the last heading that follows the URL, since the free-text description comes before it; the quoted
+ * feedback cannot hold that heading, since `feedbackLine` indents every body line after the first and puts the author's
+ * name on one line; and the section ends at its first blank line, which `reworkSection` checks.
  */
 function issueParts(prompt: string, url: string, round: number): { issue: string; feedback: string } | null {
   const heading = `${url}\n\n## Rework round ${round}\n\n`
