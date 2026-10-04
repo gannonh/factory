@@ -237,7 +237,8 @@ export function createLinearClient(options: {
     for (;;) {
       const { nodes, pageInfo } = await read(after)
       found.push(...nodes)
-      if (!pageInfo.hasNextPage || pageInfo.endCursor === null) return found
+      if (!pageInfo.hasNextPage) return found
+      if (!pageInfo.endCursor) return fail('api', 'Linear reported more pages without a cursor')
       if (pageInfo.endCursor === after) return fail('api', 'Linear repeated a pagination cursor')
       after = pageInfo.endCursor
     }

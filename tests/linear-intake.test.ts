@@ -538,6 +538,13 @@ test('the Linear client stops with an api error when Linear repeats a pagination
   await expect(client({ fetch }).issues(ENG)).rejects.toMatchObject({ intake: { kind: 'api', message: 'Linear repeated a pagination cursor' } })
 })
 
+test('the Linear client stops with an api error when Linear reports more pages without a cursor', async () => {
+  const more = { nodes: [], pageInfo: { hasNextPage: true, endCursor: null } }
+  const page = { data: { teams: more, workflowStates: more, projects: more } }
+  const fetch = () => Promise.resolve(new Response(JSON.stringify(page)))
+  await expect(client({ fetch }).catalog()).rejects.toMatchObject({ intake: { kind: 'api', message: 'Linear reported more pages without a cursor' } })
+})
+
 test('the fake Linear rejects an unknown cursor instead of restarting at page one', async () => {
   const response = await fetch(fake.url, {
     method: 'POST',
