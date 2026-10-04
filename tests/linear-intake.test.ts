@@ -2,10 +2,10 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest'
-import { startFakeLinear, type FakeLinear } from '../scripts/fake-linear'
+import { complexity, startFakeLinear, type FakeLinear } from '../scripts/fake-linear'
 import { createApi } from '../server/api'
 import { startFactoryServer } from '../server/http'
-import { LinearError, createLinearClient, type LinearClient } from '../server/linear'
+import { LinearError, PROJECTS_QUERY, createLinearClient, type LinearClient } from '../server/linear'
 import { ClaudeRunner } from '../server/runners'
 import { MockServer } from '../server/simulation'
 import {
@@ -456,6 +456,19 @@ test('the recommended states follow the team workflow by position', async () => 
     .toEqual({ pickupState: 'state-kat-start', startedState: 'state-kat-in-progress', finishedState: 'state-kat-agent-review', failedState: null })
 })
 
+test('the catalog reads every page of teams, states and projects, each under Linear\'s complexity limit', async () => {
+  const catalog = await client({ pageSize: 1 }).catalog()
+  expect(catalog.teams.map((t) => [t.key, t.states.length, t.projects.map((p) => p.id)]))
+    .toEqual([['ENG', 7, ['project-alpha', 'project-beta']], ['OPS', 7, []], ['KAT', 10, ['project-gamma']]])
+  expect(catalog.teams[2].states[2]).toEqual({ id: 'state-kat-start', name: 'Start', type: 'unstarted', position: 2 })
+  expect(((await control({ op: 'stats' })) as { requests: Record<string, number> }).requests)
+    .toEqual({ FactoryTeams: 3, FactoryWorkflowStates: 24, FactoryProjects: 3 })
+
+  const nested = 'query { teams(first: 100) { nodes { id states(first: 100) { nodes { id } } projects(first: 100) { nodes { id } } } } }'
+  expect(complexity(nested, {})).toBe(20_100)
+  expect(complexity(PROJECTS_QUERY, { first: 50 })).toBe(2_550)
+})
+
 test('the recommended pickup is Start when the workflow has one, else the first unstarted state', () => {
   const pickup = (states: WorkflowState[]) => recommendedStates(states).pickupState
   expect(pickup([
@@ -503,7 +516,8 @@ test('the Linear client sends the key without Bearer and classifies a rejected k
     intake: { kind: 'auth', message: 'Linear rejected LINEAR_API_KEY: Authentication required, not authenticated' },
   })
   await expect(client({ apiKey: undefined }).issues(ENG)).rejects.toBeInstanceOf(LinearError)
-  expect(((await control({ op: 'stats' })) as { requests: Record<string, number> }).requests).toEqual({ FactoryCatalog: 1 })
+  expect(((await control({ op: 'stats' })) as { requests: Record<string, number> }).requests)
+    .toEqual({ FactoryTeams: 1, FactoryWorkflowStates: 1, FactoryProjects: 1 })
 })
 
 test('the Linear client stops with an api error when Linear repeats a pagination cursor', async () => {

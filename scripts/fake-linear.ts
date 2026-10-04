@@ -183,10 +183,17 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
     return { nodes: nodes.map(node), pageInfo: { hasNextPage: start + first < matches.length, endCursor: nodes.at(-1)?.id ?? null } }
   }
 
+  const list = <T extends { id: string }>(items: T[], { first = 50, after = null }: Variables) => {
+    const at = after === null ? -1 : items.findIndex((item) => item.id === after)
+    if (after !== null && at === -1) throw new Error(`invalid cursor ${after}`)
+    const nodes = items.slice(at + 1, at + 1 + first)
+    return { nodes, pageInfo: { hasNextPage: at + 1 + first < items.length, endCursor: nodes.at(-1)?.id ?? null } }
+  }
+
   const operations: Record<string, (variables: Variables) => unknown> = {
-    FactoryCatalog: () => ({
-      teams: { nodes: teams.map((t) => ({ id: t.id, key: t.key, name: t.name, states: { nodes: t.states }, projects: { nodes: t.projects } })) },
-    }),
+    FactoryTeams: (variables) => ({ teams: list(teams.map(({ id, key, name }) => ({ id, key, name })), variables) }),
+    FactoryWorkflowStates: (variables) => ({ workflowStates: list(teams.flatMap((t) => t.states.map((s) => ({ ...s, team: { id: t.id } }))), variables) }),
+    FactoryProjects: (variables) => ({ projects: list(teams.flatMap((t) => t.projects.map((p) => ({ ...p, teams: { nodes: [{ id: t.id }] } }))), variables) }),
     FactoryIssues: (variables) => ({
       issues: page(variables, ({ id, identifier, title, description, url, branchName, priority, blockedBy }) => ({
         id, identifier, title, description: description || null, url, branchName, priority, inverseRelations: inverseRelations(blockedBy),
@@ -265,6 +272,8 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
     if (req.headers.authorization !== apiKey) {
       return send(res, 400, { errors: [{ message: 'Authentication required, not authenticated', extensions: { type: 'authentication error', code: 'AUTHENTICATION_ERROR' } }] })
     }
+    const variables = (body.variables ?? {}) as Variables
+    if (complexity(String(body.query ?? ''), variables) > COMPLEXITY_LIMIT) return send(res, 400, { errors: [{ message: 'Query too complex' }] })
     const operation = operations[name]
     if (!operation) return send(res, 400, { errors: [{ message: `Unknown operation ${name}` }] })
     const failure = failures[name]
@@ -273,7 +282,7 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       return send(res, 400, { errors: [{ message: failure.message }] })
     }
     try {
-      return send(res, 200, { data: operation((body.variables ?? {}) as Variables) })
+      return send(res, 200, { data: operation(variables) })
     } catch (err) {
       return send(res, 400, { errors: [{ message: err instanceof Error ? err.message : String(err) }] })
     }
@@ -298,6 +307,31 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       })
     })
   })
+}
+
+const COMPLEXITY_LIMIT = 10_000
+
+/**
+ * A lower bound of Linear's query complexity. Each connection costs its page size times the cost of what it selects,
+ * so a connection nested in another multiplies their page sizes. Real Linear charges more per field.
+ */
+export function complexity(query: string, variables: { first?: number }): number {
+  let total = 0
+  let pending = 1
+  const scale = [1]
+  for (const [token] of query.matchAll(/\([^)]*\)|[{}]/g)) {
+    if (token === '{') {
+      const size = scale.at(-1)! * pending
+      if (pending > 1) total += size
+      scale.push(size)
+      pending = 1
+    } else if (token === '}') scale.pop()
+    else {
+      const first = /(?<![$\w])first:\s*(\d+|\$first)/.exec(token)?.[1]
+      pending = first === undefined ? 1 : first === '$first' ? variables.first ?? 50 : Number(first)
+    }
+  }
+  return total
 }
 
 function missing(what: string): never {
