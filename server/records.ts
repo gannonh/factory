@@ -1,7 +1,7 @@
 import {
   DELIVERIES, EDGE_KINDS, MODELS, SANDBOX_TRANSITIONS, isCapacity,
   type Agent, type AgentId, type Artifact, type Edge, type EdgeId, type FactoryEvent, type FlowId, type Group, type GroupId,
-  type FlowCancel, type IntakeRecord, type IssueBlocker, type IssueFilter, type IssueId, type IssueWrite, type IssueRef, type Lease, type LinearSettings, type Metrics, type NodeId, type Position, type Priority, type RetryPolicy, type Run, type RunId, type TriggerStates,
+  type FlowCancel, type IntakeRecord, type PastRound, type PullRequestRef, type Rework, type RoundResult, type IssueBlocker, type IssueFilter, type IssueId, type IssueWrite, type IssueRef, type Lease, type LinearSettings, type Metrics, type NodeId, type Position, type Priority, type RetryPolicy, type Run, type RunId, type TriggerStates,
   type RunOutput, type Sandbox, type SandboxId, type SandboxKind, type SandboxState, type Subject,
   type Task, type TaskId, type TaskInput, type Trigger, type TriggerId, type TriggerKind, type WorkflowStateType, type WriteStatus,
 } from '../src/domain/types'
@@ -174,7 +174,11 @@ export const issueBlocker = object<IssueBlocker>({
   id: id<IssueId>(), identifier: string, url: string, state: object<IssueBlocker['state']>({ name: string, type: workflowStateType }),
 })
 
+const pullRequest = object<PullRequestRef>({ kind: oneOf('pr'), label: string, url: string })
+const roundResult = object<RoundResult>({ outcome: oneOf('finished', 'failed', 'cancelled'), pr: nullable(pullRequest), output: nullable(input) })
+
 // A record saved before write-back counts as ended with nothing to write, so upgrading never posts notes for older flows.
+// A record saved before rounds is round 1 with no past rounds, and its issue must leave the pickup state before it runs again.
 export const intakeRecord = object<IntakeRecord>({
   issue: issueRef,
   trigger: triggerId,
@@ -188,6 +192,14 @@ export const intakeRecord = object<IntakeRecord>({
     factory: object({ kind: oneOf('factory'), task: string }),
   })), () => null),
   blockers: defaulted(array(issueBlocker), () => []),
+  round: defaulted(refine(number, (n) => Number.isInteger(n) && n >= 1, 'an integer of at least 1'), () => 1),
+  rework: defaulted(nullable(tagged<Rework>({
+    continue: object({ kind: oneOf('continue'), pr: pullRequest, branch: string, base: string }),
+    fresh: object({ kind: oneOf('fresh'), pr: pullRequest, state: oneOf('merged', 'closed') }),
+  })), () => null),
+  result: defaulted(nullable(roundResult), () => null),
+  left: defaulted(boolean, () => false),
+  past: defaulted(array(object<PastRound>({ round: number, trigger: triggerId, flowId: id<FlowId>(), takenAt: number, result: nullable(roundResult) })), () => []),
 })
 
 const subject = tagged<Subject>({

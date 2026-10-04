@@ -75,7 +75,7 @@ test('ensureComment creates the comment under its id once', async () => {
   await addIssue('Fix login')
   await client().ensureComment(ENG_1, COMMENT_ID, 'Factory finished this issue.')
   await client().ensureComment(ENG_1, COMMENT_ID, 'Factory finished this issue.')
-  expect((await issue('ENG-1')).comments).toEqual([{ id: COMMENT_ID, body: 'Factory finished this issue.' }])
+  expect((await issue('ENG-1')).comments).toMatchObject([{ id: COMMENT_ID, body: 'Factory finished this issue.' }])
   expect(await requests()).toEqual({ FactoryIssueComment: 2, FactoryCreateComment: 1 })
 })
 
@@ -108,7 +108,7 @@ test('a failed write rejects with the api error, and the fake refuses a second c
   const duplicate = await create('second')
   expect(duplicate.status).toBe(400)
   expect(await duplicate.json()).toEqual({ errors: [{ message: `a comment with id ${COMMENT_ID} already exists` }] })
-  expect((await issue('ENG-1')).comments).toEqual([{ id: COMMENT_ID, body: 'first' }])
+  expect((await issue('ENG-1')).comments).toMatchObject([{ id: COMMENT_ID, body: 'first' }])
 })
 
 test('a handoff flow moves the issue to started once, then to finished with one signed note listing both tasks in order', async () => {
@@ -131,7 +131,7 @@ test('a handoff flow moves the issue to started once, then to finished with one 
   const [plannerRun, coderRun] = runsInOrder(f).map((r) => r.id)
   const after = await issue('ENG-1')
   expect(after.state).toBe('In Review')
-  expect(after.comments).toEqual([{
+  expect(after.comments).toMatchObject([{
     id: (f.world().intake[ENG_1].writes[2] as { commentId: string }).commentId,
     body: `**Factory finished this issue.**
 
@@ -211,6 +211,7 @@ function dying(dies: (write: string) => boolean) {
     catalog: () => real.catalog(),
     issues: (filter) => real.issues(filter),
     issueStates: (ids) => real.issueStates(ids),
+    comments: (issueId) => real.comments(issueId),
     ensureState: async (issueId, stateId, from) => {
       const moved = await real.ensureState(issueId, stateId, from)
       if (dies(stateId)) return hang<boolean>()

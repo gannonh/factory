@@ -1,4 +1,4 @@
-import { LOG_LEVEL_COLOR, issueOfFlow, type Run } from '../../domain/types'
+import { LOG_LEVEL_COLOR, roundOfFlow, type Run } from '../../domain/types'
 import { useStore } from '../../store'
 import { Badge, Dot, IssueLink, Section, fmtDuration, fmtTime } from '../ui'
 import { ArtifactList, TaskInputSection } from './TaskInputSection'
@@ -14,8 +14,10 @@ export function RunInspector({ run }: { run: Run }) {
   const sandbox = world.sandboxes[run.sandboxId]
   const task = world.tasks[run.taskId]
   const input = task?.input ?? null
-  const issue = task ? issueOfFlow(world, task.flowId) : null
-  const intake = task ? Object.values(world.intake).find((record) => record.flowId === task.flowId) : undefined
+  const round = task ? roundOfFlow(world, task.flowId) : null
+  const issue = round?.record.issue ?? null
+  // A past round keeps no writes of its own, so only the current round shows the record's.
+  const intake = round && round.round === round.record.round ? round.record : undefined
   const logs = world.logs.filter((line) => line.runId === run.id)
   const elapsedMs = Math.max(0, (run.endedAt ?? (run.execution === 'local' ? wallNow : world.now)) - run.startedAt)
 

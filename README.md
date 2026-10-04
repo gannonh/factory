@@ -115,7 +115,7 @@ Linear stays the source of truth for an issue Factory has taken. The decision is
 - Each poll also reads the current state of every issue whose flow is still open, in one batched query. A failed query shows its error on the trigger, like a failed poll.
 - When the issue is canceled, deleted, or moved out of the trigger's pickup and started states, Factory cancels the flow within one poll. Queued tasks are cancelled and running processes are killed. A cancelled run does not retry.
 - The issue then gets one comment saying why, such as "canceled in Linear" or "moved to Backlog in Linear". Factory does not move it.
-- The issue keeps its intake record, so moving it back to the pickup state does not start a new flow.
+- The issue keeps its intake record. Moving it back to the pickup state starts a new round, as described below.
 
 Waiting issues run in the order the team set in Linear. The decision is recorded in `docs/adr/0011-linear-priority-and-blockers-order-intake.md`.
 
@@ -124,7 +124,15 @@ Waiting issues run in the order the team set in Linear. The decision is recorded
 - The task inspector lists each blocker with a link to Linear and its state. Factory reads blockers but never takes one that does not match the trigger's filter.
 - The issue starts on the first poll after its last blocker is done. Priority and blockers stop refreshing once the flow's first run starts.
 
-`scripts/fake-linear.ts` is a fake Linear API for tests and local trials. `npm run fake-linear -- --port 8790` starts it and prints its URL. Point the server at it with `FACTORY_LINEAR_URL=http://127.0.0.1:8790/graphql LINEAR_API_KEY=lin_api_fake`. It answers the write-back operations too and keeps each issue's comments and attachments. `POST /control` with a JSON body adds issues (`{"op":"addIssue","title":"...","state":"Todo","project":"Alpha","priority":2,"blockedBy":["ENG-1"]}`), sets a priority (`{"op":"setPriority","identifier":"ENG-2","priority":1}`), adds or removes a blocker (`{"op":"block","identifier":"ENG-2","blockedBy":"OPS-1"}`, `{"op":"unblock",...}`), moves them (`{"op":"moveIssue","identifier":"ENG-1","state":"Done"}`), deletes one (`{"op":"deleteIssue","identifier":"ENG-1"}`), shows one with its state name, comments and attachments (`{"op":"issue","identifier":"ENG-1"}`), forces a 401 (`{"op":"failAuth","on":true}`), makes the next requests of one operation answer an error (`{"op":"failNext","operation":"FactoryMoveIssue","times":1,"message":"rate limited"}`), counts requests by operation (`{"op":"stats"}`) and resets (`{"op":"reset"}`).
+A reviewer sends an issue back by moving it to the pickup state again. The decision is recorded in `docs/adr/0012-rework-rounds.md`.
+
+- When the issue's last flow has ended and the issue has left the pickup state since, a return to the pickup state starts round N+1 on the trigger's agent within one poll. A return while the flow is open changes nothing. A failed or finished issue that never left the pickup state does not run again.
+- The task's title ends with `(round N)`. Its prompt adds the pull request's review summaries, inline comments and conversation comments, read with `gh`, and the Linear comments posted since Factory's last note. Factory's own notes are left out. The task's input is the summary and artifacts of the newest round that produced output, usually the previous one.
+- When the previous pull request is open, a delivering agent's run starts from that PR's branch and Factory pushes its new commits to it, so the same PR updates and no second attachment lands. When it was merged or closed, the round cuts a fresh branch and opens a new PR. A round after a flow with no PR starts fresh.
+- The note names the round, such as "Factory finished this issue (round 2).", and says "Continued on pull request #41." or why it opened a new one. The task inspector shows the round, and the trigger card lists open rounds such as "ENG-1 round 2".
+- If `gh` cannot read the pull request, the poll logs a warning and the issue waits for the next poll.
+
+`scripts/fake-linear.ts` is a fake Linear API for tests and local trials. `npm run fake-linear -- --port 8790` starts it and prints its URL. Point the server at it with `FACTORY_LINEAR_URL=http://127.0.0.1:8790/graphql LINEAR_API_KEY=lin_api_fake`. It answers the write-back operations too and keeps each issue's comments and attachments. `POST /control` with a JSON body adds issues (`{"op":"addIssue","title":"...","state":"Todo","project":"Alpha","priority":2,"blockedBy":["ENG-1"]}`), sets a priority (`{"op":"setPriority","identifier":"ENG-2","priority":1}`), adds or removes a blocker (`{"op":"block","identifier":"ENG-2","blockedBy":"OPS-1"}`, `{"op":"unblock",...}`), moves them (`{"op":"moveIssue","identifier":"ENG-1","state":"Done"}`), deletes one (`{"op":"deleteIssue","identifier":"ENG-1"}`), adds a person's comment (`{"op":"addComment","identifier":"ENG-1","author":"Dana","body":"..."}`), shows one with its state name, comments and attachments (`{"op":"issue","identifier":"ENG-1"}`), forces a 401 (`{"op":"failAuth","on":true}`), makes the next requests of one operation answer an error (`{"op":"failNext","operation":"FactoryMoveIssue","times":1,"message":"rate limited"}`), counts requests by operation (`{"op":"stats"}`) and resets (`{"op":"reset"}`).
 
 ## Real runs
 
@@ -145,7 +153,7 @@ An agent whose delivery is set to Pull request has Factory deliver its work. The
 
 ## Not built yet
 
-- Pushing to an existing pull request, merging, review and CI handling, re-running an issue that returns to the pickup state, reacting to edits of an issue's title or description, other work backends, real webhook triggers, and Docker, VPS and remote sandboxes.
+- Merging, CI handling, starting a round on a pull request review without a Linear state change, resolving review threads, reacting to edits of an issue's title or description, other work backends, real webhook triggers, and Docker, VPS and remote sandboxes.
 - Running the server on a remote host, auth, teams, multiple projects.
 
 ## License

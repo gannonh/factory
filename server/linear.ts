@@ -23,6 +23,9 @@ export type IssueState = { id: string; name: string; type: WorkflowStateType }
 /** What a poll reads of a taken issue: where it sits, and the priority and blockers that order it until its flow starts. */
 export type IssueStatus = { state: IssueState; priority: Priority; blockers: IssueBlocker[]; moreRelations: boolean }
 
+/** A comment on an issue. `createdAt` is Linear's ISO timestamp. `author` is null for a comment no user wrote, such as an integration's. */
+export type IssueComment = { id: string; body: string; createdAt: string; author: string | null }
+
 /** The write methods converge: each checks Linear first, so repeating one after a lost answer changes nothing. */
 export type LinearClient = {
   catalog(): Promise<LinearCatalog>
@@ -35,6 +38,8 @@ export type LinearClient = {
    * those states and resolves false for any other, so Factory never undoes a move a person made in Linear.
    */
   ensureState(issueId: IssueId, stateId: string, from: readonly string[] | null): Promise<boolean>
+  /** Every comment on the issue, across all pages. */
+  comments(issueId: IssueId): Promise<IssueComment[]>
   /** Leaves exactly one comment with id `commentId` on the issue, creating it only when it is missing. */
   ensureComment(issueId: IssueId, commentId: string, body: string): Promise<void>
   /** Leaves an attachment linking `url` on the issue, creating it only when none has that URL. */
@@ -92,6 +97,10 @@ export const ISSUE_COMMENT_QUERY = `query FactoryIssueComment($id: String!, $com
   issue(id: $id) { id comments(filter: { id: { eq: $commentId } }) { nodes { id } } }
 }`
 
+export const ISSUE_COMMENTS_QUERY = `query FactoryIssueComments($id: String!, $first: Int!, $after: String) {
+  issue(id: $id) { id comments(first: $first, after: $after) { nodes { id body createdAt user { name } } pageInfo { hasNextPage endCursor } } }
+}`
+
 // Linear accepts a client-chosen UUID as the new comment's id, which is what lets a retry find a comment whose answer was lost.
 export const CREATE_COMMENT_MUTATION = `mutation FactoryCreateComment($input: CommentCreateInput!) {
   commentCreate(input: $input) { success }
@@ -146,6 +155,16 @@ const issueStatesData = issuePage(object<StateNode>({
 
 const issueStateData = object({ issue: object({ id: string, state: object({ id: string }) }) })
 const issueCommentData = object({ issue: object({ id: string, comments: nodes(object({ id: string })) }) })
+type CommentNode = { id: string; body: string; createdAt: string; user: { name: string } | null }
+const issueCommentsData = object({
+  issue: object({
+    id: string,
+    comments: object<Page<CommentNode>>({
+      nodes: array(object<CommentNode>({ id: string, body: string, createdAt: string, user: nullable(object({ name: string })) })),
+      pageInfo: object({ hasNextPage: boolean, endCursor: nullable(string) }),
+    }),
+  }),
+})
 const issueAttachmentData = object({ issue: object({ id: string, attachments: nodes(object({ id: string })) }) })
 const success = object({ success: boolean })
 
@@ -255,6 +274,19 @@ export function createLinearClient(options: {
       const { issueUpdate } = await request('FactoryMoveIssue', MOVE_ISSUE_MUTATION, { id: issueId, stateId }, object({ issueUpdate: success }))
       if (!issueUpdate.success) fail('api', 'Linear did not move the issue')
       return true
+    },
+    async comments(issueId) {
+      const found: IssueComment[] = []
+      let after: string | null = null
+      for (;;) {
+        const answer: { issue: { comments: Page<CommentNode> } } = await request('FactoryIssueComments', ISSUE_COMMENTS_QUERY, { id: issueId, first: pageSize, after }, issueCommentsData)
+        const { comments } = answer.issue
+        found.push(...comments.nodes.map((c) => ({ id: c.id, body: c.body, createdAt: c.createdAt, author: c.user?.name ?? null })))
+        const next = comments.pageInfo
+        if (!next.hasNextPage || next.endCursor === null) return found
+        if (next.endCursor === after) return fail('api', 'Linear repeated a pagination cursor')
+        after = next.endCursor
+      }
     },
     async ensureComment(issueId, commentId, body) {
       const { issue } = await request('FactoryIssueComment', ISSUE_COMMENT_QUERY, { id: issueId, commentId }, issueCommentData)

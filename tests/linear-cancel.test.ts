@@ -246,19 +246,34 @@ test('a refresh that fails shows its error on the trigger and leaves the flow ru
   expect(runsInOrder(f).map((r) => r.status)).toEqual(['cancelled'])
 })
 
-test('a cancelled issue moved back to the pickup state starts no new flow', async () => {
+test('a cancelled issue moved back to the pickup state starts round 2 fresh, and its next return while open starts nothing', async () => {
   await addIssue('Fix login')
   const wall = wallClock()
   const f = makeFixture({ linear: client(), clock: wall.read })
   const trigger = linearTrigger(f, f.agent('Coder'))
   await start(f)
+  const firstFlow = f.world().intake[ENG_1].flowId
   await moveIssue('ENG-1', 'Canceled')
   await nextPoll(f, wall)
   await moveIssue('ENG-1', 'Todo')
   await nextPoll(f, wall)
   await step(f, 1)
-  expect(Object.values(f.world().tasks)).toHaveLength(1)
+  const tasks = Object.values(f.world().tasks).sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
+  expect(tasks.map((t) => [t.title, t.status])).toEqual([['ENG-1 Fix login', 'cancelled'], ['ENG-1 Fix login (round 2)', 'running']])
+  expect(tasks[1]).toMatchObject({
+    prompt: 'Fix login\n\nhttps://linear.app/fake/issue/ENG-1/fix-login\n\n## Rework round 2\n\nThe previous round was cancelled without a pull request, so this round starts fresh.',
+    input: null,
+  })
+  expect(f.world().intake[ENG_1]).toMatchObject({
+    round: 2, flowId: tasks[1].flowId, phase: 'started', cancel: null, left: false, rework: null,
+    past: [{ round: 1, trigger, flowId: firstFlow, takenAt: 1_000_000, result: { outcome: 'cancelled', pr: null, output: null } }],
+  })
+  expect(f.world().events.map((e) => e.msg)).toContain('Linear intake took ENG-1 (round 2)')
   expect(f.world().intakePolls[trigger].error).toBeNull()
+
+  await moveIssue('ENG-1', 'Todo')
+  await nextPoll(f, wall)
+  expect(Object.values(f.world().tasks)).toHaveLength(2)
   expect((await issue('ENG-1')).comments).toHaveLength(1)
 })
 
@@ -360,6 +375,7 @@ test('an operator’s cancel decides the note even when another task in the flow
   const record: IntakeRecord = {
     issue: { backend: 'linear', id: ENG_1, identifier: 'ENG-1', url: 'https://linear.app/fake/issue/ENG-1', branchName: 'eng-1' },
     trigger: 'tr-1' as TriggerId, flowId, takenAt: 0, phase: 'started', writes: [], states: LIFECYCLE, cancel: { kind: 'factory', task: 'Review' }, blockers: [],
+    round: 1, rework: null, result: null, left: false, past: [],
   }
   const world = { agents: {}, runs: {}, triggers: { ['tr-1' as TriggerId]: { linear: LIFECYCLE } } } as unknown as World
   const next = reconcileRecord(record, [task('tk-a', 'Build', 'failed', 1), task('tk-b', 'Review', 'cancelled', 2)], world, () => 'comment-1')

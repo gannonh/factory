@@ -95,6 +95,7 @@ function IntakeLines({ intake }: { intake: IntakeStatus }) {
         {intake.polledAt !== null ? `polled ${fmtAgo(wallNow, intake.polledAt)}` : 'not polled yet'}
         <span className="font-mono tabular-nums"> · {intake.taken} taken</span>
       </div>
+      {intake.rounds.length > 0 && <div className="truncate text-violet-200" title={intake.rounds.join(', ')}>{intake.rounds.join(', ')}</div>}
       {intake.error && <div className="truncate text-red-300" title={intake.error}>{intake.error}</div>}
     </div>
   )

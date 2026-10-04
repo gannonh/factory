@@ -86,12 +86,17 @@ const MAX_REASON_CHARS = 300
 // Network git must fail rather than wait on a credential prompt nobody can answer, over HTTPS or SSH.
 const gitEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? 'ssh -o BatchMode=yes' })
 
+/** The branch a delivering run works on: a new one cut from origin's default branch, or an open pull request's branch (ADR 0012). */
+export type DeliveryRequest = { kind: 'new'; branch: string } | { kind: 'continue'; branch: string; base: string }
+
 /**
  * Makes the run's working directory. With no delivery the worktree branches `factory-<runId>` from the
- * root's HEAD. With delivery it fetches origin and cuts the requested branch from origin's default branch,
+ * root's HEAD. With a new delivery branch it fetches origin and cuts the requested branch from origin's default branch,
  * suffixed `-2`, `-3`, … until the name is free locally and on origin, so a retry never reuses a pushed branch.
+ * To continue a pull request it fetches the PR's branch and starts the worktree at its tip on a local branch of the
+ * run's own, since an earlier round's worktree may still have the PR branch checked out.
  */
-export async function prepareWorkdir(root: string, runId: RunId, delivery: { branch: string } | null): Promise<PreparedWorkdir> {
+export async function prepareWorkdir(root: string, runId: RunId, delivery: DeliveryRequest | null): Promise<PreparedWorkdir> {
   if (!isAbsolute(root)) throw new Error('local sandbox root must be an absolute path')
   const rootPath = await realpath(root)
   if (!(await stat(rootPath)).isDirectory()) throw new Error('local sandbox root must be a directory')
@@ -112,7 +117,7 @@ export async function prepareWorkdir(root: string, runId: RunId, delivery: { bra
     await mkdir(dirname(exclude), { recursive: true })
     await appendFile(exclude, `${current.endsWith('\n') || current.length === 0 ? '' : '\n'}/.factory-runs/\n`)
   }
-  if (delivery) return prepareDelivery(rootPath, workdir, delivery.branch)
+  if (delivery) return prepareDelivery(rootPath, workdir, `factory-${basename(runId)}`, delivery)
   const initialHead = await execFileAsync('git', ['-C', rootPath, 'rev-parse', '--verify', 'HEAD']).then(({ stdout }) => stdout.trim()).catch(() => null)
   if (initialHead) {
     await execFileAsync('git', ['-C', rootPath, 'worktree', 'add', '-b', `factory-${runId}`, workdir, initialHead])
@@ -125,22 +130,31 @@ export async function prepareWorkdir(root: string, runId: RunId, delivery: { bra
 // Two runs on one repository must not pick the same free branch name or fetch at once.
 const deliveryQueues = new Map<string, Promise<unknown>>()
 
-function prepareDelivery(rootPath: string, workdir: string, requested: string): Promise<PreparedWorkdir> {
-  const turn = (deliveryQueues.get(rootPath) ?? Promise.resolve()).then(() => prepareDeliveryNow(rootPath, workdir, requested))
+function prepareDelivery(rootPath: string, workdir: string, runBranch: string, request: DeliveryRequest): Promise<PreparedWorkdir> {
+  const turn = (deliveryQueues.get(rootPath) ?? Promise.resolve()).then(() => prepareDeliveryNow(rootPath, workdir, runBranch, request))
   const queued = turn.catch(() => undefined)
   deliveryQueues.set(rootPath, queued)
   void queued.then(() => { if (deliveryQueues.get(rootPath) === queued) deliveryQueues.delete(rootPath) })
   return turn
 }
 
-async function prepareDeliveryNow(rootPath: string, workdir: string, requested: string): Promise<PreparedWorkdir> {
+async function prepareDeliveryNow(rootPath: string, workdir: string, runBranch: string, request: DeliveryRequest): Promise<PreparedWorkdir> {
   const git = (step: string, args: string[], timeout = LOCAL_TIMEOUT_MS) =>
     execFileAsync('git', ['-C', rootPath, ...args], { timeout, env: gitEnv() }).then(({ stdout }) => stdout, (error: unknown) => {
       throw new Error(`delivery failed: ${step}: ${failureReason(error)}`)
     })
+  const requested = request.branch
   await git('check branch name', ['check-ref-format', '--branch', requested])
   const hasOrigin = await execFileAsync('git', ['-C', rootPath, 'remote', 'get-url', 'origin'], { timeout: LOCAL_TIMEOUT_MS }).then(() => true, () => false)
   if (!hasOrigin) throw new Error('delivery failed: sandbox root has no origin remote')
+  if (request.kind === 'continue') {
+    const { base } = request
+    await git('check branch name', ['check-ref-format', '--branch', base])
+    await git('git fetch', ['fetch', '--no-tags', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`, `+refs/heads/${requested}:refs/remotes/origin/${requested}`], NETWORK_TIMEOUT_MS)
+    const initialHead = (await git('git rev-parse', ['rev-parse', '--verify', `refs/remotes/origin/${requested}^{commit}`])).trim()
+    await git('git worktree add', ['worktree', 'add', '--no-track', '-b', runBranch, workdir, initialHead])
+    return { path: workdir, initialHead, delivery: { branch: requested, base } }
+  }
   const symref = await git('git ls-remote', ['ls-remote', '--symref', 'origin', 'HEAD'], NETWORK_TIMEOUT_MS)
   const base = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(symref)?.[1]
   if (!base) throw new Error('delivery failed: origin has no default branch')
