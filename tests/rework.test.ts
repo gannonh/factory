@@ -351,6 +351,126 @@ test.each([
   await f.server.close()
 })
 
+const PLANNER = 'ag-planner' as AgentId
+const REVIEWER = 'ag-reviewer' as AgentId
+
+/** `factory()` with the trigger feeding Planner, who hands off to Coder, who hands off to Reviewer, all on the local sandbox. Only Coder delivers. */
+function handoffFactory(root: string, runner = agentRunner(), settings = LIFECYCLE): Factory {
+  const f = factory(root, runner, settings)
+  const drop = Object.values(f.server.snapshot().edges).filter((e) => (e.kind === 'triggers' && e.source === f.trigger) || (e.kind === 'runs-in' && e.source === REVIEWER))
+  f.api.graph.removeEdges(drop.map((e) => e.id as EdgeId))
+  f.api.graph.connect(f.trigger, PLANNER, 'triggers')
+  f.api.graph.connect(PLANNER, CODER, 'handoff')
+  f.api.graph.connect(CODER, REVIEWER, 'handoff')
+  f.api.graph.connect(REVIEWER, LOCAL, 'runs-in')
+  return f
+}
+
+/** Runs tasks one at a time until none is pending or running. */
+async function drain(f: Factory) {
+  const busy = () => Object.values(f.server.snapshot().tasks).some((t) => t.status === 'queued' || t.status === 'waiting' || t.status === 'running')
+  while (busy()) {
+    f.api.sim.advance(1)
+    await until(() => !Object.values(f.server.snapshot().runs).some((r) => r.status === 'running'))
+    await f.api.sim.settled()
+  }
+}
+
+const lastRunOf = (f: Factory, agentId: AgentId): Run => Object.values(f.server.snapshot().runs).filter((r) => r.agentId === agentId).sort((a, b) => a.startedAt - b.startedAt || (a.id < b.id ? -1 : 1)).at(-1)!
+
+/** The prompt each agent's run was given in a round, by agent name. */
+const promptsOf = (f: Factory, round: number) => {
+  const flowId = round === record(f).round ? record(f).flowId : record(f).past.find((p) => p.round === round)!.flowId
+  return Object.fromEntries(seen.filter((t) => t.flowId === flowId).map((t) => [f.server.snapshot().agents[t.agentId].name, t.prompt]))
+}
+
+const CONTINUE_41 = `Continue on pull request #41 (${PR_41}). Commit your changes on top of the current HEAD and do not rebase, amend or push; Factory pushes them to the pull request's branch \`eng-1-fix-login\`.`
+
+test('a delivering agent reached by handoff in round 2 is told to continue on the open pull request, and the agent after it is not', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = handoffFactory(repo.root)
+  await poll(f)
+  await drain(f)
+  expect(record(f)).toMatchObject({ round: 1, phase: 'ended', result: { pr: { url: PR_41 } } })
+  const planner1 = lastRunOf(f, PLANNER)
+  expect(promptsOf(f, 1)['Coder']).toBe(`Implemented ENG-1 Fix login.\nbranch: factory-${planner1.id}\ncommit: ${short(workdirOf(f, planner1))} change for ENG-1 Fix login (attempt 1)`)
+
+  await moveIssue('ENG-1', 'Todo')
+  await poll(f)
+  await drain(f)
+  const [planner, coder] = [lastRunOf(f, PLANNER), lastRunOf(f, CODER)]
+  expect(promptsOf(f, 2)).toEqual({
+    Planner: `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${CONTINUE_41}`,
+    Coder: `Implemented ENG-1 Fix login (round 2).
+branch: factory-${planner.id}
+commit: ${short(workdirOf(f, planner))} change for ENG-1 Fix login (round 2) (attempt 1)
+
+## Rework round 2
+
+${CONTINUE_41}`,
+    Reviewer: `Implemented ENG-1 Fix login (round 2) → Coder.
+branch: eng-1-fix-login
+commit: ${short(workdirOf(f, coder))} change for ENG-1 Fix login (round 2) → Coder (attempt 1)
+pr: Pull request #41 (${PR_41})`,
+  })
+  expect(git(workdirOf(f, coder), 'branch', '--show-current')).toBe(`factory-${coder.id}`)
+  expect(gh.creates()).toHaveLength(1)
+  expect(record(f)).toMatchObject({ round: 2, phase: 'ended', rework: { kind: 'continue' }, result: { pr: { url: PR_41 } } })
+  await f.server.close()
+})
+
+test('a delivering agent reached by handoff in a round whose pull request merged while it waited is told the round starts fresh', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = handoffFactory(repo.root)
+  await poll(f)
+  await drain(f)
+  await moveIssue('ENG-1', 'Todo')
+  await poll(f)
+  gh.setState('eng-1-fix-login', 'MERGED')
+  await drain(f)
+  const merged = `Pull request #41 (${PR_41}) was merged, so this round starts a fresh branch and opens a new pull request.`
+  expect(promptsOf(f, 2)['Planner']).toBe(`Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${CONTINUE_41}`)
+  const planner = lastRunOf(f, PLANNER)
+  expect(promptsOf(f, 2)['Coder']).toBe(`Implemented ENG-1 Fix login (round 2).
+branch: factory-${planner.id}
+commit: ${short(workdirOf(f, planner))} change for ENG-1 Fix login (round 2) (attempt 1)
+
+## Rework round 2
+
+${merged}`)
+  expect(git(workdirOf(f, coderRuns(f).at(-1)!), 'branch', '--show-current')).toBe('eng-1-fix-login-2')
+  expect(record(f)).toMatchObject({ round: 2, rework: { kind: 'fresh', state: 'merged' }, result: { pr: { url: PR_42 } } })
+  await f.server.close()
+})
+
+test('a delivering agent reached by handoff in a round after a flow that failed without a pull request is told the round starts fresh', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = handoffFactory(repo.root, agentRunner((task) => (task.agentId === CODER && !task.title.includes('(round 2)') ? 'fail' : 'commit')), NO_STATES)
+  f.api.agents.update(CODER, { retry: { maxAttempts: 1 } })
+  await poll(f)
+  await drain(f)
+  expect(record(f)).toMatchObject({ round: 1, phase: 'ended', result: { outcome: 'failed', pr: null } })
+  await moveIssue('ENG-1', 'Backlog')
+  await poll(f)
+  await moveIssue('ENG-1', 'Todo')
+  await poll(f)
+  await drain(f)
+  const fresh = 'The previous round failed without a pull request, so this round starts fresh.'
+  const planner = lastRunOf(f, PLANNER)
+  expect(promptsOf(f, 2)['Coder']).toBe(`Implemented ENG-1 Fix login (round 2).
+branch: factory-${planner.id}
+commit: ${short(workdirOf(f, planner))} change for ENG-1 Fix login (round 2) (attempt 1)
+
+## Rework round 2
+
+${fresh}`)
+  expect(record(f)).toMatchObject({ round: 2, rework: null, result: { outcome: 'finished', pr: { url: PR_41 } } })
+  await f.server.close()
+})
+
 test('an unreadable pull request fails round 2’s run without guessing a branch, and the retry starts fresh once it reads the merge', async () => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })

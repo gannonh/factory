@@ -59,7 +59,7 @@ import { array, boolean, defaulted, id, number, object, oneOf, record } from './
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
 import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type IssueStatus, type LinearClient, type LinearIssue } from './linear'
 import { cancelRecord, flowAction, flowOutcome, landed, nextWrite, reconcileRecord, workingStates } from './writeBack'
-import { latestOutput, latestPullRequest, linearFeedback, prNumber, reworkLine, reworkOf, reworkable, roundPrompt, roundTitle, screen, startRound, type RoundContext, type Screened } from './rounds'
+import { handoffPrompt, latestOutput, latestPullRequest, linearFeedback, prNumber, reworkLine, reworkOf, reworkable, roundPrompt, roundTitle, screen, startRound, type RoundContext, type Screened } from './rounds'
 import { readPullRequest, viewPullRequest } from './github'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
@@ -1190,7 +1190,7 @@ export class MockServer {
       this.event('run', { kind: 'run', id: run.id }, `${this.nameOf(run.agentId)} finished “${run.title}”`)
       // A local run that was already finishing when its flow was cancelled still succeeds, but hands nothing on.
       if (output && !(task && this.openRecord(task.flowId)?.cancel)) {
-        const prompt = [output.summary, ...output.artifacts.map((a) => `${a.kind}: ${a.label}${a.url ? ` (${a.url})` : ''}`)].join('\n')
+        const prompt = handoffPrompt(output, null)
         for (const e of Object.values(w.edges)) {
           if (e.kind === 'handoff' && e.source === run.agentId) {
             this.enqueueTaskSilently(e.target as AgentId, {
@@ -1392,26 +1392,30 @@ export class MockServer {
 
   /**
    * A round that continues a pull request rereads the PR's state, since it may have merged or closed while the round
-   * waited. Saving the round as fresh makes its prompt and note say so and its retries start fresh (ADR 0012).
+   * waited. Saving the round as fresh makes its prompt and note say so and its retries start fresh. A handoff task's
+   * prompt gets how the round continues from the record, so it matches how this run starts its worktree (ADR 0012).
    */
-  private async deliveryRequest({ id: taskId, flowId }: Task, runId: RunId, agentId: AgentId): Promise<DeliveryRequest> {
-    const rework = this.openRecord(flowId)?.rework
+  private async deliveryRequest({ id: taskId, flowId, origin, input }: Task, runId: RunId, agentId: AgentId): Promise<DeliveryRequest> {
+    let rework = this.openRecord(flowId)?.rework
     if (rework?.kind === 'continue') {
       const view = await viewPullRequest(rework.pr.url).catch((error: unknown) => {
         throw new Error(`delivery failed: ${error instanceof Error ? error.message : String(error)}`)
       })
       if (this.closed || this.world.runs[runId]?.status !== 'running') throw new Error('run ended while its pull request was read')
       const now = reworkOf(rework.pr, view)
-      if (now.kind === 'continue') return { kind: 'continue', branch: now.branch, base: now.base }
       const record = this.openRecord(flowId)
-      if (record?.rework?.kind === 'continue') {
+      if (now.kind === 'fresh' && record?.rework?.kind === 'continue') {
         this.world.intake = { ...this.world.intake, [record.issue.id]: { ...record, rework: now } }
         const prompt = this.world.tasks[taskId]?.prompt
         if (prompt) this.patchTask(taskId, { prompt: prompt.replace(reworkLine(rework, null), () => reworkLine(now, null)) })
         this.log('info', `pull request #${prNumber(rework.pr)} was ${now.state}, so this run starts a fresh branch`, { runId, agentId }, Date.now())
         this.publish()
       }
+      rework = now
     }
+    const current = this.openRecord(flowId)
+    if (origin.kind === 'handoff' && input && current) this.patchTask(taskId, { prompt: handoffPrompt(input, current) })
+    if (rework?.kind === 'continue') return { kind: 'continue', branch: rework.branch, base: rework.base }
     return { kind: 'new', branch: issueOfFlow(this.world, flowId)?.branchName ?? `factory-${runId}` }
   }
 
