@@ -59,7 +59,7 @@ import { array, boolean, defaulted, id, number, object, oneOf, record } from './
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
 import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type IssueStatus, type LinearClient, type LinearIssue } from './linear'
 import { cancelRecord, flowAction, flowOutcome, landed, nextWrite, reconcileRecord, workingStates } from './writeBack'
-import { handoffPrompt, latestOutput, latestPullRequest, linearFeedback, prNumber, reworkLine, reworkOf, reworkable, roundPrompt, roundTitle, screen, startRound, type RoundContext, type Screened } from './rounds'
+import { issuePrompt, issuePromptParts, latestOutput, latestPullRequest, linearFeedback, outputText, prNumber, rereadRework, reworkOf, reworkable, roundTitle, runPrompt, screen, startRound, type RoundContext, type Screened } from './rounds'
 import { readPullRequest, viewPullRequest } from './github'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
@@ -588,7 +588,7 @@ export class MockServer {
   enqueueTask(agentId: AgentId, input: { title: string; prompt: string; priority: Priority }, origin: Task['origin'] = { kind: 'manual' }): TaskId {
     const flowId = this.uid('fl') as FlowId
     const id = this.uid('tk') as TaskId
-    const task: Task = { id, flowId, agentId, title: input.title, prompt: input.prompt, priority: input.priority, status: 'queued', origin, input: null, createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
+    const task: Task = { id, flowId, agentId, title: input.title, prompt: input.prompt, priority: input.priority, status: 'queued', origin, input: null, promptParts: null, createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
     this.world.tasks = { ...this.world.tasks, [id]: task }
     this.event('task', { kind: 'task', id }, `Queued “${task.title}” for ${this.nameOf(agentId)}`)
     this.publish()
@@ -828,7 +828,7 @@ export class MockServer {
     this.event('trigger', { kind: 'trigger', id }, `${tr.name} fired (${tr.kind})`)
     const flowId = this.uid('fl') as FlowId
     for (const e of targets) {
-      this.enqueueTaskSilently(e.target as AgentId, { title: tr.template, prompt: `${tr.template}\n\nTriggered by ${tr.name}.`, priority: tr.kind === 'webhook' ? 'high' : 'normal', origin: { kind: 'trigger', id }, input: null }, flowId)
+      this.enqueueTaskSilently(e.target as AgentId, { title: tr.template, prompt: `${tr.template}\n\nTriggered by ${tr.name}.`, priority: tr.kind === 'webhook' ? 'high' : 'normal', origin: { kind: 'trigger', id }, input: null, promptParts: null }, flowId)
     }
   }
 
@@ -943,17 +943,18 @@ export class MockServer {
       if (record && (!context || !sameRound(record, ended.get(issue.ref.id)))) continue
       const round = record ? record.round + 1 : 1
       const flowId = this.uid('fl') as FlowId
-      this.enqueueTaskSilently(agentId, {
-        title: roundTitle(issue.ref.identifier, issue.title, round),
-        prompt: roundPrompt({ title: issue.title, description: issue.description, url: issue.ref.url }, round, context ?? null, record?.result ?? null),
-        priority: issue.priority,
-        origin: { kind: 'issue', trigger: id, issue: issue.ref },
-        input: record ? latestOutput(record) : null,
-      }, flowId)
       const states = { pickupState: settings.pickupState, startedState: settings.startedState }
       const next = startRound(record, issue.ref, {
         trigger: id, flowId, takenAt: this.clock(), states, blockers: issue.blockers, rework: context?.rework ?? null, leftOut: context?.leftOut ?? [],
       })
+      const promptParts = issuePromptParts({ title: issue.title, description: issue.description, url: issue.ref.url }, context ?? null)
+      this.enqueueTaskSilently(agentId, {
+        title: roundTitle(issue.ref.identifier, issue.title, round),
+        prompt: issuePrompt(promptParts, next),
+        priority: issue.priority,
+        origin: { kind: 'issue', trigger: id, issue: issue.ref },
+        input: record ? latestOutput(record) : null, promptParts,
+      }, flowId)
       this.world.intake = { ...this.world.intake, [issue.ref.id]: next }
       taken.push(round > 1 ? `${issue.ref.identifier} (round ${round})` : issue.ref.identifier)
       if (issue.moreRelations) unread.push(issue.ref.identifier)
@@ -1083,7 +1084,7 @@ export class MockServer {
     this.world.intakePolls = Object.fromEntries(Object.entries(this.world.intakePolls).filter(([id]) => !gone.has(id))) as World['intakePolls']
   }
 
-  private enqueueTaskSilently(agentId: AgentId, fields: Pick<Task, 'title' | 'prompt' | 'priority' | 'origin' | 'input'>, flowId: FlowId) {
+  private enqueueTaskSilently(agentId: AgentId, fields: Pick<Task, 'title' | 'prompt' | 'priority' | 'origin' | 'input' | 'promptParts'>, flowId: FlowId) {
     if (!this.world.agents[agentId]) return
     const id = this.uid('tk') as TaskId
     const task: Task = { id, flowId, agentId, ...fields, status: 'queued', createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
@@ -1190,12 +1191,12 @@ export class MockServer {
       this.event('run', { kind: 'run', id: run.id }, `${this.nameOf(run.agentId)} finished “${run.title}”`)
       // A local run that was already finishing when its flow was cancelled still succeeds, but hands nothing on.
       if (output && !(task && this.openRecord(task.flowId)?.cancel)) {
-        const prompt = handoffPrompt(output)
+        const prompt = outputText(output)
         for (const e of Object.values(w.edges)) {
           if (e.kind === 'handoff' && e.source === run.agentId) {
             this.enqueueTaskSilently(e.target as AgentId, {
               title: `${run.title} → ${this.nameOf(e.target)}`, prompt, priority: task?.priority ?? 'normal',
-              origin: { kind: 'handoff', from: run.agentId, runId: run.id }, input: { ...output, runId: run.id },
+              origin: { kind: 'handoff', from: run.agentId, runId: run.id }, input: { ...output, runId: run.id }, promptParts: null,
             }, task?.flowId ?? (this.uid('fl') as FlowId))
           }
         }
@@ -1380,46 +1381,45 @@ export class MockServer {
         const branch = workdir.delivery ? ` on branch ${workdir.delivery.branch} from origin/${workdir.delivery.base}` : ''
         this.log('info', `working directory: ${workdir.path}${branch}`, { runId: id, agentId: agent.id }, Date.now())
         this.publish()
-        this.runners.local.start({ run, agent, task: this.world.tasks[task.id] ?? task, workdir: workdir.path }, (event) => this.handleRunnerEvent(id, event))
+        this.runners.local.start({ run, agent, task: this.writePrompt(task, workdir.delivery !== null), workdir: workdir.path }, (event) => this.handleRunnerEvent(id, event))
       }).catch((error: unknown) => {
         if (this.closed) return
         this.handleRunnerEvent(id, { kind: 'complete', status: 'failed', result: null, reason: error instanceof Error ? error.message : String(error) })
       })
       this.setups.set(id, setup)
       void setup.finally(() => this.setups.delete(id))
-    } else this.runners.simulated.start({ run, agent, task, workdir: '' }, (event) => this.handleRunnerEvent(id, event))
+    } else this.runners.simulated.start({ run, agent, task: this.writePrompt(task, false), workdir: '' }, (event) => this.handleRunnerEvent(id, event))
+  }
+
+  /** Gives the task's starting run its prompt, built from the task's parts and its round's record (ADR 0012). */
+  private writePrompt(task: Task, delivers: boolean): Task {
+    const current = this.world.tasks[task.id] ?? task
+    const prompt = runPrompt(current, this.openRecord(current.flowId), delivers)
+    this.patchTask(task.id, { prompt })
+    return { ...current, prompt }
   }
 
   /**
-   * A round that continues a pull request rereads the PR's state, since it may have merged, closed or moved to another
-   * branch while the round waited. Saving what it read makes the prompt and note say so and the round's later runs
-   * follow it. A handoff task's prompt gets how the round continues from the record, so it matches how this run starts
-   * its worktree (ADR 0012).
+   * A round that continues a pull request rereads the PR, which may have merged, closed, moved or been retargeted while the
+   * round waited, and saves what changed, so the run's prompt, the round's note and its later runs follow it (ADR 0012).
    */
-  private async deliveryRequest({ id: taskId, flowId, origin, input }: Task, runId: RunId, agentId: AgentId): Promise<DeliveryRequest> {
-    const rework = this.openRecord(flowId)?.rework
-    if (rework?.kind === 'continue') {
-      const view = await viewPullRequest(rework.pr.url).catch((error: unknown) => {
+  private async deliveryRequest({ flowId }: Task, runId: RunId, agentId: AgentId): Promise<DeliveryRequest> {
+    const seen = this.openRecord(flowId)?.rework
+    if (seen?.kind === 'continue') {
+      const view = await viewPullRequest(seen.pr.url).catch((error: unknown) => {
         throw new Error(`delivery failed: ${error instanceof Error ? error.message : String(error)}`)
       })
       if (this.closed || this.world.runs[runId]?.status !== 'running') throw new Error('run ended while its pull request was read')
-      const now = reworkOf(rework.pr, view)
-      const current = this.openRecord(flowId)
-      if (current?.rework?.kind === 'continue') {
-        const [before, after] = [reworkLine(current.rework, null), reworkLine(now, null)]
-        this.world.intake = { ...this.world.intake, [current.issue.id]: { ...current, rework: now } }
-        if (after !== before) {
-          const prompt = this.world.tasks[taskId]?.prompt
-          if (prompt) this.patchTask(taskId, { prompt: prompt.replace(before, () => after) })
-          const change = now.kind === 'fresh' ? `was ${now.state}, so this run starts a fresh branch` : `moved to branch ${now.branch}`
-          this.log('info', `pull request #${prNumber(rework.pr)} ${change}`, { runId, agentId }, Date.now())
-          this.publish()
-        }
+      const record = this.openRecord(flowId)
+      const reread = record ? rereadRework(record.rework, seen, view) : null
+      if (record && reread) {
+        this.world.intake = { ...this.world.intake, [record.issue.id]: { ...record, rework: reread.rework } }
+        this.log('info', `pull request #${prNumber(seen.pr)} ${reread.change}`, { runId, agentId }, Date.now())
+        this.publish()
       }
     }
-    const record = this.openRecord(flowId)
-    if (origin.kind === 'handoff' && input) this.patchTask(taskId, { prompt: handoffPrompt(input, record) })
-    if (record?.rework?.kind === 'continue') return { kind: 'continue', branch: record.rework.branch, base: record.rework.base }
+    const rework = this.openRecord(flowId)?.rework
+    if (rework?.kind === 'continue') return { kind: 'continue', branch: rework.branch, base: rework.base }
     return { kind: 'new', branch: issueOfFlow(this.world, flowId)?.branchName ?? `factory-${runId}` }
   }
 

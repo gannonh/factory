@@ -325,7 +325,7 @@ test('retainWorld selects runs, tasks and events by the persistence rules', () =
   })
   const task = (id: string, flowId: string, status: Task['status']): Task => ({
     id: id as TaskId, flowId: flowId as FlowId, agentId: 'ag-coder' as AgentId, title: id, prompt: 'p', priority: 'normal',
-    status, origin: { kind: 'manual' }, input: null, createdAt: 0, attempts: 1, retryAt: null, blockedOn: null,
+    status, origin: { kind: 'manual' }, input: null, promptParts: null, createdAt: 0, attempts: 1, retryAt: null, blockedOn: null,
   })
   for (let i = 1; i <= 210; i++) {
     const t = task(`tk-${i}`, `fl-${i}`, 'succeeded')

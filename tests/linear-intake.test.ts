@@ -402,7 +402,7 @@ test('a world file saved by main loads with every record intact, agents that do 
   expect(w.triggers).toEqual({ 'tr-1': { ...MAIN_WORLD.triggers['tr-1'], linear: null } })
   expect(w.edges).toEqual(MAIN_WORLD.edges)
   expect(w.groups).toEqual(MAIN_WORLD.groups)
-  expect(w.tasks).toEqual(MAIN_WORLD.tasks)
+  expect(w.tasks).toEqual(Object.fromEntries(Object.entries(MAIN_WORLD.tasks).map(([id, t]) => [id, { ...t, promptParts: null }])))
   expect(w.runs).toEqual(MAIN_WORLD.runs)
   expect(w.events).toEqual(MAIN_WORLD.events)
   expect(w.intake).toEqual({})

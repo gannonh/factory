@@ -370,7 +370,7 @@ test('an operator’s cancel decides the note even when another task in the flow
   const flowId = 'fl-1' as FlowId
   const task = (id: string, title: string, status: Task['status'], createdAt: number): Task => ({
     id: id as TaskId, flowId, agentId: 'ag-coder' as AgentId, title, prompt: '', priority: 'normal', status,
-    origin: { kind: 'manual' }, input: null, createdAt, attempts: 1, retryAt: null, blockedOn: null,
+    origin: { kind: 'manual' }, input: null, promptParts: null, createdAt, attempts: 1, retryAt: null, blockedOn: null,
   })
   const record: IntakeRecord = {
     issue: { backend: 'linear', id: ENG_1, identifier: 'ENG-1', url: 'https://linear.app/fake/issue/ENG-1', branchName: 'eng-1' },

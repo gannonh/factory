@@ -371,7 +371,7 @@ test('an intake record saved before write-back loads as ended and never writes',
 test('the note lists tasks by creation then id, with artifact links, the failure reason and a cancelled task', () => {
   const task = (id: string, agentId: string, createdAt: number, status: Task['status']): Task => ({
     id: id as TaskId, flowId: 'fl-1' as Task['flowId'], agentId: agentId as AgentId, title: id, prompt: '', priority: 'normal', status,
-    origin: { kind: 'manual' }, input: null, createdAt, attempts: 1, retryAt: null, blockedOn: null,
+    origin: { kind: 'manual' }, input: null, promptParts: null, createdAt, attempts: 1, retryAt: null, blockedOn: null,
   })
   const run = (id: string, taskId: string, attempt: number, fields: Partial<Run>): Run => ({
     id: id as Run['id'], taskId: taskId as TaskId, agentId: 'ag-1' as AgentId, sandboxId: 'sb-1' as Run['sandboxId'], title: '', attempt,

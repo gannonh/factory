@@ -287,6 +287,12 @@ export type Edge = {
 
 export type Priority = 'low' | 'normal' | 'high'
 
+/**
+ * The text of a round's issue task prompt around its `Rework round N` section: the issue's title, description and URL, and
+ * the fenced feedback since the last round, or '' when there is none.
+ */
+export type PromptParts = { issue: string; feedback: string }
+
 export type TaskStatus = 'queued' | 'waiting' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 export type Task = {
@@ -304,6 +310,8 @@ export type Task = {
     | { kind: 'handoff'; from: AgentId; runId: RunId }
     | { kind: 'manual' }
   input: TaskInput | null
+  /** For a round's issue task, what each run builds its prompt from with the intake record (ADR 0012); null for other tasks. */
+  promptParts: PromptParts | null
   createdAt: number
   attempts: number
   /** set after a failed attempt; the scheduler skips the task until this simulated time */

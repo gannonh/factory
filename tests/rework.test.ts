@@ -11,7 +11,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'vitest
 import { startFakeLinear, type FakeLinear } from '../scripts/fake-linear'
 import { createApi, type InProcessApi } from '../server/api'
 import { createLinearClient } from '../server/linear'
-import { linearFeedback, reworkable, screen, type Feedback } from '../server/rounds'
+import { linearFeedback, rereadRework, reworkSection, reworkable, screen, type Feedback } from '../server/rounds'
 import { MockServer } from '../server/simulation'
 import type { WorldStore } from '../server/worldFile'
 import { intakeStatus } from '../src/components/linearIntake'
@@ -366,17 +366,34 @@ function handoffFactory(root: string, runner = agentRunner(), settings = LIFECYC
   return f
 }
 
-/** Runs tasks one at a time until none is pending or running. */
-async function drain(f: Factory) {
+/**
+ * Runs tasks one at a time until none is pending or running, or until `stop` holds. Each pass yields a real tick, so a
+ * task that never starts fails the test at the deadline instead of spinning on microtasks.
+ */
+async function drain(f: Factory, stop: () => boolean = () => false, timeoutMs = 10_000) {
+  const end = Date.now() + timeoutMs
   const busy = () => Object.values(f.server.snapshot().tasks).some((t) => t.status === 'queued' || t.status === 'waiting' || t.status === 'running')
-  while (busy()) {
+  while (busy() && !stop()) {
+    if (Date.now() > end) throw new Error('drain: tasks never settled')
     f.api.sim.advance(1)
     await until(() => !Object.values(f.server.snapshot().runs).some((r) => r.status === 'running'))
     await f.api.sim.settled()
+    await new Promise((resolve) => setTimeout(resolve, 0))
   }
 }
 
 const lastRunOf = (f: Factory, agentId: AgentId): Run => Object.values(f.server.snapshot().runs).filter((r) => r.agentId === agentId).sort((a, b) => a.startedAt - b.startedAt || (a.id < b.id ? -1 : 1)).at(-1)!
+
+/** Planner's round 2 output, which Coder's round 2 prompt starts with. */
+const plannerOutput = (f: Factory) => {
+  const planner = lastRunOf(f, PLANNER)
+  return `Implemented ENG-1 Fix login (round 2).\nbranch: factory-${planner.id}\ncommit: ${short(workdirOf(f, planner))} change for ENG-1 Fix login (round 2) (attempt 1)`
+}
+
+/** The prompt of each of Coder's round 2 attempts. */
+const coderRoundTwoPrompts = () => seen.filter((t) => t.agentId === CODER && t.title.includes('(round 2)')).map((t) => t.prompt)
+
+const pullRequestLogs = (f: Factory) => f.server.snapshot().logs.map((l) => l.msg).filter((m) => m.startsWith('pull request #41 '))
 
 /** The prompt each agent's run was given in a round, by agent name. */
 const promptsOf = (f: Factory, round: number) => {
@@ -399,21 +416,14 @@ test('a delivering agent reached by handoff in round 2 is told to continue on th
   await moveIssue('ENG-1', 'Todo')
   await poll(f)
   await drain(f)
-  const [planner, coder] = [lastRunOf(f, PLANNER), lastRunOf(f, CODER)]
-  expect(promptsOf(f, 2)).toEqual({
-    Planner: `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${CONTINUE_41}`,
-    Coder: `Implemented ENG-1 Fix login (round 2).
-branch: factory-${planner.id}
-commit: ${short(workdirOf(f, planner))} change for ENG-1 Fix login (round 2) (attempt 1)
-
-## Rework round 2
-
-${CONTINUE_41}`,
-    Reviewer: `Implemented ENG-1 Fix login (round 2) → Coder.
+  const coder = lastRunOf(f, CODER)
+  const prompts = promptsOf(f, 2)
+  expect(prompts['Coder']).toBe(`${plannerOutput(f)}\n\n## Rework round 2\n\n${CONTINUE_41}`)
+  expect(prompts['Reviewer']).toBe(`Implemented ENG-1 Fix login (round 2) → Coder.
 branch: eng-1-fix-login
 commit: ${short(workdirOf(f, coder))} change for ENG-1 Fix login (round 2) → Coder (attempt 1)
-pr: Pull request #41 (${PR_41})`,
-  })
+pr: Pull request #41 (${PR_41})`)
+  expect(pullRequestLogs(f)).toEqual([])
   expect(git(workdirOf(f, coder), 'branch', '--show-current')).toBe(`factory-${coder.id}`)
   expect(gh.creates()).toHaveLength(1)
   expect(record(f)).toMatchObject({ round: 2, phase: 'ended', rework: { kind: 'continue' }, result: { pr: { url: PR_41 } } })
@@ -431,15 +441,7 @@ test('a delivering agent reached by handoff in a round whose pull request merged
   gh.setState('eng-1-fix-login', 'MERGED')
   await drain(f)
   const merged = `Pull request #41 (${PR_41}) was merged, so this round starts a fresh branch and opens a new pull request.`
-  expect(promptsOf(f, 2)['Planner']).toBe(`Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${CONTINUE_41}`)
-  const planner = lastRunOf(f, PLANNER)
-  expect(promptsOf(f, 2)['Coder']).toBe(`Implemented ENG-1 Fix login (round 2).
-branch: factory-${planner.id}
-commit: ${short(workdirOf(f, planner))} change for ENG-1 Fix login (round 2) (attempt 1)
-
-## Rework round 2
-
-${merged}`)
+  expect(promptsOf(f, 2)['Coder']).toBe(`${plannerOutput(f)}\n\n## Rework round 2\n\n${merged}`)
   expect(git(workdirOf(f, coderRuns(f).at(-1)!), 'branch', '--show-current')).toBe('eng-1-fix-login-2')
   expect(record(f)).toMatchObject({ round: 2, rework: { kind: 'fresh', state: 'merged' }, result: { pr: { url: PR_42 } } })
   await f.server.close()
@@ -456,17 +458,10 @@ test('a delivering agent reached by handoff in a round whose pull request moved 
   git(repo.origin, 'branch', '-m', 'eng-1-fix-login', 'eng-1-login')
   gh.openPullRequest('eng-1-login', PR_41)
   await drain(f)
-  const planner = lastRunOf(f, PLANNER)
   const coder = lastRunOf(f, CODER)
-  expect(promptsOf(f, 2)['Coder']).toBe(`Implemented ENG-1 Fix login (round 2).
-branch: factory-${planner.id}
-commit: ${short(workdirOf(f, planner))} change for ENG-1 Fix login (round 2) (attempt 1)
-
-## Rework round 2
-
-Continue on pull request #41 (${PR_41}). Commit your changes on top of the current HEAD and do not rebase, amend or push; Factory pushes them to the pull request's branch \`eng-1-login\`.`)
+  expect(promptsOf(f, 2)['Coder']).toBe(`${plannerOutput(f)}\n\n## Rework round 2\n\n${CONTINUE_41.replace('eng-1-fix-login', 'eng-1-login')}`)
   expect(git(repo.origin, 'rev-parse', 'eng-1-login')).toBe(git(workdirOf(f, coder), 'rev-parse', 'HEAD'))
-  expect(f.server.snapshot().logs.map((l) => l.msg)).toContain('pull request #41 moved to branch eng-1-login')
+  expect(pullRequestLogs(f)).toEqual(['pull request #41 moved to branch eng-1-login'])
   expect(record(f)).toMatchObject({ round: 2, rework: { kind: 'continue', branch: 'eng-1-login' }, result: { pr: { url: PR_41 } } })
   expect(gh.creates()).toHaveLength(1)
   await f.server.close()
@@ -486,15 +481,88 @@ test('a delivering agent reached by handoff in a round after a flow that failed 
   await poll(f)
   await drain(f)
   const fresh = 'The previous round failed without a pull request, so this round starts fresh.'
-  const planner = lastRunOf(f, PLANNER)
-  expect(promptsOf(f, 2)['Coder']).toBe(`Implemented ENG-1 Fix login (round 2).
-branch: factory-${planner.id}
-commit: ${short(workdirOf(f, planner))} change for ENG-1 Fix login (round 2) (attempt 1)
-
-## Rework round 2
-
-${fresh}`)
+  expect(promptsOf(f, 2)['Coder']).toBe(`${plannerOutput(f)}\n\n## Rework round 2\n\n${fresh}`)
   expect(record(f)).toMatchObject({ round: 2, rework: null, result: { outcome: 'finished', pr: { url: PR_41 } } })
+  await f.server.close()
+})
+
+/** Coder fails its first round 2 attempt and retries once. */
+const failsFirstRoundTwoAttempt = () => agentRunner((task) => (task.agentId === CODER && task.title.includes('(round 2)') && task.attempts === 1 ? 'fail' : 'commit'))
+
+/** Runs round 1, takes round 2, and runs it until Coder's first round 2 attempt has failed. */
+async function roundTwoCoderFailed(f: Factory) {
+  await poll(f)
+  await drain(f)
+  await moveIssue('ENG-1', 'Todo')
+  await poll(f)
+  await drain(f, () => coderRuns(f).some((r) => r.status === 'failed'))
+  expect(coderRuns(f).map((r) => r.status)).toEqual(['succeeded', 'failed'])
+}
+
+test('a delivering handoff retry after its pull request merged gets one rework section, with the fresh line', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = handoffFactory(repo.root, failsFirstRoundTwoAttempt())
+  await roundTwoCoderFailed(f)
+  gh.setState('eng-1-fix-login', 'MERGED')
+  await drain(f)
+  const merged = `Pull request #41 (${PR_41}) was merged, so this round starts a fresh branch and opens a new pull request.`
+  expect(coderRoundTwoPrompts()).toEqual([
+    `${plannerOutput(f)}\n\n## Rework round 2\n\n${CONTINUE_41}`,
+    `${plannerOutput(f)}\n\n## Rework round 2\n\n${merged}`,
+  ])
+  expect(git(workdirOf(f, coderRuns(f).at(-1)!), 'branch', '--show-current')).toBe('eng-1-fix-login-2')
+  await f.server.close()
+})
+
+test('a handoff retry whose agent stopped delivering gets the upstream output alone', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = handoffFactory(repo.root, failsFirstRoundTwoAttempt())
+  await roundTwoCoderFailed(f)
+  f.api.agents.update(CODER, { delivery: 'none' })
+  await drain(f)
+  const retry = coderRuns(f).at(-1)!
+  expect(retry).toMatchObject({ status: 'succeeded', attempt: 2 })
+  expect(coderRoundTwoPrompts()).toEqual([`${plannerOutput(f)}\n\n## Rework round 2\n\n${CONTINUE_41}`, plannerOutput(f)])
+  expect(f.server.snapshot().tasks[retry.taskId].prompt).toBe(plannerOutput(f))
+  expect(gh.creates()).toHaveLength(1)
+  await f.server.close()
+})
+
+test.each([
+  ['', ''],
+  ['quotes the old line', `Last round's prompt said: ${CONTINUE_41}\n\n`],
+])('an issue task that delivers is told the branch its pull request moved to while round 2 waited, when the description %s', async (_label, quote) => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login', description: quote.trim() })
+  const f = factory(repo.root, agentRunner())
+  await roundTwoTaken(f)
+  git(repo.origin, 'branch', '-m', 'eng-1-fix-login', 'eng-1-login')
+  gh.openPullRequest('eng-1-login', PR_41)
+  const run = await nextRun(f)
+  const prompt = `Fix login\n\n${quote}${ISSUE_URL}\n\n## Rework round 2\n\n${CONTINUE_41.replace('eng-1-fix-login', 'eng-1-login')}`
+  expect(seen.at(-1)?.prompt).toBe(prompt)
+  expect(issueTasks(f)[1].prompt).toBe(prompt)
+  expect(git(repo.origin, 'rev-parse', 'eng-1-login')).toBe(git(workdirOf(f, run), 'rev-parse', 'HEAD'))
+  expect(pullRequestLogs(f)).toEqual(['pull request #41 moved to branch eng-1-login'])
+  expect(gh.creates()).toHaveLength(1)
+  await f.server.close()
+})
+
+test('a pull request retargeted to another base while round 2 waits continues on it from the new base', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner())
+  await roundTwoTaken(f)
+  git(repo.origin, 'branch', 'develop', 'main')
+  gh.openPullRequest('eng-1-fix-login', PR_41, 'develop')
+  const run = await nextRun(f)
+  expect(run.status).toBe('succeeded')
+  expect(f.server.snapshot().logs.map((l) => l.msg)).toContain(`working directory: ${workdirOf(f, run)} on branch eng-1-fix-login from origin/develop`)
+  expect(pullRequestLogs(f)).toEqual(['pull request #41 was retargeted to develop'])
+  expect(record(f).rework).toEqual({ kind: 'continue', pr: { kind: 'pr', label: 'Pull request #41', url: PR_41 }, branch: 'eng-1-fix-login', base: 'develop' })
+  expect(gh.creates()).toHaveLength(1)
   await f.server.close()
 })
 
@@ -883,4 +951,21 @@ test('untrusted comments past the newest 50 are counted, and only trusted commen
   expect(screened.leftOut).toHaveLength(51)
   expect(screened.leftOut.slice(0, 2)).toEqual(['2 older untrusted comments, not named', 'pull request comment by spam2 (author association NONE)'])
   expect(screened.leftOut.at(-1)).toBe('pull request comment by spam51 (author association NONE)')
+})
+
+test('a reread that a newer read of the pull request already overtook leaves the record alone', () => {
+  const pr = { kind: 'pr' as const, label: 'Pull request #41', url: PR_41 }
+  const continues = (branch: string, base = 'main') => ({ kind: 'continue' as const, pr, branch, base })
+  const view = (head: string, base = 'main') => ({ state: 'OPEN' as const, head, base })
+  expect(rereadRework(continues('eng-1-login'), continues('eng-1-fix-login'), view('eng-1-fix-login'))).toBeNull()
+  expect(rereadRework({ kind: 'fresh', pr, state: 'merged' }, continues('eng-1-fix-login'), view('eng-1-fix-login'))).toBeNull()
+  expect(rereadRework(continues('eng-1-fix-login'), continues('eng-1-fix-login'), view('eng-1-fix-login'))).toBeNull()
+  expect(rereadRework(continues('eng-1-fix-login'), continues('eng-1-fix-login'), view('eng-1-‮login\u0007', 'develop'))).toEqual({
+    rework: continues('eng-1-‮login\u0007', 'develop'), change: 'moved to branch eng-1-login and was retargeted to develop',
+  })
+})
+
+test('a branch name from the pull request reaches the prompt without control or format characters', () => {
+  const record = ended({ round: 2, rework: { kind: 'continue', pr: { kind: 'pr', label: 'Pull request #41', url: PR_41 }, branch: 'eng-1-‮login\u001b[2J', base: 'main' } })
+  expect(reworkSection(record)).toBe(`## Rework round 2\n\n${CONTINUE_41.replace('eng-1-fix-login', 'eng-1-login[2J')}`)
 })

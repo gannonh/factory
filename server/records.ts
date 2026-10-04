@@ -1,7 +1,7 @@
 import {
   DELIVERIES, EDGE_KINDS, MODELS, SANDBOX_TRANSITIONS, isCapacity,
   type Agent, type AgentId, type Artifact, type Edge, type EdgeId, type FactoryEvent, type FlowId, type Group, type GroupId,
-  type FlowCancel, type IntakeRecord, type PastRound, type PullRequestRef, type Rework, type RoundResult, type IssueBlocker, type IssueFilter, type IssueId, type IssueWrite, type IssueRef, type Lease, type LinearSettings, type Metrics, type NodeId, type Position, type Priority, type RetryPolicy, type Run, type RunId, type TriggerStates,
+  type FlowCancel, type IntakeRecord, type PastRound, type PromptParts, type PullRequestRef, type Rework, type RoundResult, type IssueBlocker, type IssueFilter, type IssueId, type IssueWrite, type IssueRef, type Lease, type LinearSettings, type Metrics, type NodeId, type Position, type Priority, type RetryPolicy, type Run, type RunId, type TriggerStates,
   type RunOutput, type Sandbox, type SandboxId, type SandboxKind, type SandboxState, type Subject,
   type Task, type TaskId, type TaskInput, type Trigger, type TriggerId, type TriggerKind, type WorkflowStateType, type WriteStatus,
 } from '../src/domain/types'
@@ -128,6 +128,7 @@ export const task = object<Task>({
   status: oneOf('queued', 'waiting', 'running', 'succeeded', 'failed', 'cancelled'),
   origin,
   input: nullable(input),
+  promptParts: defaulted(nullable(object<PromptParts>({ issue: string, feedback: string })), () => null),
   createdAt: number,
   attempts: number,
   retryAt: nullable(number),
