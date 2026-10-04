@@ -2,10 +2,10 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest'
-import { startFakeLinear, type FakeLinear } from '../scripts/fake-linear'
+import { complexity, startFakeLinear, type FakeLinear } from '../scripts/fake-linear'
 import { createApi } from '../server/api'
 import { startFactoryServer } from '../server/http'
-import { LinearError, createLinearClient, type LinearClient } from '../server/linear'
+import { LinearError, PROJECTS_QUERY, PROJECT_TEAMS_QUERY, createLinearClient, type LinearClient } from '../server/linear'
 import { ClaudeRunner } from '../server/runners'
 import { MockServer } from '../server/simulation'
 import {
@@ -446,7 +446,7 @@ test('the recommended states follow the team workflow by position', async () => 
   const f = makeFixture({ linear: client(), clock: wallClock().read })
   const catalog = await f.api.linear.catalog()
   expect(catalog.teams.map((t) => [t.key, t.name, t.projects.map((p) => p.name)]))
-    .toEqual([['ENG', 'Engineering', ['Alpha', 'Beta']], ['OPS', 'Operations', []], ['KAT', 'Kata', ['Gamma']]])
+    .toEqual([['ENG', 'Engineering', ['Alpha', 'Beta', 'Shared']], ['OPS', 'Operations', []], ['KAT', 'Kata', ['Shared', 'Gamma']]])
   expect(catalog.teams[0].states.map((s) => s.name)).toEqual(['Backlog', 'Todo', 'In Progress', 'In Review', 'Done', 'Canceled', 'Duplicate'])
   expect(recommendedStates(catalog.teams[0].states))
     .toEqual({ pickupState: 'state-eng-todo', startedState: 'state-eng-in-progress', finishedState: 'state-eng-in-review', failedState: null })
@@ -454,6 +454,31 @@ test('the recommended states follow the team workflow by position', async () => 
     .toEqual(['Backlog', 'Todo', 'Start', 'In Progress', 'Agent Review', 'Human Review', 'Merging', 'Done', 'Canceled', 'Duplicate'])
   expect(recommendedStates(catalog.teams[2].states))
     .toEqual({ pickupState: 'state-kat-start', startedState: 'state-kat-in-progress', finishedState: 'state-kat-agent-review', failedState: null })
+})
+
+test('the catalog reads every page of teams, states and projects, each under Linear\'s complexity limit', async () => {
+  const catalog = await client({ pageSize: 1 }).catalog()
+  expect(catalog.teams.map((t) => [t.key, t.states.length, t.projects.map((p) => p.id)]))
+    .toEqual([['ENG', 7, ['project-alpha', 'project-beta', 'project-shared']], ['OPS', 7, []], ['KAT', 10, ['project-shared', 'project-gamma']]])
+  expect(catalog.teams[2].states[2]).toEqual({ id: 'state-kat-start', name: 'Start', type: 'unstarted', position: 2 })
+  expect(((await control({ op: 'stats' })) as { requests: Record<string, number> }).requests)
+    .toEqual({ FactoryTeams: 3, FactoryWorkflowStates: 24, FactoryProjects: 4 })
+
+  const nested = 'query { teams(first: 100) { nodes { id states(first: 100) { nodes { id } } projects(first: 100) { nodes { id } } } } }'
+  expect(complexity(nested, {})).toBe(20_100)
+  expect(complexity('query { teams(first: 100) { nodes { id states { nodes { id } } } } }', {})).toBe(5_100)
+  expect(complexity(PROJECTS_QUERY, { first: 50 })).toBe(550)
+  expect(complexity(PROJECT_TEAMS_QUERY, { first: 50 })).toBe(50)
+})
+
+test('the catalog lists a project under every team it is shared with, past the first page of its teams', async () => {
+  for (let n = 1; n <= 51; n++) await control({ op: 'addTeam', key: `T${n}`, projects: ['Shared'] })
+  const catalog = await client().catalog()
+  expect(catalog.teams).toHaveLength(54)
+  expect(catalog.teams.filter((t) => t.projects.some((p) => p.id === 'project-shared')).map((t) => t.key))
+    .toEqual(['ENG', 'KAT', ...Array.from({ length: 51 }, (_, i) => `T${i + 1}`)])
+  expect(((await control({ op: 'stats' })) as { requests: Record<string, number> }).requests)
+    .toEqual({ FactoryTeams: 2, FactoryWorkflowStates: 8, FactoryProjects: 1, FactoryProjectTeams: 2 })
 })
 
 test('the recommended pickup is Start when the workflow has one, else the first unstarted state', () => {
@@ -503,13 +528,21 @@ test('the Linear client sends the key without Bearer and classifies a rejected k
     intake: { kind: 'auth', message: 'Linear rejected LINEAR_API_KEY: Authentication required, not authenticated' },
   })
   await expect(client({ apiKey: undefined }).issues(ENG)).rejects.toBeInstanceOf(LinearError)
-  expect(((await control({ op: 'stats' })) as { requests: Record<string, number> }).requests).toEqual({ FactoryCatalog: 1 })
+  expect(((await control({ op: 'stats' })) as { requests: Record<string, number> }).requests)
+    .toEqual({ FactoryTeams: 1, FactoryWorkflowStates: 1, FactoryProjects: 1 })
 })
 
 test('the Linear client stops with an api error when Linear repeats a pagination cursor', async () => {
   const page = { data: { issues: { nodes: [], pageInfo: { hasNextPage: true, endCursor: 'cursor-1' } } } }
   const fetch = () => Promise.resolve(new Response(JSON.stringify(page)))
   await expect(client({ fetch }).issues(ENG)).rejects.toMatchObject({ intake: { kind: 'api', message: 'Linear repeated a pagination cursor' } })
+})
+
+test('the Linear client stops with an api error when Linear reports more pages without a cursor', async () => {
+  const more = { nodes: [], pageInfo: { hasNextPage: true, endCursor: null } }
+  const page = { data: { teams: more, workflowStates: more, projects: more } }
+  const fetch = () => Promise.resolve(new Response(JSON.stringify(page)))
+  await expect(client({ fetch }).catalog()).rejects.toMatchObject({ intake: { kind: 'api', message: 'Linear reported more pages without a cursor' } })
 })
 
 test('the fake Linear rejects an unknown cursor instead of restarting at page one', async () => {

@@ -32,15 +32,16 @@ const START_STATES: Array<[string, WorkflowStateType]> = [
   ['Human Review', 'started'], ['Merging', 'started'], ['Done', 'completed'], ['Canceled', 'canceled'], ['Duplicate', 'duplicate'],
 ]
 
+const makeTeam = (key: string, name: string, projects: string[], states = STATES): Team => ({
+  id: `team-${key.toLowerCase()}`,
+  key,
+  name,
+  states: states.map(([state, type], i) => ({ id: `state-${key.toLowerCase()}-${state.toLowerCase().replace(/\s+/g, '-')}`, name: state, type, position: i })),
+  projects: projects.map((project) => ({ id: `project-${project.toLowerCase()}`, name: project })),
+})
+
 function seedTeams(): Team[] {
-  const team = (key: string, name: string, projects: string[], states = STATES): Team => ({
-    id: `team-${key.toLowerCase()}`,
-    key,
-    name,
-    states: states.map(([state, type], i) => ({ id: `state-${key.toLowerCase()}-${state.toLowerCase().replace(/\s+/g, '-')}`, name: state, type, position: i })),
-    projects: projects.map((project) => ({ id: `project-${project.toLowerCase()}`, name: project })),
-  })
-  return [team('ENG', 'Engineering', ['Alpha', 'Beta']), team('OPS', 'Operations', []), team('KAT', 'Kata', ['Gamma'], START_STATES)]
+  return [makeTeam('ENG', 'Engineering', ['Alpha', 'Beta', 'Shared']), makeTeam('OPS', 'Operations', []), makeTeam('KAT', 'Kata', ['Shared', 'Gamma'], START_STATES)]
 }
 
 const slug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)
@@ -87,6 +88,11 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
   }
 
   const control: Record<string, (body: Record<string, unknown>) => unknown> = {
+    addTeam(body) {
+      const team = makeTeam(String(body.key), String(body.name ?? body.key), (Array.isArray(body.projects) ? body.projects : []).map(String))
+      teams.push(team)
+      return team
+    },
     addIssue(body) {
       const team = teamByKey(typeof body.team === 'string' ? body.team : 'ENG')
       const title = String(body.title ?? 'Untitled')
@@ -169,24 +175,46 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
     },
   }
 
-  const page = <T>({ filter = {}, first = 50, after = null }: Variables, node: (issue: Issue) => T) => {
+  const list = <T extends { id: string }>(items: T[], { first = 50, after = null }: Variables) => {
+    const at = after === null ? -1 : items.findIndex((item) => item.id === after)
+    if (after !== null && at === -1) throw new Error(`invalid cursor ${after}`)
+    const nodes = items.slice(at + 1, at + 1 + first)
+    return { nodes, pageInfo: { hasNextPage: at + 1 + first < items.length, endCursor: nodes.at(-1)?.id ?? null } }
+  }
+
+  const page = <T>(variables: Variables, node: (issue: Issue) => T) => {
+    const { filter = {} } = variables
     const matches = issues.filter((i) =>
       !i.deleted
       && (filter.team?.id?.eq === undefined || i.team === filter.team.id.eq)
       && (filter.state?.id?.eq === undefined || i.state === filter.state.id.eq)
       && (filter.project?.id?.eq === undefined || i.project === filter.project.id.eq)
       && (filter.id?.in === undefined || filter.id.in.includes(i.id)))
-    const at = after === null ? -1 : matches.findIndex((i) => i.id === after)
-    if (after !== null && at === -1) throw new Error(`invalid cursor ${after}`)
-    const start = at + 1
-    const nodes = matches.slice(start, start + first)
-    return { nodes: nodes.map(node), pageInfo: { hasNextPage: start + first < matches.length, endCursor: nodes.at(-1)?.id ?? null } }
+    const { nodes, pageInfo } = list(matches, variables)
+    return { nodes: nodes.map(node), pageInfo }
+  }
+
+  // A project shared by several teams is one project listing each of them, as in Linear.
+  const projects = () => {
+    const byId = new Map<string, { id: string; name: string; teams: Array<{ id: string }> }>()
+    for (const t of teams) for (const p of t.projects) {
+      const project = byId.get(p.id) ?? byId.set(p.id, { ...p, teams: [] }).get(p.id)!
+      project.teams.push({ id: t.id })
+    }
+    return [...byId.values()]
   }
 
   const operations: Record<string, (variables: Variables) => unknown> = {
-    FactoryCatalog: () => ({
-      teams: { nodes: teams.map((t) => ({ id: t.id, key: t.key, name: t.name, states: { nodes: t.states }, projects: { nodes: t.projects } })) },
-    }),
+    FactoryTeams: (variables) => ({ teams: list(teams.map(({ id, key, name }) => ({ id, key, name })), variables) }),
+    FactoryWorkflowStates: (variables) => ({ workflowStates: list(teams.flatMap((t) => t.states.map((s) => ({ ...s, team: { id: t.id } }))), variables) }),
+    FactoryProjects: (variables) => {
+      const { nodes, pageInfo } = list(projects(), variables)
+      return { projects: { nodes: nodes.map((p) => ({ ...p, teams: list(p.teams, { first: 10 }) })), pageInfo } }
+    },
+    FactoryProjectTeams: (variables) => {
+      const project = projects().find((p) => p.id === variables.id) ?? missing(`project ${variables.id}`)
+      return { project: { id: project.id, teams: list(project.teams, variables) } }
+    },
     FactoryIssues: (variables) => ({
       issues: page(variables, ({ id, identifier, title, description, url, branchName, priority, blockedBy }) => ({
         id, identifier, title, description: description || null, url, branchName, priority, inverseRelations: inverseRelations(blockedBy),
@@ -265,6 +293,8 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
     if (req.headers.authorization !== apiKey) {
       return send(res, 400, { errors: [{ message: 'Authentication required, not authenticated', extensions: { type: 'authentication error', code: 'AUTHENTICATION_ERROR' } }] })
     }
+    const variables = (body.variables ?? {}) as Variables
+    if (complexity(String(body.query ?? ''), variables) > COMPLEXITY_LIMIT) return send(res, 400, { errors: [{ message: 'Query too complex' }] })
     const operation = operations[name]
     if (!operation) return send(res, 400, { errors: [{ message: `Unknown operation ${name}` }] })
     const failure = failures[name]
@@ -273,7 +303,7 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       return send(res, 400, { errors: [{ message: failure.message }] })
     }
     try {
-      return send(res, 200, { data: operation((body.variables ?? {}) as Variables) })
+      return send(res, 200, { data: operation(variables) })
     } catch (err) {
       return send(res, 400, { errors: [{ message: err instanceof Error ? err.message : String(err) }] })
     }
@@ -298,6 +328,34 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       })
     })
   })
+}
+
+const COMPLEXITY_LIMIT = 10_000
+
+/**
+ * A lower bound of Linear's query complexity. Each connection costs its page size times the cost of what it selects,
+ * so a connection nested in another multiplies their page sizes. A connection read without `first` gets Linear's
+ * default page size of 50. Real Linear charges more per field.
+ */
+export function complexity(query: string, variables: Record<string, unknown>): number {
+  let total = 0
+  let first: number | null = null
+  const scale = [1]
+  for (const match of query.matchAll(/\([^)]*\)|[{}]/g)) {
+    const token = match[0]
+    if (token === '{') {
+      const connection = /^\s*nodes\b/.test(query.slice(match.index + 1))
+      const size = scale.at(-1)! * (connection ? first ?? 50 : 1)
+      if (connection) total += size
+      scale.push(size)
+      first = null
+    } else if (token === '}') scale.pop()
+    else {
+      const value = /(?<![$\w])first:\s*(\d+|\$\w+)/.exec(token)?.[1]
+      first = value === undefined ? null : value.startsWith('$') ? Number(variables[value.slice(1)] ?? 50) : Number(value)
+    }
+  }
+  return total
 }
 
 function missing(what: string): never {

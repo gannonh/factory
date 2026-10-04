@@ -58,14 +58,22 @@ const fail = (kind: IntakeError['kind'], message: string): never => {
   throw new LinearError({ kind, message })
 }
 
-export const CATALOG_QUERY = `query FactoryCatalog {
-  teams(first: 100) {
-    nodes {
-      id key name
-      states(first: 100) { nodes { id name type position } }
-      projects(first: 100) { nodes { id name } }
-    }
-  }
+// The catalog reads teams, states and projects as three flat lists. Linear multiplies the page sizes of nested
+// connections, so states and projects nested under teams exceed its complexity limit ("Query too complex").
+export const TEAMS_QUERY = `query FactoryTeams($first: Int!, $after: String) {
+  teams(first: $first, after: $after) { nodes { id key name } pageInfo { hasNextPage endCursor } }
+}`
+
+export const WORKFLOW_STATES_QUERY = `query FactoryWorkflowStates($first: Int!, $after: String) {
+  workflowStates(first: $first, after: $after) { nodes { id name type position team { id } } pageInfo { hasNextPage endCursor } }
+}`
+
+export const PROJECTS_QUERY = `query FactoryProjects($first: Int!, $after: String) {
+  projects(first: $first, after: $after) { nodes { id name teams(first: 10) { nodes { id } pageInfo { hasNextPage endCursor } } } pageInfo { hasNextPage endCursor } }
+}`
+
+export const PROJECT_TEAMS_QUERY = `query FactoryProjectTeams($id: String!, $first: Int!, $after: String) {
+  project(id: $id) { id teams(first: $first, after: $after) { nodes { id } pageInfo { hasNextPage endCursor } } }
 }`
 
 // Linear cannot filter inverseRelations by type, so the blocks relations are picked from the first 100 of any type.
@@ -116,17 +124,20 @@ export const CREATE_ATTACHMENT_MUTATION = `mutation FactoryCreateAttachment($inp
 
 const nodes = <T>(item: Parser<T>) => object<{ nodes: T[] }>({ nodes: array(item) })
 
-const workflowState = object<WorkflowState>({ id: string, name: string, type: stateType, position: number })
+type Page<T> = { nodes: T[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } }
 
-const team = object<{ id: string; key: string; name: string; states: { nodes: WorkflowState[] }; projects: { nodes: Array<{ id: string; name: string }> } }>({
-  id: string,
-  key: string,
-  name: string,
-  states: nodes(workflowState),
-  projects: nodes(object({ id: string, name: string })),
+const page = <T>(node: Parser<T>) => object<Page<T>>({ nodes: array(node), pageInfo: object({ hasNextPage: boolean, endCursor: nullable(string) }) })
+
+type TeamNode = { id: string; key: string; name: string }
+type StateNode = WorkflowState & { team: { id: string } }
+type ProjectNode = { id: string; name: string; teams: Page<{ id: string }> }
+
+const teamsData = object({ teams: page(object<TeamNode>({ id: string, key: string, name: string })) })
+const workflowStatesData = object({
+  workflowStates: page(object<StateNode>({ id: string, name: string, type: stateType, position: number, team: object({ id: string }) })),
 })
-
-const catalogData = object({ teams: nodes(team) })
+const projectsData = object({ projects: page(object<ProjectNode>({ id: string, name: string, teams: page(object({ id: string })) })) })
+const projectTeamsData = object({ project: object({ id: string, teams: page(object({ id: string })) }) })
 
 // "A blocks B" is a `blocks` relation stored on A, so B's blockers are the `issue` of B's inverse `blocks` relations.
 type Relation = { type: string; issue: IssueBlocker }
@@ -135,12 +146,9 @@ type IssueNode = {
   id: string; identifier: string; title: string; description: string | null; url: string; branchName: string; priority: number
   inverseRelations: Relations
 }
-type StateNode = { id: string; state: IssueState; priority: number; inverseRelations: Relations }
-type Page<T> = { nodes: T[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } }
+type IssueStateNode = { id: string; state: IssueState; priority: number; inverseRelations: Relations }
 
-const issuePage = <T>(node: Parser<T>) => object({
-  issues: object<Page<T>>({ nodes: array(node), pageInfo: object({ hasNextPage: boolean, endCursor: nullable(string) }) }),
-})
+const issuePage = <T>(node: Parser<T>) => object({ issues: page(node) })
 
 const relations = object<Relations>({ nodes: array(object<Relation>({ type: string, issue: issueBlocker })), pageInfo: object({ hasNextPage: boolean }) })
 const blockersOf = (r: Relations): IssueBlocker[] => r.nodes.filter((relation) => relation.type === 'blocks').map((relation) => relation.issue)
@@ -149,7 +157,7 @@ const issuesData = issuePage(object<IssueNode>({
   id: string, identifier: string, title: string, description: nullable(string), url: string, branchName: string, priority: number,
   inverseRelations: relations,
 }))
-const issueStatesData = issuePage(object<StateNode>({
+const issueStatesData = issuePage(object<IssueStateNode>({
   id: string, state: object<IssueState>({ id: string, name: string, type: stateType }), priority: number, inverseRelations: relations,
 }))
 
@@ -159,10 +167,7 @@ type CommentNode = { id: string; body: string; createdAt: string; user: { name: 
 const issueCommentsData = object({
   issue: object({
     id: string,
-    comments: object<Page<CommentNode>>({
-      nodes: array(object<CommentNode>({ id: string, body: string, createdAt: string, user: nullable(object({ name: string })) })),
-      pageInfo: object({ hasNextPage: boolean, endCursor: nullable(string) }),
-    }),
+    comments: page(object<CommentNode>({ id: string, body: string, createdAt: string, user: nullable(object({ name: string })) })),
   }),
 })
 const issueAttachmentData = object({ issue: object({ id: string, attachments: nodes(object({ id: string })) }) })
@@ -225,23 +230,43 @@ export function createLinearClient(options: {
     }
   }
 
-  async function pages<T>(operationName: string, query: string, filter: object, data: Parser<{ issues: Page<T> }>): Promise<T[]> {
+  /** Every node of a connection, across all pages. `read` fetches the page after the cursor. */
+  async function pages<T>(read: (after: string | null) => Promise<Page<T>>): Promise<T[]> {
     const found: T[] = []
     let after: string | null = null
     for (;;) {
-      const { issues }: { issues: Page<T> } = await request(operationName, query, { filter, first: pageSize, after }, data)
-      found.push(...issues.nodes)
-      if (!issues.pageInfo.hasNextPage || issues.pageInfo.endCursor === null) return found
-      if (issues.pageInfo.endCursor === after) return fail('api', 'Linear repeated a pagination cursor')
-      after = issues.pageInfo.endCursor
+      const { nodes, pageInfo } = await read(after)
+      found.push(...nodes)
+      if (!pageInfo.hasNextPage) return found
+      if (!pageInfo.endCursor) return fail('api', 'Linear reported more pages without a cursor')
+      if (pageInfo.endCursor === after) return fail('api', 'Linear repeated a pagination cursor')
+      after = pageInfo.endCursor
     }
   }
 
+  const issuePages = <T>(operationName: string, query: string, filter: object, data: Parser<{ issues: Page<T> }>) =>
+    pages(async (after) => (await request(operationName, query, { filter, first: pageSize, after }, data)).issues)
+
+  // A project shared by more teams than the projects query's first page of them reads all its teams on its own.
+  const projectTeams = async (project: ProjectNode) => !project.teams.pageInfo.hasNextPage ? project.teams.nodes
+    : pages(async (after) => (await request('FactoryProjectTeams', PROJECT_TEAMS_QUERY, { id: project.id, first: pageSize, after }, projectTeamsData)).project.teams)
+
   return {
     async catalog() {
-      const { teams } = await request('FactoryCatalog', CATALOG_QUERY, {}, catalogData)
+      const [teams, states, projects] = await Promise.all([
+        pages(async (after) => (await request('FactoryTeams', TEAMS_QUERY, { first: pageSize, after }, teamsData)).teams),
+        pages(async (after) => (await request('FactoryWorkflowStates', WORKFLOW_STATES_QUERY, { first: pageSize, after }, workflowStatesData)).workflowStates),
+        pages(async (after) => (await request('FactoryProjects', PROJECTS_QUERY, { first: pageSize, after }, projectsData)).projects),
+      ])
+      const teamsOf = new Map(await Promise.all(projects.map(async (p) => [p.id, new Set((await projectTeams(p)).map((pt) => pt.id))] as const)))
       return {
-        teams: teams.nodes.map((t): LinearTeam => ({ id: t.id, key: t.key, name: t.name, states: t.states.nodes, projects: t.projects.nodes })),
+        teams: teams.map((t): LinearTeam => ({
+          id: t.id,
+          key: t.key,
+          name: t.name,
+          states: states.filter((s) => s.team.id === t.id).map(({ id, name, type, position }) => ({ id, name, type, position })),
+          projects: projects.filter((p) => teamsOf.get(p.id)!.has(t.id)).map(({ id, name }) => ({ id, name })),
+        })),
       }
     },
     async issues(settings) {
@@ -250,7 +275,7 @@ export function createLinearClient(options: {
         state: { id: { eq: settings.pickupState } },
         ...(settings.project === null ? {} : { project: { id: { eq: settings.project } } }),
       }
-      const nodes = await pages('FactoryIssues', ISSUES_QUERY, filter, issuesData)
+      const nodes = await issuePages('FactoryIssues', ISSUES_QUERY, filter, issuesData)
       return nodes.map((n) => ({
         ref: { backend: 'linear', id: n.id as IssueId, identifier: n.identifier, url: n.url, branchName: n.branchName },
         title: n.title,
@@ -262,7 +287,7 @@ export function createLinearClient(options: {
     },
     async issueStates(ids) {
       if (ids.length === 0) return new Map()
-      const nodes = await pages('FactoryIssueStates', ISSUE_STATES_QUERY, { id: { in: ids } }, issueStatesData)
+      const nodes = await issuePages('FactoryIssueStates', ISSUE_STATES_QUERY, { id: { in: ids } }, issueStatesData)
       return new Map(nodes.map((n) => [n.id as IssueId, {
         state: n.state, priority: priorityOf(n.priority), blockers: blockersOf(n.inverseRelations), moreRelations: n.inverseRelations.pageInfo.hasNextPage,
       }]))
@@ -276,17 +301,9 @@ export function createLinearClient(options: {
       return true
     },
     async comments(issueId) {
-      const found: IssueComment[] = []
-      let after: string | null = null
-      for (;;) {
-        const answer: { issue: { comments: Page<CommentNode> } } = await request('FactoryIssueComments', ISSUE_COMMENTS_QUERY, { id: issueId, first: pageSize, after }, issueCommentsData)
-        const { comments } = answer.issue
-        found.push(...comments.nodes.map((c) => ({ id: c.id, body: c.body, createdAt: c.createdAt, author: c.user?.name ?? null })))
-        const next = comments.pageInfo
-        if (!next.hasNextPage || next.endCursor === null) return found
-        if (next.endCursor === after) return fail('api', 'Linear repeated a pagination cursor')
-        after = next.endCursor
-      }
+      const found = await pages(async (after) =>
+        (await request('FactoryIssueComments', ISSUE_COMMENTS_QUERY, { id: issueId, first: pageSize, after }, issueCommentsData)).issue.comments)
+      return found.map((c) => ({ id: c.id, body: c.body, createdAt: c.createdAt, author: c.user?.name ?? null }))
     },
     async ensureComment(issueId, commentId, body) {
       const { issue } = await request('FactoryIssueComment', ISSUE_COMMENT_QUERY, { id: issueId, commentId }, issueCommentData)
