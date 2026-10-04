@@ -1391,30 +1391,35 @@ export class MockServer {
   }
 
   /**
-   * A round that continues a pull request rereads the PR's state, since it may have merged or closed while the round
-   * waited. Saving the round as fresh makes its prompt and note say so and its retries start fresh. A handoff task's
-   * prompt gets how the round continues from the record, so it matches how this run starts its worktree (ADR 0012).
+   * A round that continues a pull request rereads the PR's state, since it may have merged, closed or moved to another
+   * branch while the round waited. Saving what it read makes the prompt and note say so and the round's later runs
+   * follow it. A handoff task's prompt gets how the round continues from the record, so it matches how this run starts
+   * its worktree (ADR 0012).
    */
   private async deliveryRequest({ id: taskId, flowId, origin, input }: Task, runId: RunId, agentId: AgentId): Promise<DeliveryRequest> {
-    let rework = this.openRecord(flowId)?.rework
+    const rework = this.openRecord(flowId)?.rework
     if (rework?.kind === 'continue') {
       const view = await viewPullRequest(rework.pr.url).catch((error: unknown) => {
         throw new Error(`delivery failed: ${error instanceof Error ? error.message : String(error)}`)
       })
       if (this.closed || this.world.runs[runId]?.status !== 'running') throw new Error('run ended while its pull request was read')
       const now = reworkOf(rework.pr, view)
-      const record = this.openRecord(flowId)
-      if (now.kind === 'fresh' && record?.rework?.kind === 'continue') {
-        this.world.intake = { ...this.world.intake, [record.issue.id]: { ...record, rework: now } }
-        const prompt = this.world.tasks[taskId]?.prompt
-        if (prompt) this.patchTask(taskId, { prompt: prompt.replace(reworkLine(rework, null), () => reworkLine(now, null)) })
-        this.log('info', `pull request #${prNumber(rework.pr)} was ${now.state}, so this run starts a fresh branch`, { runId, agentId }, Date.now())
-        this.publish()
+      const current = this.openRecord(flowId)
+      if (current?.rework?.kind === 'continue') {
+        const [before, after] = [reworkLine(current.rework, null), reworkLine(now, null)]
+        this.world.intake = { ...this.world.intake, [current.issue.id]: { ...current, rework: now } }
+        if (after !== before) {
+          const prompt = this.world.tasks[taskId]?.prompt
+          if (prompt) this.patchTask(taskId, { prompt: prompt.replace(before, () => after) })
+          const change = now.kind === 'fresh' ? `was ${now.state}, so this run starts a fresh branch` : `moved to branch ${now.branch}`
+          this.log('info', `pull request #${prNumber(rework.pr)} ${change}`, { runId, agentId }, Date.now())
+          this.publish()
+        }
       }
-      rework = now
     }
-    if (origin.kind === 'handoff' && input) this.patchTask(taskId, { prompt: handoffPrompt(input, this.openRecord(flowId)) })
-    if (rework?.kind === 'continue') return { kind: 'continue', branch: rework.branch, base: rework.base }
+    const record = this.openRecord(flowId)
+    if (origin.kind === 'handoff' && input) this.patchTask(taskId, { prompt: handoffPrompt(input, record) })
+    if (record?.rework?.kind === 'continue') return { kind: 'continue', branch: record.rework.branch, base: record.rework.base }
     return { kind: 'new', branch: issueOfFlow(this.world, flowId)?.branchName ?? `factory-${runId}` }
   }
 

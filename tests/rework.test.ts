@@ -445,6 +445,33 @@ ${merged}`)
   await f.server.close()
 })
 
+test('a delivering agent reached by handoff in a round whose pull request moved to another branch while it waited is told the new branch', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = handoffFactory(repo.root)
+  await poll(f)
+  await drain(f)
+  await moveIssue('ENG-1', 'Todo')
+  await poll(f)
+  git(repo.origin, 'branch', '-m', 'eng-1-fix-login', 'eng-1-login')
+  gh.openPullRequest('eng-1-login', PR_41)
+  await drain(f)
+  const planner = lastRunOf(f, PLANNER)
+  const coder = lastRunOf(f, CODER)
+  expect(promptsOf(f, 2)['Coder']).toBe(`Implemented ENG-1 Fix login (round 2).
+branch: factory-${planner.id}
+commit: ${short(workdirOf(f, planner))} change for ENG-1 Fix login (round 2) (attempt 1)
+
+## Rework round 2
+
+Continue on pull request #41 (${PR_41}). Commit your changes on top of the current HEAD and do not rebase, amend or push; Factory pushes them to the pull request's branch \`eng-1-login\`.`)
+  expect(git(repo.origin, 'rev-parse', 'eng-1-login')).toBe(git(workdirOf(f, coder), 'rev-parse', 'HEAD'))
+  expect(f.server.snapshot().logs.map((l) => l.msg)).toContain('pull request #41 moved to branch eng-1-login')
+  expect(record(f)).toMatchObject({ round: 2, rework: { kind: 'continue', branch: 'eng-1-login' }, result: { pr: { url: PR_41 } } })
+  expect(gh.creates()).toHaveLength(1)
+  await f.server.close()
+})
+
 test('a delivering agent reached by handoff in a round after a flow that failed without a pull request is told the round starts fresh', async () => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
