@@ -94,9 +94,10 @@ const SOURCE: Record<Feedback['kind'], string> = {
 }
 
 const MAX_NAME_CHARS = 100
+const MAX_PLACE_CHARS = 1000
 
-/** Remote text such as an author's or an app's name on one line, without control or format characters such as escapes and bidi overrides. */
-const oneLine = (text: string) => text.replace(/\s+/g, ' ').replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, MAX_NAME_CHARS)
+/** Remote text such as an author's or an app's name, or a file path, on one line, without control or format characters such as escapes and bidi overrides. */
+const oneLine = (text: string, max = MAX_NAME_CHARS) => text.replace(/\s+/g, ' ').replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, max)
 
 /**
  * Splits the feedback after `since` into the trusted comments a prompt quotes and the untrusted ones it leaves out. The
@@ -135,7 +136,7 @@ export function reworkLine(rework: Rework | null, previous: RoundResult | null):
 }
 
 function feedbackLine(f: Feedback): string {
-  const where = f.kind === 'inline' && f.place ? ` on \`${f.place}\`` : f.kind === 'review' ? ' (review)' : ''
+  const where = f.kind === 'inline' && f.place ? ` on \`${oneLine(f.place, MAX_PLACE_CHARS)}\`` : f.kind === 'review' ? ' (review)' : ''
   return `- **${oneLine(f.author)}**${where}: ${f.body.trim().replace(/\r?\n/g, '\n  ')}`
 }
 
@@ -177,7 +178,7 @@ export function roundPrompt(issue: { title: string; description: string; url: st
  * and the fenced feedback after the section. Null when the prompt has no section. The split holds while three things do:
  * the section is the last heading that follows the URL, since the free-text description comes before it; the quoted
  * feedback cannot hold that heading, since `feedbackLine` indents every body line after the first and puts the author's
- * name on one line; and the section ends at its first blank line, which `reworkSection` checks.
+ * name and the file path on one line; and the section ends at its first blank line, which `reworkSection` checks.
  */
 function issueParts(prompt: string, url: string, round: number): { issue: string; feedback: string } | null {
   const heading = `${url}\n\n## Rework round ${round}\n\n`
