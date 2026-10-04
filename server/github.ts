@@ -26,6 +26,16 @@ async function list(host: string, path: string): Promise<Json[]> {
   return out.split('\n').filter((line) => line.trim() !== '').map((line) => JSON.parse(line) as unknown).filter(isJson)
 }
 
+/** A pull request's state and head and base branches, read with `gh pr view <url>`. */
+export async function viewPullRequest(url: string): Promise<PullRequestView> {
+  if (!PR_URL.test(url)) throw new Error(`not a pull request URL: ${url}`)
+  const view: unknown = JSON.parse(await gh(['pr', 'view', url, '--json', 'state,headRefName,baseRefName']))
+  if (!isJson(view) || (view.state !== 'OPEN' && view.state !== 'MERGED' && view.state !== 'CLOSED') || typeof view.headRefName !== 'string' || typeof view.baseRefName !== 'string') {
+    throw new Error(`gh pr view: unexpected answer for ${url}`)
+  }
+  return { state: view.state, head: view.headRefName, base: view.baseRefName }
+}
+
 /**
  * The only code that reads GitHub for rework rounds (ADR 0012): a delivered pull request's state and head branch, and its
  * review feedback. Review summaries, inline comments and conversation comments all count; empty review bodies do not.
@@ -34,10 +44,7 @@ export async function readPullRequest(url: string): Promise<{ view: PullRequestV
   const match = PR_URL.exec(url)
   if (!match) throw new Error(`not a pull request URL: ${url}`)
   const [, host, owner, repo, number] = match
-  const view: unknown = JSON.parse(await gh(['pr', 'view', url, '--json', 'state,headRefName,baseRefName']))
-  if (!isJson(view) || (view.state !== 'OPEN' && view.state !== 'MERGED' && view.state !== 'CLOSED') || typeof view.headRefName !== 'string' || typeof view.baseRefName !== 'string') {
-    throw new Error(`gh pr view: unexpected answer for ${url}`)
-  }
+  const view = await viewPullRequest(url)
   const base = `repos/${owner}/${repo}`
   const [reviews, inline, conversation] = await Promise.all([
     list(host, `${base}/pulls/${number}/reviews`),
@@ -53,5 +60,5 @@ export async function readPullRequest(url: string): Promise<{ view: PullRequestV
     }),
     ...conversation.map((c): Feedback => ({ author: login(c), body: text(c.body), at: at(c.created_at), kind: 'comment', place: null })),
   ]
-  return { view: { state: view.state, head: view.headRefName, base: view.baseRefName }, feedback }
+  return { view, feedback }
 }

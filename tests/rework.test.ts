@@ -232,6 +232,7 @@ Continue on pull request #41 (${PR_41}). Commit your changes on top of the curre
   const secondRun = await nextRun(f)
   const workdir = workdirOf(f, secondRun)
   expect(secondRun.status).toBe('succeeded')
+  expect(prViews()).toBe(3)
   expect(git(workdir, 'branch', '--show-current')).toBe(`factory-${secondRun.id}`)
   expect(git(workdir, 'rev-parse', 'HEAD~1')).toBe(firstHead)
   expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login')).toBe(git(workdir, 'rev-parse', 'HEAD'))
@@ -293,6 +294,90 @@ Implemented ENG-1 Fix login (round 3).
 Signed by Factory. Runs: ${thirdRun.id}. Agents: Coder.`)
   expect(record(f)).toMatchObject({ round: 3, rework: { kind: 'fresh', state: 'merged' }, result: { pr: { url: PR_42 } } })
   await f.server.close()
+})
+
+/** Round 1 delivers pull request #41, and the issue goes back to Todo so round 2 is taken to continue on it. */
+async function roundTwoTaken(f: Factory) {
+  await poll(f)
+  await nextRun(f)
+  await moveIssue('ENG-1', 'Todo')
+  await poll(f)
+  expect(record(f)).toMatchObject({ round: 2, rework: { kind: 'continue', pr: { url: PR_41 }, branch: 'eng-1-fix-login' } })
+}
+
+const prViews = () => gh.calls().filter((c) => c.argv[1] === 'view' && c.argv[2] === PR_41).length
+
+test.each([
+  ['deleted', true],
+  ['kept', false],
+] as const)('a pull request merged with its branch %s while round 2 waits makes the round start fresh and open a new pull request', async (_label, deleteBranch) => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner())
+  await roundTwoTaken(f)
+  const mergedTip = git(repo.origin, 'rev-parse', 'refs/heads/eng-1-fix-login')
+  gh.setState('eng-1-fix-login', 'MERGED')
+  if (deleteBranch) git(repo.origin, 'update-ref', '-d', 'refs/heads/eng-1-fix-login')
+  const views = prViews()
+
+  const run = await nextRun(f)
+  const workdir = workdirOf(f, run)
+  expect(run.status).toBe('succeeded')
+  expect(prViews()).toBe(views + 1)
+  expect(git(workdir, 'branch', '--show-current')).toBe('eng-1-fix-login-2')
+  expect(git(workdir, 'rev-parse', 'HEAD~1')).toBe(git(repo.origin, 'rev-parse', 'main'))
+  expect(git(repo.origin, 'for-each-ref', '--format=%(refname:short) %(objectname)', 'refs/heads/eng-1-fix-login')).toBe(deleteBranch ? '' : `eng-1-fix-login ${mergedTip}`)
+  expect(gh.creates().map((c) => c.argv.slice(2, 4))).toEqual([['--head', 'eng-1-fix-login'], ['--head', 'eng-1-fix-login-2']])
+  expect(run.output?.artifacts.at(-1)).toEqual({ kind: 'pr', label: 'Pull request #42', url: PR_42 })
+  expect(record(f)).toMatchObject({ round: 2, phase: 'ended', rework: { kind: 'fresh', pr: { url: PR_41 }, state: 'merged' }, result: { pr: { url: PR_42 } } })
+  expect(f.server.snapshot().logs.map((l) => l.msg)).toContain('pull request #41 was merged, so this run starts a fresh branch')
+  const after = await issue('ENG-1')
+  expect(after.attachments.map((a) => a.url)).toEqual([PR_41, PR_42])
+  expect(after.comments.at(-1)?.body.split('\n\n').slice(0, 2)).toEqual(['**Factory finished this issue (round 2).**', 'Pull request #41 was merged, so this round opened a new pull request.'])
+  await f.server.close()
+})
+
+test('an unreadable pull request fails round 2’s run without guessing a branch, and the retry starts fresh once it reads the merge', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner())
+  await roundTwoTaken(f)
+  gh.setState('eng-1-fix-login', 'MERGED')
+  gh.failNext('view')
+
+  const failed = await nextRun(f)
+  expect(failed).toMatchObject({ status: 'failed', attempt: 1, error: `delivery failed: gh pr view: no pull requests found for "${PR_41}"` })
+  expect(seen.map((t) => t.title)).toEqual(['ENG-1 Fix login'])
+  expect(record(f).rework).toMatchObject({ kind: 'continue' })
+
+  const retried = await nextRun(f)
+  expect(retried).toMatchObject({ status: 'succeeded', attempt: 2 })
+  expect(git(workdirOf(f, retried), 'branch', '--show-current')).toBe('eng-1-fix-login-2')
+  expect(record(f).rework).toMatchObject({ kind: 'fresh', state: 'merged' })
+  await f.server.close()
+})
+
+test('a restart after round 2’s run read the merge retries fresh without reading the pull request again', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const store = memoryStore()
+  const f = factory(repo.root, agentRunner((task) => (task.title.endsWith('(round 2)') ? 'hang' : 'commit')), LIFECYCLE, store)
+  await roundTwoTaken(f)
+  gh.setState('eng-1-fix-login', 'CLOSED')
+  f.api.sim.advance(1)
+  await until(() => seen.some((t) => t.title === 'ENG-1 Fix login (round 2)'))
+  await f.server.close()
+
+  const server = new MockServer({ manual: true, rng: RNG, localRunner: agentRunner(), localRoot: repo.root, linear: linear(), clock: () => wall, store })
+  const g = { server, api: createApi(server), trigger: f.trigger, root: repo.root }
+  expect(record(g).rework).toMatchObject({ kind: 'fresh', pr: { url: PR_41 }, state: 'closed' })
+  const views = prViews()
+  const retried = await nextRun(g)
+  expect(retried).toMatchObject({ status: 'succeeded', attempt: 2 })
+  expect(prViews()).toBe(views)
+  expect(git(workdirOf(g, retried), 'branch', '--show-current')).toBe('eng-1-fix-login-3')
+  expect((await issue('ENG-1')).comments.at(-1)?.body.split('\n\n')[1]).toBe('Pull request #41 was closed, so this round opened a new pull request.')
+  await server.close()
 })
 
 test('a failed issue that never left Todo does not loop, and runs again as a new round once moved away and back', async () => {

@@ -59,8 +59,8 @@ import { array, boolean, defaulted, id, number, object, oneOf, record } from './
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
 import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type IssueStatus, type LinearClient, type LinearIssue } from './linear'
 import { cancelRecord, flowAction, flowOutcome, landed, nextWrite, reconcileRecord, workingStates } from './writeBack'
-import { latestOutput, latestPullRequest, linearFeedback, recent, reworkOf, reworkable, roundPrompt, roundTitle, startRound, type Feedback, type RoundContext } from './rounds'
-import { readPullRequest } from './github'
+import { latestOutput, latestPullRequest, linearFeedback, prNumber, recent, reworkOf, reworkable, roundPrompt, roundTitle, startRound, type Feedback, type PullRequestView, type RoundContext } from './rounds'
+import { readPullRequest, viewPullRequest } from './github'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 
@@ -1365,11 +1365,8 @@ export class MockServer {
       }, agent.timeoutMs)
       timeout.unref?.()
       this.localTimeouts.set(id, timeout)
-      const rework = this.openRecord(task.flowId)?.rework
-      const delivery: DeliveryRequest | null = agent.delivery !== 'pull-request' ? null
-        : rework?.kind === 'continue' ? { kind: 'continue', branch: rework.branch, base: rework.base }
-        : { kind: 'new', branch: issueOfFlow(this.world, task.flowId)?.branchName ?? `factory-${id}` }
-      void prepareWorkdir(sandbox.host, id, delivery).then((workdir) => {
+      const delivery = agent.delivery === 'pull-request' ? this.deliveryRequest(task.flowId, id, agent.id) : Promise.resolve(null)
+      void delivery.then((request) => prepareWorkdir(sandbox.host, id, request)).then((workdir) => {
         if (this.closed || this.world.runs[id]?.status !== 'running') return
         this.workdirs.set(id, workdir)
         const branch = workdir.delivery ? ` on branch ${workdir.delivery.branch} from origin/${workdir.delivery.base}` : ''
@@ -1378,6 +1375,30 @@ export class MockServer {
         this.runners.local.start({ run, agent, task, workdir: workdir.path }, (event) => this.handleRunnerEvent(id, event))
       }).catch((error: unknown) => this.handleRunnerEvent(id, { kind: 'complete', status: 'failed', result: null, reason: error instanceof Error ? error.message : String(error) }))
     } else this.runners.simulated.start({ run, agent, task, workdir: '' }, (event) => this.handleRunnerEvent(id, event))
+  }
+
+  /**
+   * The branch a delivering run works on. A round that continues a pull request reads the PR's state first, since it
+   * may have merged or closed while the round waited. A merged or closed PR makes the round fresh, as if it had been
+   * taken after the merge, so its note says so and a retry or restart starts fresh too (ADR 0012).
+   */
+  private async deliveryRequest(flowId: FlowId, runId: RunId, agentId: AgentId): Promise<DeliveryRequest> {
+    const rework = this.openRecord(flowId)?.rework
+    if (rework?.kind === 'continue') {
+      let view: PullRequestView
+      try { view = await viewPullRequest(rework.pr.url) } catch (error) {
+        throw new Error(`delivery failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      const now = reworkOf(rework.pr, view)
+      if (now.kind === 'continue') return { kind: 'continue', branch: now.branch, base: now.base }
+      const record = this.openRecord(flowId)
+      if (!this.closed && record?.rework?.kind === 'continue' && record.rework.pr.url === rework.pr.url) {
+        this.world.intake = { ...this.world.intake, [record.issue.id]: { ...record, rework: now } }
+        this.log('info', `pull request #${prNumber(rework.pr)} was ${now.state}, so this run starts a fresh branch`, { runId, agentId }, Date.now())
+        this.publish()
+      }
+    }
+    return { kind: 'new', branch: issueOfFlow(this.world, flowId)?.branchName ?? `factory-${runId}` }
   }
 
   private nameOf(id: string): string {
