@@ -59,7 +59,7 @@ import { array, boolean, defaulted, id, number, object, oneOf, record } from './
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
 import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type IssueStatus, type LinearClient, type LinearIssue } from './linear'
 import { cancelRecord, flowAction, flowOutcome, landed, nextWrite, reconcileRecord, workingStates } from './writeBack'
-import { issuePrompt, issuePromptParts, latestOutput, latestPullRequest, linearFeedback, outputText, prNumber, rereadRework, reworkOf, reworkable, roundTitle, runPrompt, screen, startRound, type RoundContext, type Screened } from './rounds'
+import { latestOutput, latestPullRequest, linearFeedback, outputText, prNumber, rereadRework, reworkOf, reworkable, roundPrompt, roundTitle, runPrompt, screen, startRound, type RoundContext, type Screened } from './rounds'
 import { readPullRequest, viewPullRequest } from './github'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
@@ -588,7 +588,7 @@ export class MockServer {
   enqueueTask(agentId: AgentId, input: { title: string; prompt: string; priority: Priority }, origin: Task['origin'] = { kind: 'manual' }): TaskId {
     const flowId = this.uid('fl') as FlowId
     const id = this.uid('tk') as TaskId
-    const task: Task = { id, flowId, agentId, title: input.title, prompt: input.prompt, priority: input.priority, status: 'queued', origin, input: null, promptParts: null, createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
+    const task: Task = { id, flowId, agentId, title: input.title, prompt: input.prompt, priority: input.priority, status: 'queued', origin, input: null, createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
     this.world.tasks = { ...this.world.tasks, [id]: task }
     this.event('task', { kind: 'task', id }, `Queued “${task.title}” for ${this.nameOf(agentId)}`)
     this.publish()
@@ -828,7 +828,7 @@ export class MockServer {
     this.event('trigger', { kind: 'trigger', id }, `${tr.name} fired (${tr.kind})`)
     const flowId = this.uid('fl') as FlowId
     for (const e of targets) {
-      this.enqueueTaskSilently(e.target as AgentId, { title: tr.template, prompt: `${tr.template}\n\nTriggered by ${tr.name}.`, priority: tr.kind === 'webhook' ? 'high' : 'normal', origin: { kind: 'trigger', id }, input: null, promptParts: null }, flowId)
+      this.enqueueTaskSilently(e.target as AgentId, { title: tr.template, prompt: `${tr.template}\n\nTriggered by ${tr.name}.`, priority: tr.kind === 'webhook' ? 'high' : 'normal', origin: { kind: 'trigger', id }, input: null }, flowId)
     }
   }
 
@@ -947,13 +947,12 @@ export class MockServer {
       const next = startRound(record, issue.ref, {
         trigger: id, flowId, takenAt: this.clock(), states, blockers: issue.blockers, rework: context?.rework ?? null, leftOut: context?.leftOut ?? [],
       })
-      const promptParts = issuePromptParts({ title: issue.title, description: issue.description, url: issue.ref.url }, context ?? null)
       this.enqueueTaskSilently(agentId, {
         title: roundTitle(issue.ref.identifier, issue.title, round),
-        prompt: issuePrompt(promptParts, next),
+        prompt: roundPrompt({ title: issue.title, description: issue.description, url: issue.ref.url }, next, context ?? null),
         priority: issue.priority,
         origin: { kind: 'issue', trigger: id, issue: issue.ref },
-        input: record ? latestOutput(record) : null, promptParts,
+        input: record ? latestOutput(record) : null,
       }, flowId)
       this.world.intake = { ...this.world.intake, [issue.ref.id]: next }
       taken.push(round > 1 ? `${issue.ref.identifier} (round ${round})` : issue.ref.identifier)
@@ -1084,7 +1083,7 @@ export class MockServer {
     this.world.intakePolls = Object.fromEntries(Object.entries(this.world.intakePolls).filter(([id]) => !gone.has(id))) as World['intakePolls']
   }
 
-  private enqueueTaskSilently(agentId: AgentId, fields: Pick<Task, 'title' | 'prompt' | 'priority' | 'origin' | 'input' | 'promptParts'>, flowId: FlowId) {
+  private enqueueTaskSilently(agentId: AgentId, fields: Pick<Task, 'title' | 'prompt' | 'priority' | 'origin' | 'input'>, flowId: FlowId) {
     if (!this.world.agents[agentId]) return
     const id = this.uid('tk') as TaskId
     const task: Task = { id, flowId, agentId, ...fields, status: 'queued', createdAt: this.world.now, attempts: 0, retryAt: null, blockedOn: null }
@@ -1196,7 +1195,7 @@ export class MockServer {
           if (e.kind === 'handoff' && e.source === run.agentId) {
             this.enqueueTaskSilently(e.target as AgentId, {
               title: `${run.title} → ${this.nameOf(e.target)}`, prompt, priority: task?.priority ?? 'normal',
-              origin: { kind: 'handoff', from: run.agentId, runId: run.id }, input: { ...output, runId: run.id }, promptParts: null,
+              origin: { kind: 'handoff', from: run.agentId, runId: run.id }, input: { ...output, runId: run.id },
             }, task?.flowId ?? (this.uid('fl') as FlowId))
           }
         }
@@ -1375,28 +1374,30 @@ export class MockServer {
       timeout.unref?.()
       this.localTimeouts.set(id, timeout)
       const delivery = agent.delivery === 'pull-request' ? this.deliveryRequest(task, id, agent.id) : Promise.resolve(null)
-      const setup = delivery.then((request) => prepareWorkdir(sandbox.host, id, request)).then((workdir) => {
+      const setup = delivery.then((request) => {
+        this.writePrompt(task, request)
+        return prepareWorkdir(sandbox.host, id, request)
+      }).then((workdir) => {
         if (this.closed || this.world.runs[id]?.status !== 'running') return
         this.workdirs.set(id, workdir)
         const branch = workdir.delivery ? ` on branch ${workdir.delivery.branch} from origin/${workdir.delivery.base}` : ''
         this.log('info', `working directory: ${workdir.path}${branch}`, { runId: id, agentId: agent.id }, Date.now())
         this.publish()
-        this.runners.local.start({ run, agent, task: this.writePrompt(task, workdir.delivery !== null), workdir: workdir.path }, (event) => this.handleRunnerEvent(id, event))
+        this.runners.local.start({ run, agent, task: this.world.tasks[task.id] ?? task, workdir: workdir.path }, (event) => this.handleRunnerEvent(id, event))
       }).catch((error: unknown) => {
         if (this.closed) return
         this.handleRunnerEvent(id, { kind: 'complete', status: 'failed', result: null, reason: error instanceof Error ? error.message : String(error) })
       })
       this.setups.set(id, setup)
       void setup.finally(() => this.setups.delete(id))
-    } else this.runners.simulated.start({ run, agent, task: this.writePrompt(task, false), workdir: '' }, (event) => this.handleRunnerEvent(id, event))
+    } else this.runners.simulated.start({ run, agent, task, workdir: '' }, (event) => this.handleRunnerEvent(id, event))
   }
 
-  /** Gives the task's starting run its prompt, built from the task's parts and its round's record (ADR 0012). */
-  private writePrompt(task: Task, delivers: boolean): Task {
-    const current = this.world.tasks[task.id] ?? task
-    const prompt = runPrompt(current, this.openRecord(current.flowId), delivers)
-    this.patchTask(task.id, { prompt })
-    return { ...current, prompt }
+  /** Gives a local run its prompt from where it delivers, before its worktree is prepared (ADR 0012). */
+  private writePrompt({ id, flowId }: Task, request: DeliveryRequest | null) {
+    const task = this.world.tasks[id]
+    if (task) this.patchTask(id, { prompt: runPrompt(task, this.openRecord(flowId), request) })
+    this.publish()
   }
 
   /**

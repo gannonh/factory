@@ -1,6 +1,7 @@
 import type {
-  FlowId, IntakeRecord, IssueBlocker, IssueRef, PromptParts, PullRequestRef, Rework, RoundResult, RunOutput, Task, TaskInput, TriggerId, TriggerStates,
+  FlowId, IntakeRecord, IssueBlocker, IssueRef, PullRequestRef, Rework, RoundResult, RunOutput, Task, TaskInput, TriggerId, TriggerStates,
 } from '../src/domain/types'
+import type { DeliveryRequest } from './runners'
 import { dropPendingMoves } from './writeBack'
 
 /**
@@ -94,14 +95,9 @@ const SOURCE: Record<Feedback['kind'], string> = {
 }
 
 const MAX_NAME_CHARS = 100
-const MAX_REF_CHARS = 255
 
-/**
- * Remote text such as an author's name or a branch on one line, without control or format characters such as escapes and
- * bidi overrides.
- */
-const oneLine = (text: string, max = MAX_NAME_CHARS) => text.replace(/\s+/g, ' ').replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, max)
-const ref = (name: string) => oneLine(name, MAX_REF_CHARS)
+/** Remote text such as an author's or an app's name on one line, without control or format characters such as escapes and bidi overrides. */
+const oneLine = (text: string) => text.replace(/\s+/g, ' ').replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, MAX_NAME_CHARS)
 
 /**
  * Splits the feedback after `since` into the trusted comments a prompt quotes and the untrusted ones it leaves out. The
@@ -134,7 +130,7 @@ export function reworkLine(rework: Rework | null, previous: RoundResult | null):
   if (!rework) return `The previous round ${previous ? ENDED[previous.outcome] : 'ended'} without a pull request, so this round starts fresh.`
   const pr = `#${prNumber(rework.pr)} (${rework.pr.url})`
   if (rework.kind === 'continue') {
-    return `Continue on pull request ${pr}. Commit your changes on top of the current HEAD and do not rebase, amend or push; Factory pushes them to the pull request's branch \`${ref(rework.branch)}\`.`
+    return `Continue on pull request ${pr}. Commit your changes on top of the current HEAD and do not rebase, amend or push; Factory pushes them to the pull request's branch \`${rework.branch}\`.`
   }
   return `Pull request ${pr} was ${rework.state}, so this round starts a fresh branch and opens a new pull request.`
 }
@@ -158,51 +154,71 @@ function fenced(sections: string[]): string {
 
 const joined = (parts: ReadonlyArray<string | null>) => parts.filter((part) => part !== null && part !== '').join('\n\n')
 
-/** The parts of a round's issue task prompt that stay fixed across its runs: the issue, and the fenced feedback since the last round. */
-export function issuePromptParts(issue: { title: string; description: string; url: string }, context: RoundContext | null): PromptParts {
-  const sections: string[] = []
-  if (context?.review.length) sections.push(['### Review comments on the pull request', ...context.review.map(feedbackLine)].join('\n'))
-  if (context?.linear.length) sections.push(['### Linear comments since the last round', ...context.linear.map(feedbackLine)].join('\n'))
-  return { issue: joined([issue.title, issue.description, issue.url]), feedback: sections.length > 0 ? fenced(sections) : '' }
-}
-
 /** The `Rework round N` heading and how the round continues, read from the record, or null for round 1. */
 export function reworkSection(record: IntakeRecord): string | null {
   if (record.round === 1) return null
   return `## Rework round ${record.round}\n\n${reworkLine(record.rework, record.past.at(-1)?.result ?? null)}`
 }
 
-/** A round's issue task prompt: the issue, how the round continues, then the fenced feedback. */
-export const issuePrompt = (parts: PromptParts, record: IntakeRecord): string => joined([parts.issue, reworkSection(record), parts.feedback])
+/** The task prompt: the issue, then for a round after the first how it continues and the feedback since the last round. */
+export function roundPrompt(issue: { title: string; description: string; url: string }, record: IntakeRecord, context: RoundContext | null): string {
+  const sections: string[] = []
+  if (context?.review.length) sections.push(['### Review comments on the pull request', ...context.review.map(feedbackLine)].join('\n'))
+  if (context?.linear.length) sections.push(['### Linear comments since the last round', ...context.linear.map(feedbackLine)].join('\n'))
+  return joined([issue.title, issue.description, issue.url, reworkSection(record), sections.length > 0 ? fenced(sections) : null])
+}
+
+/**
+ * An issue task's prompt as `roundPrompt` wrote it, split around its `Rework round N` section: the issue up to its URL,
+ * and the fenced feedback after the section. The section is the last heading that follows the URL, since the free-text
+ * description comes before it and the quoted feedback indents every line after a comment's first. Null when the prompt
+ * has no section.
+ */
+function issueParts(prompt: string, url: string, round: number): { issue: string; feedback: string } | null {
+  const heading = `${url}\n\n## Rework round ${round}\n\n`
+  const at = prompt.lastIndexOf(heading)
+  if (at < 0) return null
+  const rest = prompt.slice(at + heading.length)
+  const end = rest.indexOf('\n\n')
+  return { issue: prompt.slice(0, at + url.length), feedback: end < 0 ? '' : rest.slice(end + 2) }
+}
 
 /** A run's output as the prompt of a task its handoff creates: the summary, then a line per artifact. */
 export const outputText = (output: RunOutput): string =>
   [output.summary, ...output.artifacts.map((a) => `${a.kind}: ${a.label}${a.url ? ` (${a.url})` : ''}`)].join('\n')
 
 /**
- * The prompt for a run of the task, built as the run starts from the task's parts and the record as this run read it, so
- * every attempt gets the text that matches how it starts its worktree. A handoff task gets the upstream output, plus how
- * the round continues only when this run delivers, since only a delivering run works on the round's branch (ADR 0012).
- * A task with no parts to build from keeps its prompt.
+ * The prompt for a run of the task, given where the run delivers (null when it does not), so the text matches how the run
+ * starts its worktree. A run that continues the pull request names the branch it was given, whatever a parallel run saved
+ * since; a fresh or empty rework never changes within a round, so the record holds the rest. An issue task's
+ * `Rework round N` section is rebuilt between its issue text and feedback. A handoff task gets the upstream output, plus
+ * the section only when this run delivers, since only a delivering run works on the round's branch (ADR 0012). Any other
+ * task keeps its prompt.
  */
-export function runPrompt(task: Pick<Task, 'origin' | 'input' | 'prompt' | 'promptParts'>, record: IntakeRecord | undefined, delivers: boolean): string {
-  if (task.origin.kind === 'issue' && task.promptParts && record) return issuePrompt(task.promptParts, record)
-  if (task.origin.kind === 'handoff' && task.input) return joined([outputText(task.input), delivers && record ? reworkSection(record) : null])
+export function runPrompt(task: Pick<Task, 'origin' | 'input' | 'prompt'>, current: IntakeRecord | undefined, request: DeliveryRequest | null): string {
+  const record = current?.rework && request?.kind === 'continue'
+    ? { ...current, rework: { kind: 'continue' as const, pr: current.rework.pr, branch: request.branch, base: request.base } }
+    : current
+  const parts = task.origin.kind === 'issue' && record ? issueParts(task.prompt, task.origin.issue.url, record.round) : null
+  if (parts && record) return joined([parts.issue, reworkSection(record), parts.feedback])
+  if (task.origin.kind === 'handoff' && task.input) return joined([outputText(task.input), request && record ? reworkSection(record) : null])
   return task.prompt
 }
 
 /**
  * What a delivering run's reread of the pull request its round continues changes in the record: the rework to save and
  * what changed, for the run log, or null when nothing did. `seen` is the rework the run read before it asked `gh`. A
- * record that no longer holds it took a newer read, such as a parallel sibling's, and keeps it.
+ * merged or closed pull request never reopens, so that read saves unless the record is already fresh. Two open reads
+ * can arrive out of order, so an open read saves only while the record still holds `seen`.
  */
 export function rereadRework(current: Rework | null, seen: Extract<Rework, { kind: 'continue' }>, view: PullRequestView): { rework: Rework; change: string } | null {
-  if (current?.kind !== 'continue' || current.branch !== seen.branch || current.base !== seen.base) return null
+  if (current?.kind !== 'continue') return null
   const now = reworkOf(seen.pr, view)
   if (now.kind === 'fresh') return { rework: now, change: `was ${now.state}, so this run starts a fresh branch` }
+  if (current.branch !== seen.branch || current.base !== seen.base) return null
   const changes = [
-    ...(now.branch === seen.branch ? [] : [`moved to branch ${ref(now.branch)}`]),
-    ...(now.base === seen.base ? [] : [`was retargeted to ${ref(now.base)}`]),
+    ...(now.branch === seen.branch ? [] : [`moved to branch ${now.branch}`]),
+    ...(now.base === seen.base ? [] : [`was retargeted to ${now.base}`]),
   ]
   return changes.length > 0 ? { rework: now, change: changes.join(' and ') } : null
 }

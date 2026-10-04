@@ -4,14 +4,14 @@
  * The agent is an in-process runner that commits a file in its working directory, like a real agent would.
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'vitest'
 import { startFakeLinear, type FakeLinear } from '../scripts/fake-linear'
 import { createApi, type InProcessApi } from '../server/api'
 import { createLinearClient } from '../server/linear'
-import { linearFeedback, rereadRework, reworkSection, reworkable, screen, type Feedback } from '../server/rounds'
+import { linearFeedback, rereadRework, reworkable, screen, type Feedback } from '../server/rounds'
 import { MockServer } from '../server/simulation'
 import type { WorldStore } from '../server/worldFile'
 import { intakeStatus } from '../src/components/linearIntake'
@@ -953,19 +953,177 @@ test('untrusted comments past the newest 50 are counted, and only trusted commen
   expect(screened.leftOut.at(-1)).toBe('pull request comment by spam51 (author association NONE)')
 })
 
-test('a reread that a newer read of the pull request already overtook leaves the record alone', () => {
+test('a merged read saves even after a parallel read moved the branch, and an open read that a newer one overtook saves nothing', () => {
   const pr = { kind: 'pr' as const, label: 'Pull request #41', url: PR_41 }
   const continues = (branch: string, base = 'main') => ({ kind: 'continue' as const, pr, branch, base })
-  const view = (head: string, base = 'main') => ({ state: 'OPEN' as const, head, base })
+  const view = (head: string, base = 'main', state: 'OPEN' | 'MERGED' = 'OPEN') => ({ state, head, base })
   expect(rereadRework(continues('eng-1-login'), continues('eng-1-fix-login'), view('eng-1-fix-login'))).toBeNull()
-  expect(rereadRework({ kind: 'fresh', pr, state: 'merged' }, continues('eng-1-fix-login'), view('eng-1-fix-login'))).toBeNull()
+  expect(rereadRework(continues('eng-1-login'), continues('eng-1-fix-login'), view('eng-1-login', 'main', 'MERGED'))).toEqual({
+    rework: { kind: 'fresh', pr, state: 'merged' }, change: 'was merged, so this run starts a fresh branch',
+  })
+  expect(rereadRework({ kind: 'fresh', pr, state: 'closed' }, continues('eng-1-fix-login'), view('eng-1-fix-login', 'main', 'MERGED'))).toBeNull()
   expect(rereadRework(continues('eng-1-fix-login'), continues('eng-1-fix-login'), view('eng-1-fix-login'))).toBeNull()
-  expect(rereadRework(continues('eng-1-fix-login'), continues('eng-1-fix-login'), view('eng-1-‮login\u0007', 'develop'))).toEqual({
-    rework: continues('eng-1-‮login\u0007', 'develop'), change: 'moved to branch eng-1-login and was retargeted to develop',
+  expect(rereadRework(continues('eng-1-fix-login'), continues('eng-1-fix-login'), view('eng-1-login', 'develop'))).toEqual({
+    rework: continues('eng-1-login', 'develop'), change: 'moved to branch eng-1-login and was retargeted to develop',
   })
 })
 
-test('a branch name from the pull request reaches the prompt without control or format characters', () => {
-  const record = ended({ round: 2, rework: { kind: 'continue', pr: { kind: 'pr', label: 'Pull request #41', url: PR_41 }, branch: 'eng-1-‮login\u001b[2J', base: 'main' } })
-  expect(reworkSection(record)).toBe(`## Rework round 2\n\n${CONTINUE_41.replace('eng-1-fix-login', 'eng-1-login[2J')}`)
+/** `factory()` with the trigger feeding Planner, who hands off to both Coder and Reviewer on the local sandbox. */
+function fanOutFactory(root: string): Factory {
+  const f = factory(root, agentRunner())
+  const drop = Object.values(f.server.snapshot().edges).filter((e) => (e.kind === 'triggers' && e.source === f.trigger) || (e.kind === 'runs-in' && e.source === REVIEWER))
+  f.api.graph.removeEdges(drop.map((e) => e.id as EdgeId))
+  f.api.graph.connect(f.trigger, PLANNER, 'triggers')
+  f.api.graph.connect(PLANNER, CODER, 'handoff')
+  f.api.graph.connect(PLANNER, REVIEWER, 'handoff')
+  f.api.graph.connect(REVIEWER, LOCAL, 'runs-in')
+  return f
+}
+
+/** Round 1 delivers #41 through Coder. Round 2 is taken with Reviewer delivering too, and only its Planner run has run. */
+async function roundTwoPlanned(f: Factory) {
+  await poll(f)
+  await drain(f)
+  expect(record(f)).toMatchObject({ round: 1, phase: 'ended', result: { pr: { url: PR_41 } } })
+  f.api.agents.update(REVIEWER, { delivery: 'pull-request', retry: { maxAttempts: 1, backoffMs: 0, backoff: 'fixed' } })
+  f.api.agents.update(CODER, { retry: { maxAttempts: 1, backoffMs: 0, backoff: 'fixed' } })
+  f.api.sandboxes.update(LOCAL, { capacity: 3 })
+  await moveIssue('ENG-1', 'Todo')
+  await poll(f)
+  f.api.agents.setPaused(CODER, true)
+  f.api.agents.setPaused(REVIEWER, true)
+  const planned = () => Object.values(f.server.snapshot().runs).filter((r) => r.agentId === PLANNER && r.status === 'succeeded').length === 2
+  await drain(f, planned)
+  expect(planned()).toBe(true)
+}
+
+/** A `git` first on PATH that waits before every fetch while it is held, so a test can act while a worktree is prepared. */
+function heldGit() {
+  const dir = tempDir()
+  const bin = join(dir, 'bin')
+  mkdirSync(bin)
+  const [hold, waiting] = [join(dir, 'hold'), join(dir, 'waiting')]
+  const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
+  writeFileSync(join(bin, 'git'), `#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = fetch ]; then
+    if [ -e '${hold}' ]; then touch '${waiting}'; fi
+    while [ -e '${hold}' ]; do sleep 0.02; done
+    break
+  fi
+done
+exec '${real}' "$@"
+`)
+  chmodSync(join(bin, 'git'), 0o755)
+  writeFileSync(hold, '')
+  return { bin, waiting: () => existsSync(waiting), release: () => rmSync(hold, { force: true }) }
+}
+
+const MERGED_41 = `Pull request #41 (${PR_41}) was merged, so this round starts a fresh branch and opens a new pull request.`
+
+test('a run that continues the pull request is told so when a parallel run saves the merge while its worktree is prepared', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = fanOutFactory(repo.root)
+  await roundTwoPlanned(f)
+  const git_ = heldGit()
+  process.env.PATH = `${git_.bin}:${process.env.PATH}`
+  f.api.agents.setPaused(CODER, false)
+  f.api.sim.advance(1)
+  await until(git_.waiting)
+  gh.setState('eng-1-fix-login', 'MERGED')
+  f.api.agents.setPaused(REVIEWER, false)
+  f.api.sim.advance(1)
+  await until(() => pullRequestLogs(f).length > 0)
+  git_.release()
+  await drain(f)
+  const [coder, reviewer] = [lastRunOf(f, CODER), lastRunOf(f, REVIEWER)]
+  expect(pullRequestLogs(f)).toEqual(['pull request #41 was merged, so this run starts a fresh branch'])
+  expect(promptsOf(f, 2)).toEqual({
+    Planner: expect.any(String),
+    Coder: `${plannerOutput(f)}\n\n## Rework round 2\n\n${CONTINUE_41}`,
+    Reviewer: `${plannerOutput(f)}\n\n## Rework round 2\n\n${MERGED_41}`,
+  })
+  expect(git(workdirOf(f, coder), 'branch', '--show-current')).toBe(`factory-${coder.id}`)
+  expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login')).toBe(git(workdirOf(f, coder), 'rev-parse', 'HEAD'))
+  expect(git(workdirOf(f, reviewer), 'branch', '--show-current')).toBe('eng-1-fix-login-2')
+  await f.server.close()
+}, 30_000)
+
+test('a merged read after a parallel read saved a branch move still makes the run start fresh', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = fanOutFactory(repo.root)
+  await roundTwoPlanned(f)
+  git(repo.origin, 'branch', '-m', 'eng-1-fix-login', 'eng-1-login')
+  gh.openPullRequest('eng-1-login', PR_41)
+  gh.holdState('OPEN', 'eng-1-login')
+  gh.holdState('MERGED', 'eng-1-login')
+  const views = prViews()
+  f.api.agents.setPaused(REVIEWER, false)
+  f.api.sim.advance(1)
+  await until(() => prViews() === views + 1)
+  gh.setState('eng-1-login', 'MERGED')
+  f.api.agents.setPaused(CODER, false)
+  f.api.sim.advance(1)
+  await until(() => prViews() === views + 2)
+  gh.releaseState('OPEN', 'eng-1-login')
+  await until(() => pullRequestLogs(f).length === 1)
+  gh.releaseState('MERGED', 'eng-1-login')
+  await drain(f)
+  const [coder, reviewer] = [lastRunOf(f, CODER), lastRunOf(f, REVIEWER)]
+  expect(pullRequestLogs(f)).toEqual(['pull request #41 moved to branch eng-1-login', 'pull request #41 was merged, so this run starts a fresh branch'])
+  expect(record(f)).toMatchObject({ round: 2, rework: { kind: 'fresh', state: 'merged' } })
+  expect(promptsOf(f, 2)['Coder']).toBe(`${plannerOutput(f)}\n\n## Rework round 2\n\n${MERGED_41}`)
+  expect(promptsOf(f, 2)['Reviewer']).toBe(`${plannerOutput(f)}\n\n## Rework round 2\n\n${CONTINUE_41.replace('eng-1-fix-login', 'eng-1-login')}`)
+  expect(git(workdirOf(f, coder), 'branch', '--show-current')).toBe('eng-1-fix-login-2')
+  expect(git(workdirOf(f, reviewer), 'branch', '--show-current')).toBe(`factory-${reviewer.id}`)
+  await f.server.close()
+}, 30_000)
+
+test('a round 2 issue task saved as main saves tasks gets the fresh line after a restart and a merge, and keeps its feedback', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const store = memoryStore()
+  const f = factory(repo.root, agentRunner(), LIFECYCLE, store)
+  await poll(f)
+  await nextRun(f)
+  gh.review(41, 'alice', 'Handle the empty case.', new Date(WALL + 1000).toISOString())
+  await moveIssue('ENG-1', 'Todo')
+  await poll(f)
+  const taskId = issueTasks(f)[1].id
+  await f.server.close()
+  const saved = (JSON.parse(store.text!) as { tasks: Record<string, Task> }).tasks[taskId]
+  expect(Object.keys(saved).sort()).toEqual(['agentId', 'attempts', 'blockedOn', 'createdAt', 'flowId', 'id', 'input', 'origin', 'priority', 'prompt', 'retryAt', 'status', 'title'])
+  const feedback = `${FRAMING}\n\n\`\`\`text\n### Review comments on the pull request\n- **alice** (review): Handle the empty case.\n\`\`\``
+  expect(saved.prompt).toBe(`Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${CONTINUE_41}\n\n${feedback}`)
+
+  gh.setState('eng-1-fix-login', 'MERGED')
+  const server = new MockServer({ manual: true, rng: RNG, localRunner: agentRunner(), localRoot: repo.root, linear: linear(), clock: () => wall, store })
+  const g = { server, api: createApi(server), trigger: f.trigger, root: repo.root }
+  const run = await nextRun(g)
+  const fresh = `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}\n\n${feedback}`
+  expect(seen.at(-1)?.prompt).toBe(fresh)
+  expect(server.snapshot().tasks[taskId].prompt).toBe(fresh)
+  expect(git(workdirOf(g, run), 'branch', '--show-current')).toBe('eng-1-fix-login-2')
+  await server.close()
+})
+
+test('a pull request whose head branch has a format character fails the run, and no log shows the raw name', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner())
+  await roundTwoTaken(f)
+  const bidi = 'eng-1-‮login'
+  git(repo.root, 'check-ref-format', '--branch', bidi)
+  git(repo.origin, 'branch', '-m', 'eng-1-fix-login', bidi)
+  gh.openPullRequest(bidi, PR_41)
+  const failed = await nextRun(f)
+  const reason = "delivery failed: gh pr view: the pull request's head branch has a control or format character: eng-1-\\u{202e}login"
+  expect(failed).toMatchObject({ status: 'failed', attempt: 1, error: reason })
+  const logs = f.server.snapshot().logs.map((l) => l.msg)
+  expect(logs).toContain(`run failed (${reason}); retrying attempt 2/2 in 0s`)
+  expect(logs.filter((m) => m.includes('‮'))).toEqual([])
+  expect(record(f).rework).toMatchObject({ kind: 'continue', branch: 'eng-1-fix-login' })
+  await f.server.close()
 })

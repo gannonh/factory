@@ -38,11 +38,21 @@ async function list(host: string, path: string): Promise<Json[]> {
   return out.split('\n').filter((line) => line.trim() !== '').map((line) => JSON.parse(line) as unknown).filter(isJson)
 }
 
+/**
+ * Control, format, line and paragraph separator characters. Git accepts format characters such as bidi overrides in a
+ * branch name, so a name with one would read differently in a prompt, log or note from the branch Factory pushes to.
+ */
+const UNSAFE_CHAR = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
+const UNSAFE_CHARS = new RegExp(UNSAFE_CHAR.source, 'gu')
+
 export async function viewPullRequest(url: string): Promise<PullRequestView> {
   if (!PR_URL.test(url)) throw new Error(`not a pull request URL: ${url}`)
   const view: unknown = JSON.parse(await gh(['pr', 'view', url, '--json', 'state,headRefName,baseRefName']))
   if (!isJson(view) || (view.state !== 'OPEN' && view.state !== 'MERGED' && view.state !== 'CLOSED') || typeof view.headRefName !== 'string' || typeof view.baseRefName !== 'string') {
     throw new Error(`gh pr view: unexpected answer for ${url}`)
+  }
+  for (const [which, name] of [['head', view.headRefName], ['base', view.baseRefName]]) {
+    if (UNSAFE_CHAR.test(name)) throw new Error(`gh pr view: the pull request's ${which} branch has a control or format character: ${name.replace(UNSAFE_CHARS, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`)}`)
   }
   return { state: view.state, head: view.headRefName, base: view.baseRefName }
 }
