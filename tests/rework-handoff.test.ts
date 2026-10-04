@@ -188,8 +188,8 @@ test('a handoff retry whose agent stopped delivering gets the upstream output al
 })
 
 /** `factory()` with the trigger feeding Planner, who hands off to both Coder and Reviewer on the local sandbox. */
-function fanOutFactory(root: string): Factory {
-  const f = factory(root, agentRunner())
+function fanOutFactory(root: string, runner = agentRunner()): Factory {
+  const f = factory(root, runner)
   const drop = Object.values(f.server.snapshot().edges).filter((e) => (e.kind === 'triggers' && e.source === f.trigger) || (e.kind === 'runs-in' && e.source === REVIEWER))
   f.api.graph.removeEdges(drop.map((e) => e.id as EdgeId))
   f.api.graph.connect(f.trigger, PLANNER, 'triggers')
@@ -252,18 +252,50 @@ test('a run that continues the pull request is told so when a parallel run saves
   f.api.agents.setPaused(REVIEWER, false)
   f.api.sim.advance(1)
   await until(() => pullRequestLogs(f).length > 0)
+  const continues = `${plannerOutput(f)}\n\n## Rework round 2\n\n${CONTINUE_41}`
+  expect(f.server.snapshot().tasks[lastRunOf(f, CODER).taskId].prompt).toBe(continues)
   git_.release()
   await drain(f)
-  const [coder, reviewer] = [lastRunOf(f, CODER), lastRunOf(f, REVIEWER)]
   expect(pullRequestLogs(f)).toEqual(['pull request #41 was merged, so this run starts a fresh branch'])
   expect(promptsOf(f, 2)).toEqual({
     Planner: expect.any(String),
-    Coder: `${plannerOutput(f)}\n\n## Rework round 2\n\n${CONTINUE_41}`,
+    Coder: continues,
     Reviewer: `${plannerOutput(f)}\n\n## Rework round 2\n\n${MERGED_41}`,
   })
-  expect(git(workdirOf(f, coder), 'branch', '--show-current')).toBe(`factory-${coder.id}`)
-  expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login')).toBe(git(workdirOf(f, coder), 'rev-parse', 'HEAD'))
-  expect(git(workdirOf(f, reviewer), 'branch', '--show-current')).toBe('eng-1-fix-login-2')
+  await f.server.close()
+}, 30_000)
+
+test.each([
+  ['older', ['pull request #41 was retargeted to develop', 'pull request #41 was retargeted to release']],
+  ['newer', ['pull request #41 was retargeted to release']],
+] as const)('sibling runs that read two retargets of the pull request, the %s read landing first, leave the round on the newest base', async (first, logs) => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  // Reviewer's round 2 agent never answers, so its delivery cannot open a pull request while Coder reads #41 again.
+  const f = fanOutFactory(repo.root, agentRunner((task) => (task.agentId === REVIEWER && task.title.includes('(round 2)') ? 'hang' : 'commit')))
+  await roundTwoPlanned(f)
+  for (const base of ['develop', 'release']) git(repo.origin, 'branch', base, 'main')
+  gh.holdState('OPEN', 'eng-1-fix-login', 'develop')
+  gh.holdState('OPEN', 'eng-1-fix-login', 'release')
+  const views = prViews()
+  gh.openPullRequest('eng-1-fix-login', PR_41, 'develop')
+  f.api.agents.setPaused(REVIEWER, false)
+  f.api.sim.advance(1)
+  await until(() => prViews() === views + 1)
+  gh.openPullRequest('eng-1-fix-login', PR_41, 'release')
+  f.api.agents.setPaused(CODER, false)
+  f.api.sim.advance(1)
+  await until(() => prViews() === views + 2)
+  const [landsFirst, landsSecond] = first === 'older' ? ['develop', 'release'] : ['release', 'develop']
+  gh.releaseState('OPEN', 'eng-1-fix-login', landsFirst)
+  await until(() => pullRequestLogs(f).length === 1)
+  gh.releaseState('OPEN', 'eng-1-fix-login', landsSecond)
+  const second = lastRunOf(f, first === 'older' ? CODER : REVIEWER)
+  const startedFrom = () => f.server.snapshot().logs.find((l) => l.runId === second.id && l.msg.startsWith('working directory: '))?.msg
+  await until(() => startedFrom() !== undefined)
+  expect(startedFrom()).toBe(`working directory: ${workdirOf(f, second)} on branch eng-1-fix-login from origin/release`)
+  expect(pullRequestLogs(f)).toEqual(logs)
+  expect(record(f).rework).toEqual({ kind: 'continue', pr: { kind: 'pr', label: 'Pull request #41', url: PR_41 }, branch: 'eng-1-fix-login', base: 'release' })
   await f.server.close()
 }, 30_000)
 

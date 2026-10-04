@@ -1375,7 +1375,7 @@ export class MockServer {
       this.localTimeouts.set(id, timeout)
       const delivery = agent.delivery === 'pull-request' ? this.deliveryRequest(task, id, agent.id) : Promise.resolve(null)
       const setup = delivery.then((request) => {
-        this.writePrompt(task, request)
+        this.writePrompt(task, request !== null)
         return prepareWorkdir(sandbox.host, id, request)
       }).then((workdir) => {
         if (this.closed || this.world.runs[id]?.status !== 'running') return
@@ -1393,31 +1393,35 @@ export class MockServer {
     } else this.runners.simulated.start({ run, agent, task, workdir: '' }, (event) => this.handleRunnerEvent(id, event))
   }
 
-  /** Gives a local run its prompt from where it delivers, before its worktree is prepared (ADR 0012). */
-  private writePrompt({ id, flowId }: Task, request: DeliveryRequest | null) {
+  /** Gives a local run its prompt before its worktree is prepared, during which a parallel run may save a merge (ADR 0012). */
+  private writePrompt({ id, flowId }: Task, delivers: boolean) {
     const task = this.world.tasks[id]
-    if (task) this.patchTask(id, { prompt: runPrompt(task, this.openRecord(flowId), request) })
+    if (task) this.patchTask(id, { prompt: runPrompt(task, this.openRecord(flowId), delivers) })
     this.publish()
   }
 
   /**
    * A round that continues a pull request rereads the PR, which may have merged, closed, moved or been retargeted while the
-   * round waited, and saves what changed, so the run's prompt, the round's note and its later runs follow it (ADR 0012).
+   * round waited, and saves what changed, so the run's prompt, the round's note and its later runs follow it. A read that a
+   * parallel run's save overtook is read once more (ADR 0012).
    */
   private async deliveryRequest({ flowId }: Task, runId: RunId, agentId: AgentId): Promise<DeliveryRequest> {
-    const seen = this.openRecord(flowId)?.rework
-    if (seen?.kind === 'continue') {
+    for (let reads = 0; reads < 2; reads++) {
+      const seen = this.openRecord(flowId)?.rework
+      if (seen?.kind !== 'continue') break
       const view = await viewPullRequest(seen.pr.url).catch((error: unknown) => {
         throw new Error(`delivery failed: ${error instanceof Error ? error.message : String(error)}`)
       })
       if (this.closed || this.world.runs[runId]?.status !== 'running') throw new Error('run ended while its pull request was read')
       const record = this.openRecord(flowId)
       const reread = record ? rereadRework(record.rework, seen, view) : null
+      if (reread === 'again') continue
       if (record && reread) {
         this.world.intake = { ...this.world.intake, [record.issue.id]: { ...record, rework: reread.rework } }
         this.log('info', `pull request #${prNumber(seen.pr)} ${reread.change}`, { runId, agentId }, Date.now())
         this.publish()
       }
+      break
     }
     const rework = this.openRecord(flowId)?.rework
     if (rework?.kind === 'continue') return { kind: 'continue', branch: rework.branch, base: rework.base }
