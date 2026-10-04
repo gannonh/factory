@@ -4,7 +4,7 @@
  * The agent is an in-process runner that commits a file in its working directory, like a real agent would.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'vitest'
@@ -378,6 +378,27 @@ test('a restart after round 2’s run read the merge retries fresh without readi
   expect(git(workdirOf(g, retried), 'branch', '--show-current')).toBe('eng-1-fix-login-3')
   expect((await issue('ENG-1')).comments.at(-1)?.body.split('\n\n')[1]).toBe('Pull request #41 was closed, so this round opened a new pull request.')
   await server.close()
+})
+
+test('a run cancelled while it reads its pull request prepares no worktree and leaves the round as taken', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner())
+  await roundTwoTaken(f)
+  gh.setState('eng-1-fix-login', 'MERGED')
+  gh.delayView(500)
+  const views = prViews()
+  f.api.sim.advance(1)
+  await until(() => coderRuns(f).length === 2)
+  const run = coderRuns(f)[1]
+  f.api.tasks.cancel(run.taskId)
+  await until(() => prViews() === views + 1)
+  await new Promise((resolve) => setTimeout(resolve, 800))
+  expect(coderRuns(f)[1].status).toBe('cancelled')
+  expect(existsSync(workdirOf(f, run))).toBe(false)
+  expect(git(repo.root, 'branch', '--list', 'eng-1-fix-login-*')).toBe('')
+  expect(record(f).rework).toMatchObject({ kind: 'continue' })
+  await f.server.close()
 })
 
 test('a failed issue that never left Todo does not loop, and runs again as a new round once moved away and back', async () => {

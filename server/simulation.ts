@@ -1387,10 +1387,11 @@ export class MockServer {
       const view = await viewPullRequest(rework.pr.url).catch((error: unknown) => {
         throw new Error(`delivery failed: ${error instanceof Error ? error.message : String(error)}`)
       })
+      if (this.closed || this.world.runs[runId]?.status !== 'running') throw new Error('run ended while its pull request was read')
       const now = reworkOf(rework.pr, view)
       if (now.kind === 'continue') return { kind: 'continue', branch: now.branch, base: now.base }
       const record = this.openRecord(flowId)
-      if (!this.closed && record?.rework?.kind === 'continue') {
+      if (record?.rework?.kind === 'continue') {
         this.world.intake = { ...this.world.intake, [record.issue.id]: { ...record, rework: now } }
         this.log('info', `pull request #${prNumber(rework.pr)} was ${now.state}, so this run starts a fresh branch`, { runId, agentId }, Date.now())
         this.publish()

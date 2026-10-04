@@ -2,7 +2,7 @@
  * A fake `gh` for the delivery and rework suites, put first on PATH. It keeps one pull request per head branch, as
  * GitHub does, and records each call. `pr view <branch|url>` prints that PR as JSON or fails; `pr create` opens pull
  * request 41, 42, … in order. `api` answers a PR's reviews, inline comments and conversation comments one JSON
- * document per line, as `--jq '.[] | @json'` prints them. `failNext` makes the next `pr create` or `pr view` fail.
+ * document per line, as `--jq '.[] | @json'` prints them. `failNext` makes the next `pr create` or `pr view` fail, and `delayView` makes every `pr view` answer late.
  */
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -40,6 +40,8 @@ if (argv[0] === 'api') {
   process.exit(0)
 }
 if (argv[1] === 'view') {
+  const delay = ${JSON.stringify(dir)} + '/delay-view'
+  if (fs.existsSync(delay)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(fs.readFileSync(delay, 'utf8')))
   const pr = prs[argv[2]] || Object.values(prs).find((p) => p.url === argv[2])
   if (failing('view') || !pr) { console.error('no pull requests found for "' + argv[2] + '"'); process.exit(1) }
   console.log(JSON.stringify(pr))
@@ -72,6 +74,7 @@ console.log(url)
     prs,
     creates: () => calls().filter((c) => c.argv[1] === 'create'),
     failNext: (op: 'create' | 'view' = 'create') => writeFileSync(fail(op), ''),
+    delayView: (ms: number) => writeFileSync(join(dir, 'delay-view'), String(ms)),
     openPullRequest: (branch: string, url: string, baseRefName = 'main') =>
       writeFileSync(prsFile, JSON.stringify({ [branch]: { url, number: Number(url.split('/').at(-1)), state: 'OPEN', baseRefName, headRefName: branch } })),
     setState: (branch: string, state: FakePr['state']) => {
