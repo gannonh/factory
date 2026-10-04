@@ -59,7 +59,7 @@ import { array, boolean, defaulted, id, number, object, oneOf, record } from './
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
 import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type IssueStatus, type LinearClient, type LinearIssue } from './linear'
 import { cancelRecord, flowAction, flowOutcome, landed, nextWrite, reconcileRecord, workingStates } from './writeBack'
-import { latestOutput, latestPullRequest, linearFeedback, prNumber, recent, reworkLine, reworkOf, reworkable, roundPrompt, roundTitle, startRound, type Feedback, type RoundContext } from './rounds'
+import { latestOutput, latestPullRequest, linearFeedback, prNumber, reworkLine, reworkOf, reworkable, roundPrompt, roundTitle, screen, startRound, type RoundContext, type Screened } from './rounds'
 import { readPullRequest, viewPullRequest } from './github'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
@@ -877,9 +877,9 @@ export class MockServer {
 
   /**
    * The context of each listed issue that starts a new round: the open pull request to continue or the closed one to
-   * replace, and the feedback since the last round. Review feedback counts from the ended round's start, when its prompt
-   * was built. An issue whose comments or pull request cannot be read waits for the next poll, so a round never guesses
-   * its branch. A trigger that feeds no agent starts no round, so it reads nothing.
+   * replace, and the trusted feedback since the last round. Review feedback counts from the ended round's start, when its
+   * prompt was built. An issue whose comments or pull request cannot be read waits for the next poll, so a round never
+   * guesses its branch. A trigger that feeds no agent starts no round, so it reads nothing.
    */
   private async roundContexts(id: TriggerId, issues: LinearIssue[], ended: Map<IssueId, IntakeRecord>, settings: LinearSettings): Promise<Map<IssueId, RoundContext>> {
     if (!this.feedAgent(id)) return new Map()
@@ -889,17 +889,18 @@ export class MockServer {
       return null
     }
     const contexts = await Promise.all(due.map(async (record): Promise<[IssueId, RoundContext] | null> => {
-      let linear: Feedback[]
+      let linear: Screened
       try {
         linear = linearFeedback(record, await this.linear.comments(record.issue.id))
       } catch (error) {
         return waits(record, 'its Linear comments', error)
       }
       const pr = latestPullRequest(record)
-      if (!pr) return [record.issue.id, { rework: null, review: [], linear }]
+      if (!pr) return [record.issue.id, { rework: null, review: [], linear: linear.quoted, leftOut: linear.leftOut }]
       try {
-        const { view, feedback: review } = await readPullRequest(pr.url)
-        return [record.issue.id, { rework: reworkOf(pr, view), review: recent(review, record.takenAt), linear }]
+        const { view, feedback } = await readPullRequest(pr.url)
+        const review = screen(feedback, record.takenAt)
+        return [record.issue.id, { rework: reworkOf(pr, view), review: review.quoted, linear: linear.quoted, leftOut: [...review.leftOut, ...linear.leftOut] }]
       } catch (error) {
         return waits(record, pr.url, error)
       }
@@ -950,7 +951,9 @@ export class MockServer {
         input: record ? latestOutput(record) : null,
       }, flowId)
       const states = { pickupState: settings.pickupState, startedState: settings.startedState }
-      const next = startRound(record, issue.ref, { trigger: id, flowId, takenAt: this.clock(), states, blockers: issue.blockers, rework: context?.rework ?? null })
+      const next = startRound(record, issue.ref, {
+        trigger: id, flowId, takenAt: this.clock(), states, blockers: issue.blockers, rework: context?.rework ?? null, leftOut: context?.leftOut ?? [],
+      })
       this.world.intake = { ...this.world.intake, [issue.ref.id]: next }
       taken.push(round > 1 ? `${issue.ref.identifier} (round ${round})` : issue.ref.identifier)
       if (issue.moreRelations) unread.push(issue.ref.identifier)
@@ -1355,6 +1358,9 @@ export class MockServer {
       const n = task.input.artifacts.length
       const upstream = task.origin.kind === 'handoff' ? this.nameOf(task.origin.from) : 'upstream'
       this.log('info', `input: ${n} artifact${n === 1 ? '' : 's'} from ${upstream} run ${task.input.runId.slice(-6)}`, { runId: id, agentId: agent.id })
+    }
+    if (task.origin.kind === 'issue') {
+      for (const line of this.openRecord(task.flowId)?.leftOut ?? []) this.log('warn', `left out of the prompt: ${line}`, { runId: id, agentId: agent.id })
     }
     this.event('run', { kind: 'run', id }, `${agent.name} started “${task.title}” on ${sandbox.name}`)
     if (execution === 'local') {

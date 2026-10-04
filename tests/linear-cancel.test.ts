@@ -375,7 +375,7 @@ test('an operator’s cancel decides the note even when another task in the flow
   const record: IntakeRecord = {
     issue: { backend: 'linear', id: ENG_1, identifier: 'ENG-1', url: 'https://linear.app/fake/issue/ENG-1', branchName: 'eng-1' },
     trigger: 'tr-1' as TriggerId, flowId, takenAt: 0, phase: 'started', writes: [], states: LIFECYCLE, cancel: { kind: 'factory', task: 'Review' }, blockers: [],
-    round: 1, rework: null, result: null, left: false, past: [],
+    round: 1, rework: null, result: null, left: false, past: [], leftOut: [],
   }
   const world = { agents: {}, runs: {}, triggers: { ['tr-1' as TriggerId]: { linear: LIFECYCLE } } } as unknown as World
   const next = reconcileRecord(record, [task('tk-a', 'Build', 'failed', 1), task('tk-b', 'Review', 'cancelled', 2)], world, () => 'comment-1')

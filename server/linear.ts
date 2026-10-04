@@ -23,8 +23,11 @@ export type IssueState = { id: string; name: string; type: WorkflowStateType }
 /** What a poll reads of a taken issue: where it sits, and the priority and blockers that order it until its flow starts. */
 export type IssueStatus = { state: IssueState; priority: Priority; blockers: IssueBlocker[]; moreRelations: boolean }
 
-/** A comment on an issue. `createdAt` is Linear's ISO timestamp. `author` is null for a comment no user wrote, such as an integration's. */
-export type IssueComment = { id: string; body: string; createdAt: string; author: string | null }
+/**
+ * A comment on an issue. `createdAt` is Linear's ISO timestamp. `author` is the user's, integration's or external user's
+ * name. `untrusted` says why the author is not a person in the workspace, or is null for one (ADR 0012).
+ */
+export type IssueComment = { id: string; body: string; createdAt: string; author: string | null; untrusted: string | null }
 
 /** The write methods converge: each checks Linear first, so repeating one after a lost answer changes nothing. */
 export type LinearClient = {
@@ -106,7 +109,7 @@ export const ISSUE_COMMENT_QUERY = `query FactoryIssueComment($id: String!, $com
 }`
 
 export const ISSUE_COMMENTS_QUERY = `query FactoryIssueComments($id: String!, $first: Int!, $after: String) {
-  issue(id: $id) { id comments(first: $first, after: $after) { nodes { id body createdAt user { name } } pageInfo { hasNextPage endCursor } } }
+  issue(id: $id) { id comments(first: $first, after: $after) { nodes { id body createdAt user { name app } botActor { name } externalUser { name } } pageInfo { hasNextPage endCursor } } }
 }`
 
 // Linear accepts a client-chosen UUID as the new comment's id, which is what lets a retry find a comment whose answer was lost.
@@ -163,13 +166,28 @@ const issueStatesData = issuePage(object<IssueStateNode>({
 
 const issueStateData = object({ issue: object({ id: string, state: object({ id: string }) }) })
 const issueCommentData = object({ issue: object({ id: string, comments: nodes(object({ id: string })) }) })
-type CommentNode = { id: string; body: string; createdAt: string; user: { name: string } | null }
+type CommentNode = {
+  id: string; body: string; createdAt: string; user: { name: string; app: boolean } | null; botActor: { name: string | null } | null; externalUser: { name: string } | null
+}
 const issueCommentsData = object({
   issue: object({
     id: string,
-    comments: page(object<CommentNode>({ id: string, body: string, createdAt: string, user: nullable(object({ name: string })) })),
+    comments: page(object<CommentNode>({
+      id: string, body: string, createdAt: string,
+      user: nullable(object({ name: string, app: boolean })), botActor: nullable(object({ name: nullable(string) })), externalUser: nullable(object({ name: string })),
+    })),
   }),
 })
+
+// An app user is an OAuth application or agent. A bot actor on a user's comment is an app that posted on the user's behalf.
+// A comment with no user came from an integration or a synced thread.
+function untrustedComment(c: CommentNode): string | null {
+  if (c.user?.app) return 'app user'
+  if (c.botActor) return c.user ? `posted by app ${c.botActor.name ?? 'unknown'}` : 'integration'
+  if (c.user) return null
+  return c.externalUser ? 'external user' : 'no workspace user'
+}
+
 const issueAttachmentData = object({ issue: object({ id: string, attachments: nodes(object({ id: string })) }) })
 const success = object({ success: boolean })
 
@@ -303,7 +321,9 @@ export function createLinearClient(options: {
     async comments(issueId) {
       const found = await pages(async (after) =>
         (await request('FactoryIssueComments', ISSUE_COMMENTS_QUERY, { id: issueId, first: pageSize, after }, issueCommentsData)).issue.comments)
-      return found.map((c) => ({ id: c.id, body: c.body, createdAt: c.createdAt, author: c.user?.name ?? null }))
+      return found.map((c) => ({
+        id: c.id, body: c.body, createdAt: c.createdAt, author: c.user?.name ?? c.botActor?.name ?? c.externalUser?.name ?? null, untrusted: untrustedComment(c),
+      }))
     },
     async ensureComment(issueId, commentId, body) {
       const { issue } = await request('FactoryIssueComment', ISSUE_COMMENT_QUERY, { id: issueId, commentId }, issueCommentData)

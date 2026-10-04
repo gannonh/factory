@@ -12,7 +12,13 @@ import type { WorkflowStateType } from '../src/domain/types'
 
 type State = { id: string; name: string; type: WorkflowStateType; position: number }
 type Team = { id: string; key: string; name: string; states: State[]; projects: Array<{ id: string; name: string }> }
-type Comment = { id: string; body: string; createdAt: string; author: string | null }
+/**
+ * `via` is how the author wrote it: as a person, as an app user such as an agent, through an integration, as a synced
+ * external user, through an app `app` acting for the person (`on-behalf`), or with no actor at all (`none`).
+ */
+type Via = 'person' | 'app' | 'integration' | 'external' | 'on-behalf' | 'none'
+type Comment = { id: string; body: string; createdAt: string; author: string; via: Via; app: string | null }
+const VIAS: Via[] = ['person', 'app', 'integration', 'external', 'on-behalf', 'none']
 type Attachment = { id: string; url: string; title: string }
 type Issue = {
   id: string; identifier: string; title: string; description: string; url: string; branchName: string; priority: number
@@ -147,10 +153,14 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       issue.deleted = true
       return view(issue)
     },
-    /** Adds a comment a person wrote. */
+    /** Adds a comment a person wrote, or with `via` one written another way. */
     addComment(body) {
       const issue = issueBy(String(body.identifier))
-      const comment = { id: `comment-${issues.flatMap((i) => i.comments).length + 1}`, body: String(body.body), createdAt: commentTime(), author: String(body.author ?? 'Someone') }
+      const via = VIAS.find((v) => v === body.via) ?? 'person'
+      const comment: Comment = {
+        id: `comment-${issues.flatMap((i) => i.comments).length + 1}`, body: String(body.body), createdAt: commentTime(), author: String(body.author ?? 'Someone'), via,
+        app: typeof body.app === 'string' ? body.app : null,
+      }
       issue.comments.push(comment)
       return comment
     },
@@ -246,7 +256,7 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       if (typeof input.body !== 'string' || input.body === '') throw new Error('Argument Validation Error: body should not be empty')
       const id = input.id ?? `comment-${issues.flatMap((i) => i.comments).length + 1}`
       if (issues.some((i) => i.comments.some((c) => c.id === id))) throw new Error(`a comment with id ${id} already exists`)
-      issue.comments.push({ id, body: input.body, createdAt: commentTime(), author: 'Factory' })
+      issue.comments.push({ id, body: input.body, createdAt: commentTime(), author: 'Factory', via: 'person', app: null })
       return { commentCreate: { success: true } }
     },
     FactoryIssueComments: ({ id, first = 50, after = null }) => {
@@ -258,7 +268,12 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
         issue: {
           id: issue.id,
           comments: {
-            nodes: nodes.map((c) => ({ id: c.id, body: c.body, createdAt: c.createdAt, user: c.author === null ? null : { name: c.author } })),
+            nodes: nodes.map((c) => ({
+              id: c.id, body: c.body, createdAt: c.createdAt,
+              user: c.via === 'person' || c.via === 'app' || c.via === 'on-behalf' ? { name: c.author, app: c.via === 'app' } : null,
+              botActor: c.via === 'integration' ? { name: c.author } : c.via === 'on-behalf' ? { name: c.app } : null,
+              externalUser: c.via === 'external' ? { name: c.author } : null,
+            })),
             pageInfo: { hasNextPage: at + 1 + first < issue.comments.length, endCursor: nodes.at(-1)?.id ?? null },
           },
         },

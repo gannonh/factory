@@ -200,6 +200,7 @@ export const intakeRecord = object<IntakeRecord>({
   result: defaulted(nullable(roundResult), () => null),
   left: defaulted(boolean, () => false),
   past: defaulted(array(object<PastRound>({ round: number, trigger: triggerId, flowId: id<FlowId>(), takenAt: number, result: nullable(roundResult) })), () => []),
+  leftOut: defaulted(array(string), () => []),
 })
 
 const subject = tagged<Subject>({
