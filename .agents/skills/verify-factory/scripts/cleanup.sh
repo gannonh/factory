@@ -12,9 +12,9 @@ fi
 . "$1"
 
 # The session's browser profile is temporary, so closing it discards the profile.
-if agent-browser session list 2>/dev/null | grep -qF "$AGENT_BROWSER_SESSION"; then
-  agent-browser record stop >/dev/null 2>&1 || true
-  agent-browser close >/dev/null
+if "${AGENT_BROWSER:-agent-browser}" session list 2>/dev/null | grep -qF "$AGENT_BROWSER_SESSION"; then
+  "${AGENT_BROWSER:-agent-browser}" record stop >/dev/null 2>&1 || true
+  "${AGENT_BROWSER:-agent-browser}" close >/dev/null
   browser="closed $AGENT_BROWSER_SESSION"
 else
   browser="no open session $AGENT_BROWSER_SESSION"

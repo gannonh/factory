@@ -13,6 +13,34 @@ if [[ ! -f "$vite_bin" ]]; then
   exit 1
 fi
 
+# Resolve a working agent-browser binary. On Linux a mise shim named
+# agent-browser can sit on PATH but fail with "No version is set for shim"
+# outside a mise config dir, so verify the candidate actually runs before
+# trusting it, and fall back to the npm global bin.
+resolve_agent_browser() {
+  local candidate
+  candidate="$(command -v agent-browser 2>/dev/null || true)"
+  if [[ -n "$candidate" ]] && "$candidate" --version >/dev/null 2>&1; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  if command -v npm >/dev/null 2>&1; then
+    candidate="$(npm root -g 2>/dev/null || true)"
+    if [[ -n "$candidate" ]]; then
+      candidate="${candidate%/lib/node_modules}/bin/agent-browser"
+      if [[ -x "$candidate" ]] && "$candidate" --version >/dev/null 2>&1; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    fi
+  fi
+  return 1
+}
+if ! agent_browser="$(resolve_agent_browser)"; then
+  echo "agent-browser is not installed; run 'npm i -g agent-browser' and 'agent-browser install'" >&2
+  exit 1
+fi
+
 port="$(node -e "const s=require('node:net').createServer();s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})")"
 world_port="$(node -e "const s=require('node:net').createServer();s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})")"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
@@ -58,6 +86,7 @@ state_file="$evidence_dir/state.env"
   printf 'export FACTORY_WORLD_PID=%q\n' "$world_pid"
   printf 'export FACTORY_DATA_DIR=%q\n' "$data_dir"
   printf 'export FACTORY_EVIDENCE_DIR=%q\n' "$evidence_dir"
+  printf 'export AGENT_BROWSER=%q\n' "$agent_browser"
   printf 'export AGENT_BROWSER_SESSION=%q\n' "verify-factory-$run_id"
 } > "$state_file"
 
