@@ -27,6 +27,8 @@ type Issue = {
   blockedBy: string[]
   /** who created the issue, as a comment's author is recorded: `author` names the creator, `via` how, `app` the app acting for a person. */
   author: string; via: Via; app: string | null
+  /** the external user an Ask was created on behalf of, whose text the workspace user made the issue from. */
+  asksExternal: string | null
 }
 
 export type FakeLinear = { url: string; controlUrl: string; close: () => Promise<void> }
@@ -110,6 +112,7 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       const via = VIAS.find((v) => v === body.via) ?? 'person'
       const author = String(body.author ?? 'Someone')
       const app = typeof body.app === 'string' ? body.app : null
+      const asksExternal = typeof body.asksExternal === 'string' ? body.asksExternal : null
       const issue: Issue = {
         id: `issue-${team.key.toLowerCase()}-${n}`,
         identifier,
@@ -128,6 +131,7 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
         author,
         via,
         app,
+        asksExternal,
       }
       issues.push(issue)
       return view(issue)
@@ -234,11 +238,12 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       return { project: { id: project.id, teams: list(project.teams, variables) } }
     },
     FactoryIssues: (variables) => ({
-      issues: page(variables, ({ id, identifier, title, description, url, branchName, priority, blockedBy, author, via, app }) => ({
+      issues: page(variables, ({ id, identifier, title, description, url, branchName, priority, blockedBy, author, via, app, asksExternal }) => ({
         id, identifier, title, description: description || null, url, branchName, priority,
         creator: via === 'person' || via === 'app' || via === 'on-behalf' ? { name: author, app: via === 'app' } : null,
         botActor: via === 'integration' ? { name: author } : via === 'on-behalf' ? { name: app } : null,
         externalUserCreator: via === 'external' ? { name: author } : null,
+        asksExternalUserRequester: asksExternal ? { name: asksExternal } : null,
         inverseRelations: inverseRelations(blockedBy),
       })),
     }),

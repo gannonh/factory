@@ -131,6 +131,18 @@ test.each([
   expect(task.title).toBe('ENG-1 Fix login')
 })
 
+test('an Ask a workspace user made for an external requester is fenced and framed as untrusted', async () => {
+  await addIssue('Fix login', { description: 'Users cannot log in.', asksExternal: 'Slack Guest' })
+  const f = makeFixture({ linear: client(), clock: wallClock().read })
+  linearTrigger(f, f.agent('Coder'))
+  await poll(f)
+
+  const [task] = issueTasks(f)
+  expect(task.prompt).toBe(
+    `${UNTRUSTED_FRAMING}\n\n\`\`\`text\nFix login\n\nUsers cannot log in.\n\`\`\`\n\nhttps://linear.app/fake/issue/ENG-1/fix-login`,
+  )
+})
+
 test('Linear settings survive a restart from the saved store', async () => {
   const store = memoryStore()
   const settings = {

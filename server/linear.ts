@@ -88,7 +88,7 @@ const RELATIONS = 'inverseRelations(first: 100) { nodes { type issue { id identi
 
 export const ISSUES_QUERY = `query FactoryIssues($filter: IssueFilter!, $first: Int!, $after: String) {
   issues(filter: $filter, first: $first, after: $after) {
-    nodes { id identifier title description url branchName priority creator { name app } botActor { name } externalUserCreator { name } ${RELATIONS} }
+    nodes { id identifier title description url branchName priority creator { name app } botActor { name } externalUserCreator { name } asksExternalUserRequester { name } ${RELATIONS} }
     pageInfo { hasNextPage endCursor }
   }
 }`
@@ -152,6 +152,7 @@ type Relations = { nodes: Relation[]; pageInfo: { hasNextPage: boolean } }
 type IssueNode = {
   id: string; identifier: string; title: string; description: string | null; url: string; branchName: string; priority: number
   creator: { name: string; app: boolean } | null; botActor: { name: string | null } | null; externalUserCreator: { name: string } | null
+  asksExternalUserRequester: { name: string } | null
   inverseRelations: Relations
 }
 type IssueStateNode = { id: string; state: IssueState; priority: number; inverseRelations: Relations }
@@ -164,6 +165,7 @@ const blockersOf = (r: Relations): IssueBlocker[] => r.nodes.filter((relation) =
 const issuesData = issuePage(object<IssueNode>({
   id: string, identifier: string, title: string, description: nullable(string), url: string, branchName: string, priority: number,
   creator: nullable(object({ name: string, app: boolean })), botActor: nullable(object({ name: nullable(string) })), externalUserCreator: nullable(object({ name: string })),
+  asksExternalUserRequester: nullable(object({ name: string })),
   inverseRelations: relations,
 }))
 const issueStatesData = issuePage(object<IssueStateNode>({
@@ -194,13 +196,16 @@ function untrustedComment(c: CommentNode): string | null {
   return c.externalUser ? 'external user' : 'no workspace user'
 }
 
-// An issue created by an app user, a bot actor such as an integration, or a synced external user is untrusted. An issue
-// with no creator was created by an integration or system process.
+// An issue created by an app user, a bot actor such as an integration, a synced external user, or an Ask's external
+// requester is untrusted. An issue with no creator was created by an integration or system process. An Ask's external
+// requester is the outsider whose text a workspace user made the issue from, so it is untrusted even though the creator
+// is in the workspace.
 function untrustedIssue(n: IssueNode): string | null {
   if (n.creator?.app) return 'app user'
   if (n.botActor) return n.creator ? `created by app ${n.botActor.name ?? 'unknown'}` : 'integration'
+  if (n.externalUserCreator || n.asksExternalUserRequester) return 'external user'
   if (n.creator) return null
-  return n.externalUserCreator ? 'external user' : 'no workspace user'
+  return 'no workspace user'
 }
 
 const issueAttachmentData = object({ issue: object({ id: string, attachments: nodes(object({ id: string })) }) })
