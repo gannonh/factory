@@ -668,14 +668,82 @@ test('a Factory note with an unreadable time does not hide the Linear comments a
   })
 })
 
-test('untrusted comments past the newest 50 are counted, and only trusted comments are quoted', () => {
+test('untrusted comments past the newest few are counted, and only trusted comments are quoted', () => {
   const comment = (author: string, at: number, untrusted: string | null): Feedback => ({ author, body: `note ${at}`, at, kind: 'comment', place: null, untrusted })
   const flood = Array.from({ length: 52 }, (_, i) => comment(`spam${i}`, 100 + i, 'author association NONE'))
   const screened = screen([comment('alice', 99, null), ...flood], 0)
   expect(screened.quoted).toEqual([comment('alice', 99, null)])
-  expect(screened.leftOut).toHaveLength(51)
-  expect(screened.leftOut.slice(0, 2)).toEqual(['2 older untrusted comments, not named', 'pull request comment by spam2 (author association NONE)'])
+  expect(screened.leftOut).toHaveLength(6)
+  expect(screened.leftOut.slice(0, 2)).toEqual(['47 older untrusted comments, not named', 'pull request comment by spam47 (author association NONE)'])
   expect(screened.leftOut.at(-1)).toBe('pull request comment by spam51 (author association NONE)')
+})
+
+test('a comment history larger than the read buffer still produces a round, trims the trusted comment, and caps the left-out lines', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner())
+  await poll(f)
+  await nextRun(f)
+
+  // A flood of conversation comments, each near GitHub's ~65 KB body limit, so the paginated read's stdout is far larger
+  // than the 16 MiB buffer the old `execFile` read capped at. A trusted reviewer's comment in the same history must still
+  // be quoted, trimmed to 2000 characters, and the flood must not name every untrusted comment in the run log.
+  const big = 'x'.repeat(64 * 1024)
+  gh.addFeedbackMany(41, 'issues', Array.from({ length: 280 }, (_, i) => ({
+    user: { login: `spam${i}`, type: 'User' },
+    author_association: 'NONE',
+    body: big,
+    created_at: new Date(WALL + 1000 + i).toISOString(),
+    performed_via_github_app: null,
+  })))
+  const long = 'trusted '.repeat(8192)
+  gh.conversation(41, 'alice', long, new Date(WALL + 2000).toISOString(), 'COLLABORATOR')
+
+  await moveIssue('ENG-1', 'Todo')
+  setWall(WALL + 5000)
+  await poll(f)
+
+  expect(issueTasks(f)).toHaveLength(2)
+  expect(issueTasks(f)[1].prompt).toContain(`- **alice**: ${long.slice(0, 1999)}…`)
+  expect(record(f).leftOut).toHaveLength(6)
+  expect(record(f).leftOut[0]).toBe('275 older untrusted comments, not named')
+  await f.server.close()
+})
+
+test('a comment that starts with more whitespace than the read keeps is still quoted from its first text', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner())
+  await poll(f)
+  await nextRun(f)
+
+  gh.conversation(41, 'alice', `${' '.repeat(9000)}Guard the call.`, new Date(WALL + 1000).toISOString(), 'COLLABORATOR')
+  await moveIssue('ENG-1', 'Todo')
+  setWall(WALL + 5000)
+  await poll(f)
+
+  expect(issueTasks(f)).toHaveLength(2)
+  expect(issueTasks(f)[1].prompt).toContain('- **alice**: Guard the call.')
+  await f.server.close()
+})
+
+test('a gh read that fails for another reason still leaves the issue waiting for the next poll', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner())
+  await poll(f)
+  await nextRun(f)
+
+  gh.failNext('api')
+  await moveIssue('ENG-1', 'Todo')
+  await poll(f)
+  expect(issueTasks(f)).toHaveLength(1)
+  const logs = f.server.snapshot().logs.map((l) => l.msg)
+  expect(logs.some((m) => m.startsWith(`ENG-1: could not read ${PR_41}, so its next round waits for the next poll: gh api --hostname: `))).toBe(true)
+
+  await poll(f)
+  expect(issueTasks(f)).toHaveLength(2)
+  await f.server.close()
 })
 
 test('a merged read saves even after a parallel read moved the branch, and an open read that a parallel save overtook reads again unless it agrees', () => {

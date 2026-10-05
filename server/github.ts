@@ -1,6 +1,6 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import type { Feedback, PullRequestView } from './rounds'
+import { MAX_FEEDBACK_CHARS, type Feedback, type PullRequestView } from './rounds'
 import { failureReason } from './runners'
 
 const execFileAsync = promisify(execFile)
@@ -32,10 +32,72 @@ async function gh(args: string[]): Promise<string> {
   }
 }
 
-/** Every item of a paginated GitHub list, one compact JSON document per line through `--jq`. */
+/**
+ * A body is cut to this many UTF-16 code units as it is read, after its leading whitespace so that a blank-looking start cannot hide later text, well above the prompt's `MAX_FEEDBACK_CHARS` cut, so the
+ * prompt still trims each body itself and a history whose bodies fit stays identical (ADR 0012).
+ */
+const MAX_READ_BODY_CHARS = MAX_FEEDBACK_CHARS * 4
+
+/**
+ * Runs `gh` and hands each line of its stdout to `onLine` as it arrives. Unlike `execFile` there is no output buffer to
+ * overflow, so the size of a comment history cannot fail the read; a non-zero exit or the timeout still does.
+ */
+function ghLines(args: string[], onLine: (line: string) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('gh', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stderr = ''
+    let pending = ''
+    let timedOut = false
+    let broken: unknown = null
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill()
+    }, GH_TIMEOUT_MS)
+    const fail = (error: unknown) => {
+      clearTimeout(timer)
+      reject(new Error(`gh ${args[0]} ${args[1]}: ${failureReason(error)}`))
+    }
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => {
+      const parts = (pending + chunk).split('\n')
+      pending = parts.pop() ?? ''
+      try {
+        parts.forEach(onLine)
+      } catch (error) {
+        broken = error
+        child.kill()
+      }
+    })
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-4096) })
+    child.on('error', fail)
+    child.on('close', (code) => {
+      if (broken === null && code !== 0) return fail({ stderr, killed: timedOut })
+      clearTimeout(timer)
+      try {
+        if (broken !== null) throw broken
+        if (pending !== '') onLine(pending)
+        resolve()
+      } catch (error) {
+        reject(error)
+      }
+    })
+  })
+}
+
+/**
+ * Every item of a paginated GitHub list, one compact JSON document per line through `--jq`. Each line is parsed as it
+ * arrives and its body cut, so memory holds trimmed items however large the history is.
+ */
 async function list(host: string, path: string): Promise<Json[]> {
-  const out = await gh(['api', '--hostname', host, '--paginate', '--jq', '.[] | @json', `${path}?per_page=100`])
-  return out.split('\n').filter((line) => line.trim() !== '').map((line) => JSON.parse(line) as unknown).filter(isJson)
+  const items: Json[] = []
+  await ghLines(['api', '--hostname', host, '--paginate', '--jq', '.[] | @json', `${path}?per_page=100`], (line) => {
+    if (line.trim() === '') return
+    const item = JSON.parse(line) as unknown
+    if (!isJson(item)) return
+    items.push(typeof item.body === 'string' && item.body.length > MAX_READ_BODY_CHARS ? { ...item, body: item.body.trimStart().slice(0, MAX_READ_BODY_CHARS) } : item)
+  })
+  return items
 }
 
 /**

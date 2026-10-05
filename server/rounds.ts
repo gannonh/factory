@@ -23,6 +23,11 @@ export type PullRequestView = { state: 'OPEN'; head: string; base: string } | { 
 
 export const MAX_FEEDBACK = 50
 export const MAX_FEEDBACK_CHARS = 2000
+/**
+ * The untrusted comments the record names per source. Each is a warning line in every run of the round's issue task, so a
+ * flood of them would push older logs out of the run log's window; one line counts the rest.
+ */
+export const MAX_LEFT_OUT = 5
 
 /**
  * Whether an issue listed in a trigger's pickup state starts a new round. Its last round must have ended, and the issue
@@ -101,11 +106,11 @@ const oneLine = (text: string, max = MAX_NAME_CHARS) => text.replace(/\s+/g, ' '
 
 /**
  * Splits the feedback after `since` into the trusted comments a prompt quotes and the untrusted ones it leaves out. The
- * newest MAX_FEEDBACK untrusted comments are named, and one line counts the rest.
+ * newest MAX_LEFT_OUT untrusted comments are named, and one line counts the rest.
  */
 export function screen(feedback: readonly Feedback[], since: number): Screened {
   const untrusted = feedback.filter((f): f is Feedback & { untrusted: string } => f.untrusted !== null && f.at > since && f.body.trim() !== '').sort((a, b) => a.at - b.at)
-  const named = untrusted.slice(-MAX_FEEDBACK).map((f) => `${SOURCE[f.kind]} by ${oneLine(f.author)} (${oneLine(f.untrusted)})`)
+  const named = untrusted.slice(-MAX_LEFT_OUT).map((f) => `${SOURCE[f.kind]} by ${oneLine(f.author)} (${oneLine(f.untrusted)})`)
   const unnamed = untrusted.length - named.length
   return {
     quoted: recent(feedback.filter((f) => f.untrusted === null), since),
