@@ -46,8 +46,10 @@ if (argv[0] === 'api') {
   const [, , , kind, number, list] = path.split('/')
   const feedback = allFeedback[number] || { reviews: [], pulls: [], issues: [] }
   const items = list === 'reviews' ? feedback.reviews : kind === 'pulls' ? feedback.pulls : feedback.issues
-  for (const item of items) console.log(JSON.stringify(item))
-  process.exit(0)
+  if (failing('api')) { console.error('gh: HTTP 502: Server Error (GET ' + path + ')'); process.exit(1) }
+  // Exits only once stdout drains: process.exit cuts a pipe's pending output, which a history over 16 MB would lose.
+  process.stdout.write(items.map((item) => JSON.stringify(item) + '\\n').join(''), () => process.exit(0))
+  return
 }
 if (argv[1] === 'view') {
   const held = () => {
@@ -87,12 +89,19 @@ if (failing('workdir')) fs.rmSync(process.cwd(), { recursive: true, force: true 
     entry[list].push(item)
     writeFileSync(feedbackFile, JSON.stringify({ ...all, [number]: entry }))
   }
+  /** Appends many items at once, for a flood too large to add one write at a time. */
+  const addFeedbackMany = (number: number, list: keyof Feedback, items: unknown[]) => {
+    const all = feedback()
+    const entry = all[number] ?? { reviews: [], pulls: [], issues: [] }
+    entry[list].push(...items)
+    writeFileSync(feedbackFile, JSON.stringify({ ...all, [number]: entry }))
+  }
   return {
     bin,
     calls,
     prs,
     creates: () => calls().filter((c) => c.argv[1] === 'create'),
-    failNext: (op: 'create' | 'view' = 'create') => writeFileSync(fail(op), ''),
+    failNext: (op: 'create' | 'view' | 'api' = 'create') => writeFileSync(fail(op), ''),
     /** The next `pr create` opens its pull request, then deletes the working directory it ran in. */
     removeWorkdirOnCreate: () => writeFileSync(fail('workdir'), ''),
     /** Every later `pr view`, or only those of `branch`, waits until `releaseView`. */
@@ -115,5 +124,7 @@ if (failing('workdir')) fs.rmSync(process.cwd(), { recursive: true, force: true 
     /** `app` is the GitHub App that posted the comment for `login`, or null when the person posted it. */
     conversation: (number: number, login: string, body: string, at: string, association: Association | null = 'COLLABORATOR', app: string | null = null) =>
       addFeedback(number, 'issues', { ...by(login, association), body, created_at: at, performed_via_github_app: app === null ? null : { name: app, slug: app } }),
+    /** Appends many items at once; the item is a raw API document as `conversation`, `review` and `inline` write. */
+    addFeedbackMany,
   }
 }
