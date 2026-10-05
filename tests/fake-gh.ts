@@ -6,7 +6,8 @@
  * document per line, as `--jq '.[] | @json'` prints them. Each carries the author's `author_association` unless it is
  * null, and a login ending in `[bot]` is a bot account. A conversation comment carries `performed_via_github_app`, as
  * GitHub's does, and reviews and inline comments do not. `failNext` makes the next `pr create` or `pr view` fail, and
- * `holdView` makes every `pr view`, or every one of a branch, wait until `releaseView`.
+ * `holdView` makes every `pr view`, or every one of a branch, wait until `releaseView`. It also records each call in
+ * `exits()` as the process exits, so a test can wait until a held call actually finished.
  */
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -23,6 +24,7 @@ export function fakeGh(dir = mkdtempSync(join(tmpdir(), 'factory-gh-'))) {
   const bin = join(dir, 'bin')
   mkdirSync(bin)
   const log = join(dir, 'gh.log')
+  const exitLog = join(dir, 'gh-exit.log')
   const prsFile = join(dir, 'prs.json')
   const feedbackFile = join(dir, 'feedback.json')
   const fail = (op: string) => join(dir, `fail-${op}`)
@@ -30,11 +32,15 @@ export function fakeGh(dir = mkdtempSync(join(tmpdir(), 'factory-gh-'))) {
   writeFileSync(join(bin, 'gh'), `#!/usr/bin/env node
 const fs = require('node:fs')
 const argv = process.argv.slice(2)
+// Captured now, before a workdir failure deletes the working directory; the exit hook must not call process.cwd() after that.
+const cwd = process.cwd()
 const read = (file) => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {}
 const prs = read(${JSON.stringify(prsFile)})
 const allFeedback = read(${JSON.stringify(feedbackFile)})
 // Logged only once the state is read, so a test that sees the call can change the state without racing the read.
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ cwd: process.cwd(), argv }) + '\\n')
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ cwd, argv }) + '\\n')
+// Logged on exit, so a test that sees the exit knows the call finished, not just started.
+process.on('exit', () => fs.appendFileSync(${JSON.stringify(exitLog)}, JSON.stringify({ cwd, argv }) + '\\n'))
 const failing = (op) => {
   const marker = ${JSON.stringify(dir)} + '/fail-' + op
   if (!fs.existsSync(marker)) return false
@@ -79,6 +85,7 @@ if (failing('workdir')) fs.rmSync(process.cwd(), { recursive: true, force: true 
 `)
   chmodSync(join(bin, 'gh'), 0o755)
   const calls = (): GhCall[] => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as GhCall) : []
+  const exits = (): GhCall[] => existsSync(exitLog) ? readFileSync(exitLog, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as GhCall) : []
   const prs = (): Record<string, FakePr> => existsSync(prsFile) ? JSON.parse(readFileSync(prsFile, 'utf8')) as Record<string, FakePr> : {}
   const feedback = (): Record<string, Feedback> => existsSync(feedbackFile) ? JSON.parse(readFileSync(feedbackFile, 'utf8')) as Record<string, Feedback> : {}
   const addFeedback = (number: number, list: keyof Feedback, item: unknown) => {
@@ -90,6 +97,7 @@ if (failing('workdir')) fs.rmSync(process.cwd(), { recursive: true, force: true 
   return {
     bin,
     calls,
+    exits,
     prs,
     creates: () => calls().filter((c) => c.argv[1] === 'create'),
     failNext: (op: 'create' | 'view' = 'create') => writeFileSync(fail(op), ''),

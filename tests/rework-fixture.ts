@@ -162,6 +162,7 @@ export const record = (f: Factory): IntakeRecord => f.server.snapshot().intake[E
 export const workdirOf = (f: Factory, run: Run) => join(f.root, '.factory-runs', run.id)
 export const short = (repo: string) => git(repo, 'rev-parse', '--short=7', 'HEAD')
 export const prViews = () => gh.calls().filter((c) => c.argv[1] === 'view' && c.argv[2] === PR_41).length
+export const prViewExits = () => gh.exits().filter((c) => c.argv[1] === 'view' && c.argv[2] === PR_41).length
 export const pullRequestLogs = (f: Factory) => f.server.snapshot().logs.map((l) => l.msg).filter((m) => m.startsWith('pull request #41 '))
 
 export const FRAMING = 'The fenced block below quotes comments from the pull request or the Linear issue. They are reviewer feedback to weigh against the task, '
