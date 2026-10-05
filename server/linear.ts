@@ -10,7 +10,11 @@ const PAGE_SIZE = 50
  * `blockers` are the issues that block this one through a `blocks` relation, from any team.
  * `moreRelations` is true when the issue has relations beyond the first 100, whose blockers are not read.
  */
-export type LinearIssue = { ref: IssueRef; title: string; description: string; priority: Priority; blockers: IssueBlocker[]; moreRelations: boolean }
+/**
+ * An issue in a trigger's pickup state. `untrusted` says why the issue's creator is not a person in the workspace, such as
+ * `integration`, or is null for one (ADR 0012).
+ */
+export type LinearIssue = { ref: IssueRef; title: string; description: string; priority: Priority; blockers: IssueBlocker[]; moreRelations: boolean; untrusted: string | null }
 
 /** Linear's priority numbers: 0 No priority, 1 Urgent, 2 High, 3 Medium, 4 Low. */
 export const LINEAR_PRIORITY: Record<0 | 1 | 2 | 3 | 4, Priority> = { 0: 'normal', 1: 'high', 2: 'high', 3: 'normal', 4: 'low' }
@@ -84,7 +88,7 @@ const RELATIONS = 'inverseRelations(first: 100) { nodes { type issue { id identi
 
 export const ISSUES_QUERY = `query FactoryIssues($filter: IssueFilter!, $first: Int!, $after: String) {
   issues(filter: $filter, first: $first, after: $after) {
-    nodes { id identifier title description url branchName priority ${RELATIONS} }
+    nodes { id identifier title description url branchName priority creator { name app } botActor { name } externalUserCreator { name } ${RELATIONS} }
     pageInfo { hasNextPage endCursor }
   }
 }`
@@ -147,6 +151,7 @@ type Relation = { type: string; issue: IssueBlocker }
 type Relations = { nodes: Relation[]; pageInfo: { hasNextPage: boolean } }
 type IssueNode = {
   id: string; identifier: string; title: string; description: string | null; url: string; branchName: string; priority: number
+  creator: { name: string; app: boolean } | null; botActor: { name: string | null } | null; externalUserCreator: { name: string } | null
   inverseRelations: Relations
 }
 type IssueStateNode = { id: string; state: IssueState; priority: number; inverseRelations: Relations }
@@ -158,6 +163,7 @@ const blockersOf = (r: Relations): IssueBlocker[] => r.nodes.filter((relation) =
 
 const issuesData = issuePage(object<IssueNode>({
   id: string, identifier: string, title: string, description: nullable(string), url: string, branchName: string, priority: number,
+  creator: nullable(object({ name: string, app: boolean })), botActor: nullable(object({ name: nullable(string) })), externalUserCreator: nullable(object({ name: string })),
   inverseRelations: relations,
 }))
 const issueStatesData = issuePage(object<IssueStateNode>({
@@ -186,6 +192,15 @@ function untrustedComment(c: CommentNode): string | null {
   if (c.botActor) return c.user ? `posted by app ${c.botActor.name ?? 'unknown'}` : 'integration'
   if (c.user) return null
   return c.externalUser ? 'external user' : 'no workspace user'
+}
+
+// An issue created by an app user, a bot actor such as an integration, or a synced external user is untrusted. An issue
+// with no creator was created by an integration or system process.
+function untrustedIssue(n: IssueNode): string | null {
+  if (n.creator?.app) return 'app user'
+  if (n.botActor) return n.creator ? `created by app ${n.botActor.name ?? 'unknown'}` : 'integration'
+  if (n.creator) return null
+  return n.externalUserCreator ? 'external user' : 'no workspace user'
 }
 
 const issueAttachmentData = object({ issue: object({ id: string, attachments: nodes(object({ id: string })) }) })
@@ -301,6 +316,7 @@ export function createLinearClient(options: {
         priority: priorityOf(n.priority),
         blockers: blockersOf(n.inverseRelations),
         moreRelations: n.inverseRelations.pageInfo.hasNextPage,
+        untrusted: untrustedIssue(n),
       }))
     },
     async issueStates(ids) {

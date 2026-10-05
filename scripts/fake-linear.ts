@@ -25,6 +25,8 @@ type Issue = {
   team: string; state: string; project: string | null; comments: Comment[]; attachments: Attachment[]; deleted: boolean
   /** ids of the issues that block this one, from any team */
   blockedBy: string[]
+  /** who created the issue, as a comment's author is recorded: `author` names the creator, `via` how, `app` the app acting for a person. */
+  author: string; via: Via; app: string | null
 }
 
 export type FakeLinear = { url: string; controlUrl: string; close: () => Promise<void> }
@@ -105,6 +107,9 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       const project = typeof body.project === 'string' ? team.projects.find((p) => p.name === body.project) ?? missing(`project ${body.project}`) : null
       const n = issues.filter((i) => i.team === team.id).length + 1
       const identifier = `${team.key}-${n}`
+      const via = VIAS.find((v) => v === body.via) ?? 'person'
+      const author = String(body.author ?? 'Someone')
+      const app = typeof body.app === 'string' ? body.app : null
       const issue: Issue = {
         id: `issue-${team.key.toLowerCase()}-${n}`,
         identifier,
@@ -120,6 +125,9 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
         comments: [],
         attachments: [],
         deleted: false,
+        author,
+        via,
+        app,
       }
       issues.push(issue)
       return view(issue)
@@ -226,8 +234,12 @@ export function startFakeLinear(options: { port?: number; apiKey?: string } = {}
       return { project: { id: project.id, teams: list(project.teams, variables) } }
     },
     FactoryIssues: (variables) => ({
-      issues: page(variables, ({ id, identifier, title, description, url, branchName, priority, blockedBy }) => ({
-        id, identifier, title, description: description || null, url, branchName, priority, inverseRelations: inverseRelations(blockedBy),
+      issues: page(variables, ({ id, identifier, title, description, url, branchName, priority, blockedBy, author, via, app }) => ({
+        id, identifier, title, description: description || null, url, branchName, priority,
+        creator: via === 'person' || via === 'app' || via === 'on-behalf' ? { name: author, app: via === 'app' } : null,
+        botActor: via === 'integration' ? { name: author } : via === 'on-behalf' ? { name: app } : null,
+        externalUserCreator: via === 'external' ? { name: author } : null,
+        inverseRelations: inverseRelations(blockedBy),
       })),
     }),
     FactoryIssueStates: (variables) => ({

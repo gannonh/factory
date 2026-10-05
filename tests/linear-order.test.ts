@@ -93,6 +93,7 @@ test('the Linear client reads an unknown priority as normal, takes blockers only
     ({ type, issue: { id: `id-${identifier}`, identifier, url: `https://linear.app/x/${identifier}`, state } })
   const node = {
     id: 'issue-1', identifier: 'ENG-1', title: 'Fix login', description: null, url: 'https://linear.app/x/ENG-1', branchName: 'eng-1', priority: 7,
+    creator: { name: 'Carol', app: false }, botActor: null, externalUserCreator: null,
     inverseRelations: {
       nodes: [related('blocks', 'OPS-4', { name: 'In Review', type: 'started' }), related('related', 'ENG-9', { name: 'Todo', type: 'unstarted' })],
       pageInfo: { hasNextPage: true },
