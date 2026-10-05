@@ -425,6 +425,23 @@ test('a pull request for a GitHub origin names that repository', async () => {
   ])
 })
 
+test('a branch another actor creates on origin while the run works is not taken over by the run’s push', async () => {
+  const repo = repository()
+  const workdir = join(repo.root, 'wt')
+  git(repo.root, 'worktree', 'add', '--quiet', '-b', 'feature-x', workdir, 'origin/main')
+  const initialHead = git(workdir, 'rev-parse', 'HEAD')
+  commitFile(workdir, 'change.txt', 'change')
+  // The name was free when the worktree was prepared; someone else creates it at main before the push, so the run's
+  // push would fast-forward their branch and can attach its commit to their pull request.
+  git(repo.seed, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature-x')
+  const otherTip = git(repo.origin, 'rev-parse', 'refs/heads/feature-x')
+
+  await expect(deliver({ root: repo.root, path: workdir, initialHead, delivery: { kind: 'new', branch: 'feature-x', base: 'main' } }, { title: 'T', body: 'B' }, NEVER_RECHECKED))
+    .rejects.toThrow('delivery failed: git push')
+  expect(git(repo.origin, 'rev-parse', 'refs/heads/feature-x')).toBe(otherTip)
+  expect(gh.creates()).toEqual([])
+})
+
 test('a pull request whose branch moves while its commit is pushed fails the run instead of reporting a delivery', async () => {
   const repo = repository()
   const workdir = join(repo.root, 'wt')

@@ -386,7 +386,9 @@ export async function deliver(prepared: PreparedWorkdir, pr: { title: string; bo
   if ((await git('git rev-list', ['rev-list', '--count', `${runStart}..${head}`])).trim() === '0') return { kind: 'no-changes', branch: plan.branch }
   const push = (branch: string) => git('git push', ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`], NETWORK_TIMEOUT_MS)
   if (plan.kind === 'new') {
-    await push(plan.branch)
+    // The name was picked at prepare time; the empty lease lets the run create the branch only while it is still free,
+    // so a branch someone else made first fails the run and its retry takes the next name.
+    await git('git push', ['push', `--force-with-lease=refs/heads/${plan.branch}:`, '-u', 'origin', `HEAD:refs/heads/${plan.branch}`], NETWORK_TIMEOUT_MS)
     return openPullRequest(prepared.path, { branch: plan.branch, base: plan.base, initialHead: runStart, head }, pr)
   }
   const now = await recheck.request()
