@@ -8,12 +8,31 @@ if [[ $# -ne 1 || ! -f "$1" ]]; then
 fi
 . "$1"
 
+# Return the pid that owns the LISTEN socket on a loopback port, or exit
+# nonzero. lsof is the macOS tool; on Linux sartre has no lsof, so fall back to
+# ss (iproute2) and read the owning pid from its process column.
+port_owner_pid() {
+  local port="$1" out=""
+  if command -v lsof >/dev/null 2>&1; then
+    out="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n 1 || true)"
+    [[ -n "$out" ]] && { printf '%s\n' "$out"; return 0; }
+    return 1
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    out="$(ss -ltnpH "sport = :$port" 2>/dev/null \
+      | sed -n 's/.*pid=\([0-9]\+\).*/\1/p' | head -n 1 || true)"
+    [[ -n "$out" ]] && { printf '%s\n' "$out"; return 0; }
+    return 1
+  fi
+  return 1
+}
+
 if ! kill -0 "$FACTORY_SERVER_PID" 2>/dev/null; then
   echo "server pid $FACTORY_SERVER_PID is not running" >&2
   exit 1
 fi
 
-listener="$(lsof -nP -iTCP:"$FACTORY_PORT" -sTCP:LISTEN -t || true)"
+listener="$(port_owner_pid "$FACTORY_PORT" || true)"
 if [[ "$listener" != "$FACTORY_SERVER_PID" ]]; then
   echo "port $FACTORY_PORT is owned by pid '${listener:-none}', expected $FACTORY_SERVER_PID" >&2
   exit 1
@@ -25,7 +44,7 @@ if [[ -n "${FACTORY_WORLD_PID:-}" ]] && ! kill -0 "$FACTORY_WORLD_PID" 2>/dev/nu
 fi
 
 if [[ -n "${FACTORY_WORLD_PORT:-}" ]]; then
-  world_listener="$(lsof -nP -iTCP:"$FACTORY_WORLD_PORT" -sTCP:LISTEN -t || true)"
+  world_listener="$(port_owner_pid "$FACTORY_WORLD_PORT" || true)"
   if [[ "$world_listener" != "$FACTORY_WORLD_PID" ]]; then
     echo "port $FACTORY_WORLD_PORT is owned by pid '${world_listener:-none}', expected $FACTORY_WORLD_PID" >&2
     exit 1
@@ -39,8 +58,8 @@ fi
 
 # Empty until the run opens its browser session.
 browser_url=""
-if agent-browser session list 2>/dev/null | grep -qF "$AGENT_BROWSER_SESSION"; then
-  browser_url="$(agent-browser get url 2>/dev/null || true)"
+if "${AGENT_BROWSER:-agent-browser}" session list 2>/dev/null | grep -qF "$AGENT_BROWSER_SESSION"; then
+  browser_url="$("${AGENT_BROWSER:-agent-browser}" get url 2>/dev/null || true)"
 fi
 if [[ -n "$browser_url" && "$browser_url" != "$FACTORY_ORIGIN"/* ]]; then
   echo "browser session $AGENT_BROWSER_SESSION is at $browser_url, expected $FACTORY_ORIGIN" >&2

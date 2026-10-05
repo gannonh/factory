@@ -9,7 +9,7 @@ Factory is a React page backed by a Node process on this machine. The page needs
 
 Read [features/README.md](features/README.md) before choosing a recipe.
 
-Requirements: `node`, `agent-browser` 0.36 or later, `ffmpeg`, `lsof`, and an authenticated `gh`. The helpers are tested on macOS.
+Requirements: `node`/`npx`, `agent-browser` 0.36 or later, `ffmpeg`, `curl`, `git`, and an authenticated `gh`. Port checks use `lsof` on macOS and `ss` (iproute2) on Linux. The helpers are tested on macOS and Linux. On Linux, install agent-browser so a real binary is on `PATH`: `npm i -g agent-browser && agent-browser install` (a global install under the node install's `bin` precedes any mise shim).
 
 This skill lives at `.agents/skills/verify-factory/`. `.claude/skills` is a symlink to `.agents/skills`, so there is one copy. Keep its text and scripts free of harness-specific names and paths.
 
@@ -24,7 +24,7 @@ echo "$FACTORY_STATE_FILE"
 
 `<skill-dir>` is the directory that holds this file, relative to the repository root.
 
-`launch.sh` picks a free loopback port, starts Vite on `127.0.0.1` in the background, waits until the port serves the Factory page, and prints the path of the run's state file. The state file records the absolute path of the skill's `scripts/` directory as `FACTORY_SCRIPTS`, the server PID, port, origin, checked-out commit, evidence directory, and `agent-browser` session name. The evidence directory is `uat-evidence/verify-factory/<run-id>/`, which is gitignored.
+`launch.sh` picks a free loopback port, starts Vite on `127.0.0.1` in the background, waits until the port serves the Factory page, and prints the path of the run's state file. The state file records the absolute path of the skill's `scripts/` directory as `FACTORY_SCRIPTS`, the server PID, port, origin, checked-out commit, evidence directory, the resolved `agent-browser` binary as `AGENT_BROWSER`, and the `agent-browser` session name. The evidence directory is `uat-evidence/verify-factory/<run-id>/`, which is gitignored.
 
 Shell variables do not persist between tool calls. Start every later shell call with:
 
@@ -32,7 +32,7 @@ Shell variables do not persist between tool calls. Start every later shell call 
 . <the state-file path printed by launch.sh>
 ```
 
-Sourcing the file exports `AGENT_BROWSER_SESSION`, so every `agent-browser` command in that call uses this run's session.
+Sourcing the file exports `AGENT_BROWSER_SESSION`, so every drive command in that call uses this run's session, and `AGENT_BROWSER`, the resolved binary. Run drive commands as `"$AGENT_BROWSER"` so a broken mise shim on `PATH` never shadows the real binary.
 
 ## Doctor
 
@@ -46,32 +46,32 @@ It requires the recorded PID to be alive, to own the recorded port, and to serve
 
 ## Drive
 
-Use `agent-browser` only. Do not install Playwright or Cypress, use coordinates, call application APIs, import the store, or write localStorage.
+Use `agent-browser` only, invoked as `"$AGENT_BROWSER"`. Do not install Playwright or Cypress, use coordinates, call application APIs, import the store, or write localStorage.
 
 1. Open the page and size the viewport. The default viewport leaves the top row of canvas nodes under the canvas toolbar, where clicks are refused.
 
    ```bash
-   agent-browser open "$FACTORY_ORIGIN"
-   agent-browser set viewport 1440 900
-   agent-browser wait --text "Factory"
+   "$AGENT_BROWSER" open "$FACTORY_ORIGIN"
+   "$AGENT_BROWSER" set viewport 1440 900
+   "$AGENT_BROWSER" wait --text "Factory"
    ```
 
-2. Read the page with `agent-browser snapshot -i` before each interaction. Refs such as `@e12` are valid only until the page changes.
+2. Read the page with `"$AGENT_BROWSER" snapshot -i` before each interaction. Refs such as `@e12` are valid only until the page changes.
 3. Act by role and accessible name, by label, or by placeholder:
 
    ```bash
-   agent-browser find role button click --name "Pause"
-   agent-browser find role button click --name "Queue" --exact
-   agent-browser find label "Name" fill "vf-box"
-   agent-browser find placeholder "Task title" fill "vf-task"
+   "$AGENT_BROWSER" find role button click --name "Pause"
+   "$AGENT_BROWSER" find role button click --name "Queue" --exact
+   "$AGENT_BROWSER" find label "Name" fill "vf-box"
+   "$AGENT_BROWSER" find placeholder "Task title" fill "vf-task"
    ```
 
    `--name` matches a substring. Add `--exact` when another control contains the same text. When a name carries live text, such as a dock tab count or a canvas node's model and load, take the ref from the snapshot line that starts with the name.
-4. Wait on the result with `agent-browser wait --text "..."`, then snapshot again.
+4. Wait on the result with `"$AGENT_BROWSER" wait --text "..."`, then snapshot again.
 5. Read browser storage only to prove the page did not write the world. The Pause button is the simulation state.
 
    ```bash
-   cat <<'EOF' | agent-browser eval --stdin | tee "$FACTORY_EVIDENCE_DIR/sim-pause-storage.json"
+   cat <<'EOF' | "$AGENT_BROWSER" eval --stdin | tee "$FACTORY_EVIDENCE_DIR/sim-pause-storage.json"
    (() => ({ key: 'factory.world.v3', present: localStorage.getItem('factory.world.v3') !== null }))()
    EOF
    ```
@@ -87,16 +87,16 @@ Every proof records a video of the action, a screenshot before and after it, and
 The baseline proof is `sim-pause`:
 
 ```bash
-agent-browser record start "$FACTORY_EVIDENCE_DIR/sim-pause.webm"
-agent-browser wait --text "Pause"
-agent-browser wait 800
-agent-browser screenshot "$FACTORY_EVIDENCE_DIR/sim-pause-before.png"
-agent-browser find role button click --name "Pause"
-agent-browser wait --text "Resume"
-agent-browser wait 1200
-agent-browser screenshot "$FACTORY_EVIDENCE_DIR/sim-pause-after.png"
+"$AGENT_BROWSER" record start "$FACTORY_EVIDENCE_DIR/sim-pause.webm"
+"$AGENT_BROWSER" wait --text "Pause"
+"$AGENT_BROWSER" wait 800
+"$AGENT_BROWSER" screenshot "$FACTORY_EVIDENCE_DIR/sim-pause-before.png"
+"$AGENT_BROWSER" find role button click --name "Pause"
+"$AGENT_BROWSER" wait --text "Resume"
+"$AGENT_BROWSER" wait 1200
+"$AGENT_BROWSER" screenshot "$FACTORY_EVIDENCE_DIR/sim-pause-after.png"
 # run the storage expression from Drive here; require present: false. The button reads Resume.
-agent-browser record stop
+"$AGENT_BROWSER" record stop
 ```
 
 `record start` reopens the page in a fresh browser context. The view is Canvas and nothing is selected. The viewport size is kept. The world stays on the server, so a reload does not restore the seed. Start the recording first, then do the proof's setup, such as pausing or opening a workspace, inside the recording.
@@ -125,12 +125,23 @@ GitHub embeds a video player only for files uploaded through its web editor, whi
 
 Run cleanup after the last proof and after every failed attempt before launching again. Confirm the listed evidence files still exist.
 
+## Restart the world
+
+A persistence scenario must prove the world survives a world-server restart. Restart only the world process with `restart-world.sh`; Vite keeps serving and its proxy already targets the world port, so the port must not change:
+
+```bash
+"$FACTORY_SCRIPTS/restart-world.sh" "$FACTORY_STATE_FILE"
+```
+
+`restart-world.sh` stops the recorded world PID (only after confirming it is this checkout's `server/main.ts`), starts a fresh world server on the same `FACTORY_WORLD_PORT` and `FACTORY_DATA_DIR`, waits for `/health`, and rewrites `FACTORY_WORLD_PID` (and `FACTORY_WORLD_PORT`) in the state file. Re-source the state file before the next shell call so `cleanup.sh` stops the new PID. Drive the page again to prove the reloaded world still shows the state the recipe saved. If the restart fails or is interrupted before the rewrite lands, it terminates the freshly spawned world process so no orphan holds the port or data directory, and leaves the state file naming the old PID.
+
 ## Helpers
 
-The skill ships four executable helpers in `scripts/`:
+The skill ships five executable helpers in `scripts/`:
 
-- `launch.sh` starts the isolated server and prints the state-file path. It exits nonzero if `node_modules` is missing or Vite does not serve Factory within 30 seconds.
+- `launch.sh` starts the isolated server and prints the state-file path. It exits nonzero if `node_modules` is missing, if no working `agent-browser` binary is found, or if Vite does not serve Factory within 30 seconds.
 - `doctor.sh <state-file>` performs the read-only PID, port, page, and session check.
+- `restart-world.sh <state-file>` restarts the world server on the same data dir and records the new PID in the state file.
 - `post-evidence.sh <state-file> <pr-number>` publishes the run's evidence as one PR comment. It exits nonzero when the evidence directory lacks a `.webm` or a `.png`, or when a GIF exceeds 10 MB.
 - `cleanup.sh <state-file>` stops the run's session and server and keeps the evidence.
 
