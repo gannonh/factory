@@ -36,6 +36,30 @@ if [[ -n "${FACTORY_WORLD_PID:-}" ]] && kill -0 "$FACTORY_WORLD_PID" 2>/dev/null
   fi
 fi
 
+# Until the state-file rewrite below lands, the replacement world is not yet
+# recorded, so cleanup.sh cannot stop it. If the script exits or is interrupted
+# before that rewrite, terminate the replacement so it cannot orphan the run's
+# port and data directory. The trap is disarmed only after the rewrite succeeds.
+new_world_pid=""
+stop_new_world() {
+  local status=$?
+  if [[ -n "$new_world_pid" ]] && kill -0 "$new_world_pid" 2>/dev/null; then
+    local world_line
+    world_line="$(ps -o command= -p "$new_world_pid" 2>/dev/null || true)"
+    if [[ "$world_line" == *"server/main.ts"* ]]; then
+      kill "$new_world_pid" 2>/dev/null || true
+      for _ in $(seq 1 20); do
+        kill -0 "$new_world_pid" 2>/dev/null || break
+        sleep 0.25
+      done
+      if kill -0 "$new_world_pid" 2>/dev/null; then
+        kill -9 "$new_world_pid" 2>/dev/null || true
+      fi
+    fi
+  fi
+  exit "$status"
+}
+
 cd "$FACTORY_REPO_ROOT"
 FACTORY_PORT="$FACTORY_WORLD_PORT" \
 FACTORY_ORIGIN="$FACTORY_ORIGIN" \
@@ -44,6 +68,11 @@ FACTORY_DATA_DIR="$FACTORY_DATA_DIR" \
   > "$FACTORY_EVIDENCE_DIR/world-restart.log" 2>&1 < /dev/null &
 new_world_pid=$!
 disown "$new_world_pid"
+
+trap stop_new_world EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 deadline=$((SECONDS + 30))
 while (( SECONDS < deadline )); do
@@ -73,6 +102,10 @@ while IFS= read -r line; do
   printf '%s\n' "$line"
 done < "$state_file" > "$tmp"
 mv "$tmp" "$state_file"
+
+# The rewrite landed: the new pid is recorded and owned by cleanup.sh from here,
+# so the trap must not kill it.
+trap - EXIT INT TERM HUP
 
 printf 'restarted_world_pid=%s\n' "$new_world_pid"
 printf 'world_port=%s\n' "$FACTORY_WORLD_PORT"

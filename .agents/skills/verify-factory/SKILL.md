@@ -133,7 +133,7 @@ A persistence scenario must prove the world survives a world-server restart. Res
 "$FACTORY_SCRIPTS/restart-world.sh" "$FACTORY_STATE_FILE"
 ```
 
-`restart-world.sh` stops the recorded world PID (only after confirming it is this checkout's `server/main.ts`), starts a fresh world server on the same `FACTORY_WORLD_PORT` and `FACTORY_DATA_DIR`, waits for `/health`, and rewrites `FACTORY_WORLD_PID` (and `FACTORY_WORLD_PORT`) in the state file. Re-source the state file before the next shell call so `cleanup.sh` stops the new PID. Drive the page again to prove the reloaded world still shows the state the recipe saved.
+`restart-world.sh` stops the recorded world PID (only after confirming it is this checkout's `server/main.ts`), starts a fresh world server on the same `FACTORY_WORLD_PORT` and `FACTORY_DATA_DIR`, waits for `/health`, and rewrites `FACTORY_WORLD_PID` (and `FACTORY_WORLD_PORT`) in the state file. Re-source the state file before the next shell call so `cleanup.sh` stops the new PID. Drive the page again to prove the reloaded world still shows the state the recipe saved. If the restart fails or is interrupted before the rewrite lands, it terminates the freshly spawned world process so no orphan holds the port or data directory, and leaves the state file naming the old PID.
 
 ## Helpers
 
