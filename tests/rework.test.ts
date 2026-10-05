@@ -649,6 +649,23 @@ test('a comment history larger than the read buffer still produces a round, trim
   await f.server.close()
 })
 
+test('a comment that starts with more whitespace than the read keeps is still quoted from its first text', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner())
+  await poll(f)
+  await nextRun(f)
+
+  gh.conversation(41, 'alice', `${' '.repeat(9000)}Guard the call.`, new Date(WALL + 1000).toISOString(), 'COLLABORATOR')
+  await moveIssue('ENG-1', 'Todo')
+  setWall(WALL + 5000)
+  await poll(f)
+
+  expect(issueTasks(f)).toHaveLength(2)
+  expect(issueTasks(f)[1].prompt).toContain('- **alice**: Guard the call.')
+  await f.server.close()
+})
+
 test('a gh read that fails for another reason still leaves the issue waiting for the next poll', async () => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })

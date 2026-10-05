@@ -33,7 +33,7 @@ async function gh(args: string[]): Promise<string> {
 }
 
 /**
- * A body is cut to this many UTF-16 code units as it is read, well above the prompt's `MAX_FEEDBACK_CHARS` cut, so the
+ * A body is cut to this many UTF-16 code units as it is read, after its leading whitespace so that a blank-looking start cannot hide later text, well above the prompt's `MAX_FEEDBACK_CHARS` cut, so the
  * prompt still trims each body itself and a history whose bodies fit stays identical (ADR 0012).
  */
 const MAX_READ_BODY_CHARS = MAX_FEEDBACK_CHARS * 4
@@ -95,7 +95,7 @@ async function list(host: string, path: string): Promise<Json[]> {
     if (line.trim() === '') return
     const item = JSON.parse(line) as unknown
     if (!isJson(item)) return
-    items.push(typeof item.body === 'string' && item.body.length > MAX_READ_BODY_CHARS ? { ...item, body: item.body.slice(0, MAX_READ_BODY_CHARS) } : item)
+    items.push(typeof item.body === 'string' && item.body.length > MAX_READ_BODY_CHARS ? { ...item, body: item.body.trimStart().slice(0, MAX_READ_BODY_CHARS) } : item)
   })
   return items
 }
