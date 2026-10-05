@@ -13,7 +13,7 @@ import { createApi, type InProcessApi } from '../server/api'
 import { runCommand } from '../server/commands'
 import { createLinearClient, type LinearClient } from '../server/linear'
 import { MockServer } from '../server/simulation'
-import { SimulatedRunner, deliver, failureReason, prepareWorkdir, type Runner } from '../server/runners'
+import { SimulatedRunner, deliver, failureReason, prepareWorkdir, type Recheck, type Runner } from '../server/runners'
 import { fileStore } from '../server/worldFile'
 import { createHistory } from '../src/history'
 import type { AgentId, EdgeId, IssueId, Run, RunId, SandboxId, TriggerId } from '../src/domain/types'
@@ -404,6 +404,9 @@ test('commits an agent made on a branch of its own are delivered on the planned 
   await f.server.close()
 })
 
+/** A new delivery branch never asks the server again. */
+const NEVER_RECHECKED: Recheck = { request: () => Promise.reject(new Error('a new branch is never rechecked')), proceed: () => false }
+
 test('a pull request for a GitHub origin names that repository', async () => {
   const repo = repository()
   const workdir = join(repo.root, 'wt')
@@ -413,20 +416,56 @@ test('a pull request for a GitHub origin names that repository', async () => {
   git(repo.root, 'remote', 'set-url', 'origin', 'https://github.com/acme/widgets.git')
   git(repo.root, 'remote', 'set-url', '--push', 'origin', repo.origin)
 
-  const artifacts = await deliver({ path: workdir, initialHead, delivery: { branch: 'feature-x', base: 'main' } }, { title: 'T', body: 'B' })
+  const delivered = await deliver({ root: repo.root, path: workdir, initialHead, delivery: { kind: 'new', branch: 'feature-x', base: 'main' } }, { title: 'T', body: 'B' }, NEVER_RECHECKED)
 
-  expect(artifacts).toEqual([{ kind: 'pr', label: 'Pull request #41', url: 'https://github.com/example/factory/pull/41' }])
+  expect(delivered).toMatchObject({ kind: 'pull-request', branch: 'feature-x', base: 'main', pr: { kind: 'pr', label: 'Pull request #41', url: 'https://github.com/example/factory/pull/41' } })
   expect(gh.calls().map((c) => c.argv)).toEqual([
     ['pr', 'view', 'feature-x', '--repo', 'github.com/acme/widgets', '--json', 'url,state,baseRefName'],
     ['pr', 'create', '--head', 'feature-x', '--base', 'main', '--title', 'T', '--body', 'B', '--repo', 'github.com/acme/widgets'],
   ])
 })
 
+test('a branch another actor creates on origin while the run works is not taken over by the run’s push', async () => {
+  const repo = repository()
+  const workdir = join(repo.root, 'wt')
+  git(repo.root, 'worktree', 'add', '--quiet', '-b', 'feature-x', workdir, 'origin/main')
+  const initialHead = git(workdir, 'rev-parse', 'HEAD')
+  commitFile(workdir, 'change.txt', 'change')
+  // The name was free when the worktree was prepared; someone else creates it at main before the push, so the run's
+  // push would fast-forward their branch and can attach its commit to their pull request.
+  git(repo.seed, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature-x')
+  const otherTip = git(repo.origin, 'rev-parse', 'refs/heads/feature-x')
+
+  await expect(deliver({ root: repo.root, path: workdir, initialHead, delivery: { kind: 'new', branch: 'feature-x', base: 'main' } }, { title: 'T', body: 'B' }, NEVER_RECHECKED))
+    .rejects.toThrow('delivery failed: git push')
+  expect(git(repo.origin, 'rev-parse', 'refs/heads/feature-x')).toBe(otherTip)
+  expect(gh.creates()).toEqual([])
+})
+
+test('a pull request whose branch moves while its commit is pushed fails the run instead of reporting a delivery', async () => {
+  const repo = repository()
+  const workdir = join(repo.root, 'wt')
+  git(repo.root, 'worktree', 'add', '--quiet', '-b', 'feature-x', workdir, 'origin/main')
+  const initialHead = git(workdir, 'rev-parse', 'HEAD')
+  commitFile(workdir, 'change.txt', 'change')
+  const pr = { kind: 'pr' as const, label: 'Pull request #41', url: 'https://github.com/example/factory/pull/41' }
+  const answers = [
+    { kind: 'continue' as const, pr, branch: 'feature-x', base: 'main' },
+    { kind: 'continue' as const, pr, branch: 'feature-y', base: 'main' },
+  ]
+  const recheck: Recheck = { request: async () => answers.shift()!, proceed: () => true }
+
+  await expect(deliver({ root: repo.root, path: workdir, initialHead, delivery: { kind: 'continue', branch: 'feature-x', base: 'main' } }, { title: 'T', body: 'B' }, recheck))
+    .rejects.toThrow('delivery failed: pull request #41 moved to branch feature-y while this run delivered')
+  // The push to the branch read before the move still happened; the retry delivers on the pull request's current branch.
+  expect(git(repo.origin, 'rev-parse', 'refs/heads/feature-x')).toBe(git(workdir, 'rev-parse', 'HEAD'))
+})
+
 test('two runs preparing the same branch at once get distinct names', async () => {
   const repo = repository()
   const [a, b] = await Promise.all([
-    prepareWorkdir(repo.root, 'run-a' as RunId, { kind: 'new', branch: 'eng-1-fix-login' }),
-    prepareWorkdir(repo.root, 'run-b' as RunId, { kind: 'new', branch: 'eng-1-fix-login' }),
+    prepareWorkdir(repo.root, 'run-a' as RunId, { kind: 'new', branch: 'eng-1-fix-login', retired: [] }),
+    prepareWorkdir(repo.root, 'run-b' as RunId, { kind: 'new', branch: 'eng-1-fix-login', retired: [] }),
   ])
   expect([a.delivery?.branch, b.delivery?.branch]).toEqual(['eng-1-fix-login', 'eng-1-fix-login-2'])
 })

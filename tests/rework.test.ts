@@ -92,7 +92,7 @@ ${FRAMING}
   const secondRun = await nextRun(f)
   const workdir = workdirOf(f, secondRun)
   expect(secondRun.status).toBe('succeeded')
-  expect(prViews()).toBe(3)
+  expect(prViews()).toBe(5)
   expect(seen.at(-1)?.prompt).toBe(second.prompt)
   expect(git(workdir, 'branch', '--show-current')).toBe(`factory-${secondRun.id}`)
   expect(git(workdir, 'rev-parse', 'HEAD~1')).toBe(firstHead)
@@ -583,7 +583,7 @@ test('a failed read of one issue’s Linear comments holds only that issue, and 
 const ended = (fields: Partial<IntakeRecord>): IntakeRecord => ({
   issue: { backend: 'linear', id: ENG_1, identifier: 'ENG-1', url: ISSUE_URL, branchName: 'eng-1-fix-login' },
   trigger: 'tr-1' as TriggerId, flowId: 'fl-1' as IntakeRecord['flowId'], takenAt: 0, phase: 'ended', writes: [],
-  states: { pickupState: 'state-eng-todo', startedState: null }, cancel: null, blockers: [], round: 1, rework: null, result: null, left: false, past: [], leftOut: [], ...fields,
+  states: { pickupState: 'state-eng-todo', startedState: null }, cancel: null, blockers: [], round: 1, rework: null, result: null, left: false, past: [], leftOut: [], prBranches: [], ...fields,
 })
 
 test.each([

@@ -68,7 +68,7 @@ export type RoundStart = {
  */
 export function startRound(record: IntakeRecord | undefined, issue: IssueRef, start: RoundStart): IntakeRecord {
   const fresh = { ...start, phase: 'taken', cancel: null, result: null, left: false } as const
-  if (!record) return { issue, ...fresh, writes: [], round: 1, rework: null, past: [] }
+  if (!record) return { issue, ...fresh, writes: [], round: 1, rework: null, past: [], prBranches: [] }
   const { round, trigger, flowId, takenAt, result } = record
   return { ...record, ...fresh, issue, writes: dropPendingMoves(record.writes), round: round + 1, past: [...record.past, { round, trigger, flowId, takenAt, result }] }
 }
