@@ -13,6 +13,7 @@ import {
   nodeRef,
   nodeSubject,
   type Agent,
+  type Artifact,
   type AgentId,
   type AgentPatch,
   type Edge,
@@ -53,7 +54,7 @@ import {
   type WriteStatus,
 } from '../src/domain/types'
 import type { WorldStore } from './worldFile'
-import { ClaudeRunner, SimulatedRunner, deliver, gitArtifacts, prepareWorkdir, type DeliveryRequest, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
+import { ClaudeRunner, SimulatedRunner, deliver, gitArtifacts, prepareWorkdir, type Delivery, type DeliveryRequest, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
 import type { RunLogStore } from './runLogs'
 import { array, boolean, defaulted, id, number, object, oneOf, record } from './parse'
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
@@ -140,6 +141,11 @@ function boundedRunText(value: string, marker: string): string {
 }
 
 type Listener = (world: World) => void
+
+/** The run stopped, or the server closed, while the run read its pull request. Restart settles a run left running. */
+class RunEnded extends Error {
+  constructor() { super('run ended while its pull request was read') }
+}
 
 export class MockServer {
   private world: World
@@ -1129,39 +1135,77 @@ export class MockServer {
   private async completeLocalRun(run: Run, agent: Agent, result: string) {
     const prepared = this.workdirs.get(run.id)
     const delivering = prepared?.delivery ? prepared : null
-    let artifacts: RunOutput['artifacts'] = []
-    if (prepared) {
-      try { artifacts = await gitArtifacts(prepared, { lookupPr: !delivering }) }
+    const listCommits = async (at: Parameters<typeof gitArtifacts>[0]) => {
+      try { return await gitArtifacts(at, { lookupPr: !delivering }) }
       catch (error) {
-        if (this.world.runs[run.id]?.status !== 'running') return
-        this.log('warn', `git artifacts unavailable: ${error instanceof Error ? error.message : String(error)}`, { runId: run.id, agentId: run.agentId })
+        if (this.world.runs[run.id]?.status === 'running') this.log('warn', `git artifacts unavailable: ${error instanceof Error ? error.message : String(error)}`, { runId: run.id, agentId: run.agentId })
+        return []
       }
     }
+    let artifacts: RunOutput['artifacts'] = prepared && !delivering ? await listCommits(prepared) : []
     if (this.world.runs[run.id]?.status !== 'running') return
     if (delivering) {
       const task = this.world.tasks[run.taskId]
       const issue = task ? issueOfFlow(this.world, task.flowId) : null
+      let delivery: Delivery
       try {
-        const delivered = await deliver(delivering, { title: run.title, body: issue ? `${result}\n\n${issue.url}` : result })
-        // Name the branch on origin, not whichever branch the agent left checked out.
-        const branch = { kind: 'branch' as const, label: delivering.delivery!.branch, url: null }
-        artifacts = [branch, ...artifacts.filter((a) => a.kind !== 'branch'), ...delivered]
+        const body = issue ? `${result}\n\n${issue.url}` : result
+        delivery = await deliver(delivering, { title: run.title, body }, {
+          request: () => this.recheckDelivery(task, run.id, agent.id),
+          proceed: () => !(task && this.openRecord(task.flowId)?.cancel),
+        })
       } catch (error) {
-        if (this.world.runs[run.id]?.status !== 'running') return
+        if (this.world.runs[run.id]?.status !== 'running' || error instanceof RunEnded) return
         this.finishRun(run, { status: 'failed', reason: error instanceof Error ? error.message : String(error) }, true)
         this.publish()
         return
       }
       if (this.world.runs[run.id]?.status !== 'running') return
+      if (delivery.kind === 'withheld') {
+        this.finishRun(run, { status: 'cancelled', reason: 'its flow was cancelled' }, true)
+        this.publish()
+        return
+      }
+      const note: Artifact = { kind: 'note', label: 'No changes; no pull request opened', url: null }
+      if (delivery.kind === 'no-changes') artifacts = [...(delivery.branch ? [{ kind: 'branch' as const, label: delivery.branch, url: null }] : []), note]
+      else {
+        if (task) this.keepPrBranch(task.flowId, delivery.branch)
+        // Listed only now, so nothing after the pull request opened can fail the run and have a retry open another.
+        const commits = await listCommits({ path: delivering.path, initialHead: delivery.initialHead, head: delivery.head })
+        if (this.world.runs[run.id]?.status !== 'running') return
+        // Name the branch on origin, not whichever branch the agent left checked out.
+        artifacts = [{ kind: 'branch', label: delivery.branch, url: null }, ...commits.filter((a) => a.kind !== 'branch'), delivery.pr]
+      }
     }
     this.finishRun(run, { status: 'succeeded', agent, output: { summary: result, artifacts } })
     this.publish()
+  }
+
+  /** Where a run that continued a pull request delivers, asked again before its push and after a push to the PR (ADR 0012). */
+  private async recheckDelivery(task: Task | undefined, runId: RunId, agentId: AgentId): Promise<DeliveryRequest> {
+    if (!task || !this.openRecord(task.flowId)?.rework) return Promise.reject(new Error('delivery failed: the round this run continues is no longer open'))
+    const request = await this.deliveryRequest(task, runId, agentId)
+    // A merge or close the reread found changes the prompt the finished run was given, so later runs and the note follow it.
+    this.writePrompt(task, request !== null)
+    return request
+  }
+
+  /** Keeps the head branch of a pull request delivered for the flow's issue, so no later delivery branch reuses it. */
+  private keepPrBranch(flowId: FlowId, branch: string) {
+    const record = this.openRecord(flowId)
+    if (!record || record.prBranches.includes(branch)) return
+    this.world.intake = { ...this.world.intake, [record.issue.id]: { ...record, prBranches: [...record.prBranches, branch] } }
   }
 
   /** `completing` is set only by the run's own completion, which a pending completion otherwise holds off. */
   private finishRun(run: Run, completion: RunCompletion, completing = false) {
     if (run.status !== 'running' || this.world.runs[run.id]?.status !== 'running') return
     if (completion.status !== 'succeeded' && !completing && this.pendingCompletions.has(run.id)) return
+    // A failed run of a cancelled flow ends cancelled with no retry, as restore() ends an interrupted one.
+    const flowId = this.world.tasks[run.taskId]?.flowId
+    if (completion.status === 'failed' && flowId && this.openRecord(flowId)?.cancel) {
+      completion = { status: 'cancelled', reason: 'its flow was cancelled' }
+    }
     if (run.execution === 'local' && completion.status !== 'succeeded') completion = { ...completion, reason: boundedRunText(completion.reason, ERROR_TRUNCATED) }
     const timeout = this.localTimeouts.get(run.id)
     if (timeout) clearTimeout(timeout)
@@ -1414,12 +1458,23 @@ export class MockServer {
       const view = await viewPullRequest(seen.pr.url).catch((error: unknown) => {
         throw new Error(`delivery failed: ${error instanceof Error ? error.message : String(error)}`)
       })
-      if (this.closed || this.world.runs[runId]?.status !== 'running') throw new Error('run ended while its pull request was read')
+      if (this.closed || this.world.runs[runId]?.status !== 'running') throw new RunEnded()
       const record = this.openRecord(flowId)
       const reread = record ? rereadRework(record.rework, seen, view) : null
       if (reread === 'again' && reads === 2) throw new Error(`delivery failed: pull request #${prNumber(seen.pr)} changed again while this run read it`)
       if (reread === 'again') continue
       if (record && reread) {
+        if (reread.rework.kind === 'fresh') {
+          // A cancelled flow delivers nothing, so its record keeps saying how the round started.
+          if (record.rework?.kind === 'continue' && !record.cancel) {
+            const { branch } = record.rework
+            const prBranches = record.prBranches.includes(branch) ? record.prBranches : [...record.prBranches, branch]
+            this.world.intake = { ...this.world.intake, [record.issue.id]: { ...record, rework: reread.rework, prBranches } }
+            this.log('info', `pull request #${prNumber(seen.pr)} ${reread.change}`, { runId, agentId }, Date.now())
+            this.publish()
+          }
+          return { kind: 'new', branch: issueOfFlow(this.world, flowId)?.branchName ?? `factory-${runId}`, retired: this.openRecord(flowId)?.prBranches ?? [] }
+        }
         this.world.intake = { ...this.world.intake, [record.issue.id]: { ...record, rework: reread.rework } }
         this.log('info', `pull request #${prNumber(seen.pr)} ${reread.change}`, { runId, agentId }, Date.now())
         this.publish()
@@ -1427,8 +1482,8 @@ export class MockServer {
       break
     }
     const rework = this.openRecord(flowId)?.rework
-    if (rework?.kind === 'continue') return { kind: 'continue', branch: rework.branch, base: rework.base }
-    return { kind: 'new', branch: issueOfFlow(this.world, flowId)?.branchName ?? `factory-${runId}` }
+    if (rework?.kind === 'continue') return { kind: 'continue', pr: rework.pr, branch: rework.branch, base: rework.base }
+    return { kind: 'new', branch: issueOfFlow(this.world, flowId)?.branchName ?? `factory-${runId}`, retired: this.openRecord(flowId)?.prBranches ?? [] }
   }
 
   private nameOf(id: string): string {

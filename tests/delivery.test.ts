@@ -13,7 +13,7 @@ import { createApi, type InProcessApi } from '../server/api'
 import { runCommand } from '../server/commands'
 import { createLinearClient, type LinearClient } from '../server/linear'
 import { MockServer } from '../server/simulation'
-import { SimulatedRunner, deliver, failureReason, prepareWorkdir, type Runner } from '../server/runners'
+import { SimulatedRunner, deliver, failureReason, prepareWorkdir, type Recheck, type Runner } from '../server/runners'
 import { fileStore } from '../server/worldFile'
 import { createHistory } from '../src/history'
 import type { AgentId, EdgeId, IssueId, Run, RunId, SandboxId, TriggerId } from '../src/domain/types'
@@ -404,6 +404,9 @@ test('commits an agent made on a branch of its own are delivered on the planned 
   await f.server.close()
 })
 
+/** A new delivery branch never asks the server again. */
+const NEVER_RECHECKED: Recheck = { request: () => Promise.reject(new Error('a new branch is never rechecked')), proceed: () => false }
+
 test('a pull request for a GitHub origin names that repository', async () => {
   const repo = repository()
   const workdir = join(repo.root, 'wt')
@@ -413,9 +416,9 @@ test('a pull request for a GitHub origin names that repository', async () => {
   git(repo.root, 'remote', 'set-url', 'origin', 'https://github.com/acme/widgets.git')
   git(repo.root, 'remote', 'set-url', '--push', 'origin', repo.origin)
 
-  const artifacts = await deliver({ path: workdir, initialHead, delivery: { branch: 'feature-x', base: 'main' } }, { title: 'T', body: 'B' })
+  const delivered = await deliver({ root: repo.root, path: workdir, initialHead, delivery: { kind: 'new', branch: 'feature-x', base: 'main' } }, { title: 'T', body: 'B' }, NEVER_RECHECKED)
 
-  expect(artifacts).toEqual([{ kind: 'pr', label: 'Pull request #41', url: 'https://github.com/example/factory/pull/41' }])
+  expect(delivered).toMatchObject({ kind: 'pull-request', branch: 'feature-x', base: 'main', pr: { kind: 'pr', label: 'Pull request #41', url: 'https://github.com/example/factory/pull/41' } })
   expect(gh.calls().map((c) => c.argv)).toEqual([
     ['pr', 'view', 'feature-x', '--repo', 'github.com/acme/widgets', '--json', 'url,state,baseRefName'],
     ['pr', 'create', '--head', 'feature-x', '--base', 'main', '--title', 'T', '--body', 'B', '--repo', 'github.com/acme/widgets'],
@@ -425,8 +428,8 @@ test('a pull request for a GitHub origin names that repository', async () => {
 test('two runs preparing the same branch at once get distinct names', async () => {
   const repo = repository()
   const [a, b] = await Promise.all([
-    prepareWorkdir(repo.root, 'run-a' as RunId, { kind: 'new', branch: 'eng-1-fix-login' }),
-    prepareWorkdir(repo.root, 'run-b' as RunId, { kind: 'new', branch: 'eng-1-fix-login' }),
+    prepareWorkdir(repo.root, 'run-a' as RunId, { kind: 'new', branch: 'eng-1-fix-login', retired: [] }),
+    prepareWorkdir(repo.root, 'run-b' as RunId, { kind: 'new', branch: 'eng-1-fix-login', retired: [] }),
   ])
   expect([a.delivery?.branch, b.delivery?.branch]).toEqual(['eng-1-fix-login', 'eng-1-fix-login-2'])
 })

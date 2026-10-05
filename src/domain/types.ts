@@ -199,11 +199,14 @@ export type Rework =
  * `blockers` are the issues that block it in Linear, as of the last poll before its flow started.
  * `left` is set once the issue has been seen outside the round's pickup state after the round ended, or Linear cancelled the round.
  * `leftOut` names each untrusted comment the round's prompt left out, by author and source, for the run logs of the round's issue task.
+ * `prBranches` is the head branch of every pull request Factory delivered for the issue, in any round, and the branch a round
+ * continued once its pull request turned out merged or closed. A new delivery branch never reuses one. It is empty for a
+ * record saved before it was kept.
  */
 export type IntakeRecord = {
   issue: IssueRef; trigger: TriggerId; flowId: FlowId; takenAt: number; phase: IntakePhase; writes: IssueWrite[]
   states: TriggerStates | null; cancel: FlowCancel | null; blockers: IssueBlocker[]
-  round: number; rework: Rework | null; result: RoundResult | null; left: boolean; past: PastRound[]; leftOut: string[]
+  round: number; rework: Rework | null; result: RoundResult | null; left: boolean; past: PastRound[]; leftOut: string[]; prBranches: string[]
 }
 
 /** An issue that blocks a taken issue in Linear, from any team, with its state when last read. */

@@ -6,7 +6,7 @@
  * document per line, as `--jq '.[] | @json'` prints them. Each carries the author's `author_association` unless it is
  * null, and a login ending in `[bot]` is a bot account. A conversation comment carries `performed_via_github_app`, as
  * GitHub's does, and reviews and inline comments do not. `failNext` makes the next `pr create` or `pr view` fail, and
- * `holdView` makes every `pr view` wait until `releaseView`.
+ * `holdView` makes every `pr view`, or every one of a branch, wait until `releaseView`.
  */
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -50,8 +50,15 @@ if (argv[0] === 'api') {
   process.exit(0)
 }
 if (argv[1] === 'view') {
-  const hold = ${JSON.stringify(dir)} + '/hold-view'
-  while (fs.existsSync(hold)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
+  const held = () => {
+    try {
+      const only = fs.readFileSync(${JSON.stringify(dir)} + '/hold-view', 'utf8')
+      return only === '' || only === argv[2]
+    } catch {
+      return false
+    }
+  }
+  while (held()) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
   const pr = prs[argv[2]] || Object.values(prs).find((p) => p.url === argv[2])
   while (pr && fs.existsSync(${JSON.stringify(dir)} + '/hold-' + pr.state + '-' + encodeURIComponent(pr.headRefName) + '-' + encodeURIComponent(pr.baseRefName))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
   if (failing('view') || !pr) { console.error('no pull requests found for "' + argv[2] + '"'); process.exit(1) }
@@ -68,6 +75,7 @@ const url = 'https://github.com/example/factory/pull/' + number
 prs[head] = { url, number, state: 'OPEN', baseRefName: argv[argv.indexOf('--base') + 1], headRefName: head }
 fs.writeFileSync(${JSON.stringify(prsFile)}, JSON.stringify(prs))
 console.log(url)
+if (failing('workdir')) fs.rmSync(process.cwd(), { recursive: true, force: true })
 `)
   chmodSync(join(bin, 'gh'), 0o755)
   const calls = (): GhCall[] => existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as GhCall) : []
@@ -85,7 +93,10 @@ console.log(url)
     prs,
     creates: () => calls().filter((c) => c.argv[1] === 'create'),
     failNext: (op: 'create' | 'view' = 'create') => writeFileSync(fail(op), ''),
-    holdView: () => writeFileSync(join(dir, 'hold-view'), ''),
+    /** The next `pr create` opens its pull request, then deletes the working directory it ran in. */
+    removeWorkdirOnCreate: () => writeFileSync(fail('workdir'), ''),
+    /** Every later `pr view`, or only those of `branch`, waits until `releaseView`. */
+    holdView: (branch = '') => writeFileSync(join(dir, 'hold-view'), branch),
     releaseView: () => rmSync(join(dir, 'hold-view'), { force: true }),
     /** Holds each `pr view` that reads the PR on `head` into `base` in `state`, as that `gh` read it before it logged the call, until `releaseState`. */
     holdState: (state: FakePr['state'], head: string, base = 'main') => writeFileSync(holdFile(state, head, base), ''),

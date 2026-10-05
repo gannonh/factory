@@ -17,12 +17,17 @@ function heading(cause: NoteCause, round: number): string {
   return `Factory stopped work on this issue${which}: “${cause.task}” was cancelled in Factory.`
 }
 
-/** Why a rework round worked where it did. A fresh round says it opened a new pull request only when it did. */
+/**
+ * Why a rework round worked where it did. A fresh round says it opened a new pull request only when it did, that it
+ * delivered to the previous one when that was its only delivery (a push there is confirmed while it was still open),
+ * and that it delivered nothing only when no run delivered a pull request.
+ */
 function reworkLine(rework: Rework, delivered: readonly PullRequestRef[]): string {
   const n = prNumber(rework.pr)
   if (rework.kind === 'continue') return `Continued on pull request #${n}.`
-  const opened = delivered.some((d) => d.url !== rework.pr.url)
-  return `Pull request #${n} was ${rework.state}, so this round ${opened ? 'opened a new pull request' : 'started a fresh branch'}.`
+  if (delivered.some((d) => d.url !== rework.pr.url)) return `Pull request #${n} was ${rework.state}, so this round opened a new pull request.`
+  if (delivered.length > 0) return `Pull request #${n} was ${rework.state} after this round delivered to it; no new pull request opened.`
+  return `Pull request #${n} was ${rework.state}; this round delivered nothing.`
 }
 
 export type FlowAction = { kind: 'none' } | { kind: 'cancel'; reason: string }
