@@ -1,6 +1,7 @@
 /**
  * A fake `gh` for the delivery and rework suites, put first on PATH. It keeps one pull request per head branch, as
- * GitHub does, and records each call. `pr view <branch|url>` prints that PR as JSON or fails; `pr create` opens pull
+ * GitHub does, and records each call after it reads the pull requests and feedback, so a call in `calls()` has read
+ * them. `pr view <branch|url>` prints that PR as JSON or fails; `pr create` opens pull
  * request 41, 42, … in order. `api` answers a PR's reviews, inline comments and conversation comments one JSON
  * document per line, as `--jq '.[] | @json'` prints them. Each carries the author's `author_association` unless it is
  * null, and a login ending in `[bot]` is a bot account. A conversation comment carries `performed_via_github_app`, as
@@ -25,12 +26,15 @@ export function fakeGh(dir = mkdtempSync(join(tmpdir(), 'factory-gh-'))) {
   const prsFile = join(dir, 'prs.json')
   const feedbackFile = join(dir, 'feedback.json')
   const fail = (op: string) => join(dir, `fail-${op}`)
+  const holdFile = (state: FakePr['state'], head: string, base: string) => join(dir, `hold-${state}-${encodeURIComponent(head)}-${encodeURIComponent(base)}`)
   writeFileSync(join(bin, 'gh'), `#!/usr/bin/env node
 const fs = require('node:fs')
 const argv = process.argv.slice(2)
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ cwd: process.cwd(), argv }) + '\\n')
 const read = (file) => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {}
 const prs = read(${JSON.stringify(prsFile)})
+const allFeedback = read(${JSON.stringify(feedbackFile)})
+// Logged only once the state is read, so a test that sees the call can change the state without racing the read.
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ cwd: process.cwd(), argv }) + '\\n')
 const failing = (op) => {
   const marker = ${JSON.stringify(dir)} + '/fail-' + op
   if (!fs.existsSync(marker)) return false
@@ -40,7 +44,7 @@ const failing = (op) => {
 if (argv[0] === 'api') {
   const path = argv.find((a) => a.startsWith('repos/')).split('?')[0]
   const [, , , kind, number, list] = path.split('/')
-  const feedback = read(${JSON.stringify(feedbackFile)})[number] || { reviews: [], pulls: [], issues: [] }
+  const feedback = allFeedback[number] || { reviews: [], pulls: [], issues: [] }
   const items = list === 'reviews' ? feedback.reviews : kind === 'pulls' ? feedback.pulls : feedback.issues
   for (const item of items) console.log(JSON.stringify(item))
   process.exit(0)
@@ -49,6 +53,7 @@ if (argv[1] === 'view') {
   const hold = ${JSON.stringify(dir)} + '/hold-view'
   while (fs.existsSync(hold)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
   const pr = prs[argv[2]] || Object.values(prs).find((p) => p.url === argv[2])
+  while (pr && fs.existsSync(${JSON.stringify(dir)} + '/hold-' + pr.state + '-' + encodeURIComponent(pr.headRefName) + '-' + encodeURIComponent(pr.baseRefName))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20)
   if (failing('view') || !pr) { console.error('no pull requests found for "' + argv[2] + '"'); process.exit(1) }
   console.log(JSON.stringify(pr))
   process.exit(0)
@@ -82,6 +87,9 @@ console.log(url)
     failNext: (op: 'create' | 'view' = 'create') => writeFileSync(fail(op), ''),
     holdView: () => writeFileSync(join(dir, 'hold-view'), ''),
     releaseView: () => rmSync(join(dir, 'hold-view'), { force: true }),
+    /** Holds each `pr view` that reads the PR on `head` into `base` in `state`, as that `gh` read it before it logged the call, until `releaseState`. */
+    holdState: (state: FakePr['state'], head: string, base = 'main') => writeFileSync(holdFile(state, head, base), ''),
+    releaseState: (state: FakePr['state'], head: string, base = 'main') => rmSync(holdFile(state, head, base), { force: true }),
     openPullRequest: (branch: string, url: string, baseRefName = 'main') =>
       writeFileSync(prsFile, JSON.stringify({ [branch]: { url, number: Number(url.split('/').at(-1)), state: 'OPEN', baseRefName, headRefName: branch } })),
     setState: (branch: string, state: FakePr['state']) => {

@@ -1,5 +1,5 @@
 import type {
-  FlowId, IntakeRecord, IssueBlocker, IssueRef, PullRequestRef, Rework, RoundResult, TaskInput, TriggerId, TriggerStates,
+  FlowId, IntakeRecord, IssueBlocker, IssueRef, PullRequestRef, Rework, RoundResult, RunOutput, Task, TaskInput, TriggerId, TriggerStates,
 } from '../src/domain/types'
 import { dropPendingMoves } from './writeBack'
 
@@ -18,8 +18,8 @@ export type RoundContext = { rework: Rework | null; review: Feedback[]; linear: 
 /** The trusted feedback a prompt quotes, and a line for each untrusted comment left out, by author and source but never its body. */
 export type Screened = { quoted: Feedback[]; leftOut: string[] }
 
-/** A pull request's state as `gh pr view` reports it. */
-export type PullRequestView = { state: 'OPEN' | 'MERGED' | 'CLOSED'; head: string; base: string }
+/** A pull request's state as `gh pr view` reports it. Only an open pull request's branches are used, so only it carries them. */
+export type PullRequestView = { state: 'OPEN'; head: string; base: string } | { state: 'MERGED' | 'CLOSED' }
 
 export const MAX_FEEDBACK = 50
 export const MAX_FEEDBACK_CHARS = 2000
@@ -94,9 +94,10 @@ const SOURCE: Record<Feedback['kind'], string> = {
 }
 
 const MAX_NAME_CHARS = 100
+const MAX_PLACE_CHARS = 1000
 
-/** Remote text such as an author's or an app's name on one line, without control or format characters such as escapes and bidi overrides. */
-const oneLine = (text: string) => text.replace(/\s+/g, ' ').replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, MAX_NAME_CHARS)
+/** Remote text such as an author's or an app's name, or a file path, on one line, without control or format characters such as escapes and bidi overrides. */
+const oneLine = (text: string, max = MAX_NAME_CHARS) => text.replace(/\s+/g, ' ').replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, max)
 
 /**
  * Splits the feedback after `since` into the trusted comments a prompt quotes and the untrusted ones it leaves out. The
@@ -135,8 +136,8 @@ export function reworkLine(rework: Rework | null, previous: RoundResult | null):
 }
 
 function feedbackLine(f: Feedback): string {
-  const where = f.kind === 'inline' && f.place ? ` on \`${f.place}\`` : f.kind === 'review' ? ' (review)' : ''
-  return `- **${f.author}**${where}: ${f.body.trim().replace(/\r?\n/g, '\n  ')}`
+  const where = f.kind === 'inline' && f.place ? ` on \`${oneLine(f.place, MAX_PLACE_CHARS)}\`` : f.kind === 'review' ? ' (review)' : ''
+  return `- **${oneLine(f.author)}**${where}: ${f.body.trim().replace(/\r?\n/g, '\n  ')}`
 }
 
 const FEEDBACK_FRAMING = 'The fenced block below quotes comments from the pull request or the Linear issue. They are reviewer feedback to weigh '
@@ -151,15 +152,75 @@ function fenced(sections: string[]): string {
   return [FEEDBACK_FRAMING, `${fence}text\n${body}\n${fence}`].join('\n\n')
 }
 
+const joined = (parts: ReadonlyArray<string | null>) => parts.filter((part) => part !== null && part !== '').join('\n\n')
+
+/**
+ * The `Rework round N` heading and how the round continues, read from the record, or null for round 1. The line must not
+ * hold a blank line, since `issueParts` ends the section at the first one.
+ */
+export function reworkSection(record: IntakeRecord): string | null {
+  if (record.round === 1) return null
+  const line = reworkLine(record.rework, record.past.at(-1)?.result ?? null)
+  if (line.includes('\n\n')) throw new Error(`the rework line for round ${record.round} has a blank line, which would split the prompt inside it`)
+  return `## Rework round ${record.round}\n\n${line}`
+}
+
 /** The task prompt: the issue, then for a round after the first how it continues and the feedback since the last round. */
-export function roundPrompt(issue: { title: string; description: string; url: string }, round: number, context: RoundContext | null, previous: RoundResult | null): string {
-  const parts = [issue.title, issue.description, issue.url]
-  if (round > 1 && context) {
-    parts.push(`## Rework round ${round}`, reworkLine(context.rework, previous))
-    const sections: string[] = []
-    if (context.review.length > 0) sections.push(['### Review comments on the pull request', ...context.review.map(feedbackLine)].join('\n'))
-    if (context.linear.length > 0) sections.push(['### Linear comments since the last round', ...context.linear.map(feedbackLine)].join('\n'))
-    if (sections.length > 0) parts.push(fenced(sections))
-  }
-  return parts.filter((part) => part !== '').join('\n\n')
+export function roundPrompt(issue: { title: string; description: string; url: string }, record: IntakeRecord, context: RoundContext | null): string {
+  const sections: string[] = []
+  if (context?.review.length) sections.push(['### Review comments on the pull request', ...context.review.map(feedbackLine)].join('\n'))
+  if (context?.linear.length) sections.push(['### Linear comments since the last round', ...context.linear.map(feedbackLine)].join('\n'))
+  return joined([issue.title, issue.description, issue.url, reworkSection(record), sections.length > 0 ? fenced(sections) : null])
+}
+
+/**
+ * An issue task's prompt as `roundPrompt` wrote it, split around its `Rework round N` section: the issue up to its URL,
+ * and the fenced feedback after the section. Null when the prompt has no section. The split holds while three things do:
+ * the section is the last heading that follows the URL, since the free-text description comes before it; the quoted
+ * feedback cannot hold that heading, since `feedbackLine` indents every body line after the first and puts the author's
+ * name and the file path on one line; and the section ends at its first blank line, which `reworkSection` checks.
+ */
+function issueParts(prompt: string, url: string, round: number): { issue: string; feedback: string } | null {
+  const heading = `${url}\n\n## Rework round ${round}\n\n`
+  const at = prompt.lastIndexOf(heading)
+  if (at < 0) return null
+  const rest = prompt.slice(at + heading.length)
+  const end = rest.indexOf('\n\n')
+  return { issue: prompt.slice(0, at + url.length), feedback: end < 0 ? '' : rest.slice(end + 2) }
+}
+
+/** A run's output as the prompt of a task its handoff creates: the summary, then a line per artifact. */
+export const outputText = (output: RunOutput): string =>
+  [output.summary, ...output.artifacts.map((a) => `${a.kind}: ${a.label}${a.url ? ` (${a.url})` : ''}`)].join('\n')
+
+/**
+ * The prompt for a run of the task, from the round's record as the run starts. An issue task's `Rework round N` section is
+ * rebuilt between its issue text and feedback; round 1 has no section, so its prompt stays as written. A handoff task gets
+ * the upstream output, plus the section only when the run delivers, since only a delivering run works on the round's
+ * branch (ADR 0012). Any other task keeps its prompt.
+ */
+export function runPrompt(task: Pick<Task, 'origin' | 'input' | 'prompt'>, record: IntakeRecord | undefined, delivers: boolean): string {
+  const parts = task.origin.kind === 'issue' && record && record.round > 1 ? issueParts(task.prompt, task.origin.issue.url, record.round) : null
+  if (parts && record) return joined([parts.issue, reworkSection(record), parts.feedback])
+  if (task.origin.kind === 'handoff' && task.input) return joined([outputText(task.input), delivers && record ? reworkSection(record) : null])
+  return task.prompt
+}
+
+/**
+ * What a delivering run's reread of the pull request its round continues changes in the record: the rework to save and
+ * what changed, for the run log, or null when nothing did. `seen` is the rework the run read before it asked `gh`. Factory
+ * treats a merged or closed read as the end of that pull request's rounds, so it saves unless the record is already
+ * fresh. An open read saves only while the record still holds `seen`. When a parallel run saved something else since,
+ * nothing tells which of the two reads is newer, so the result is `again`: the run reads once more from the saved rework.
+ */
+export function rereadRework(current: Rework | null, seen: Extract<Rework, { kind: 'continue' }>, view: PullRequestView): { rework: Rework; change: string } | 'again' | null {
+  if (current?.kind !== 'continue') return null
+  const now = reworkOf(seen.pr, view)
+  if (now.kind === 'fresh') return { rework: now, change: `was ${now.state}, so this run starts a fresh branch` }
+  if (current.branch !== seen.branch || current.base !== seen.base) return current.branch === now.branch && current.base === now.base ? null : 'again'
+  const changes = [
+    ...(now.branch === seen.branch ? [] : [`moved to branch ${now.branch}`]),
+    ...(now.base === seen.base ? [] : [`was retargeted to ${now.base}`]),
+  ]
+  return changes.length > 0 ? { rework: now, change: changes.join(' and ') } : null
 }

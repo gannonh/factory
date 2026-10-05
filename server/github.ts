@@ -38,13 +38,27 @@ async function list(host: string, path: string): Promise<Json[]> {
   return out.split('\n').filter((line) => line.trim() !== '').map((line) => JSON.parse(line) as unknown).filter(isJson)
 }
 
+/**
+ * Control, format, line separator and paragraph separator characters, except the zero-width joiner that emoji use. Git
+ * accepts format characters in a branch name. Refusing them stops bidi overrides, which make a name read in a different
+ * order from the branch Factory pushes to, and tag characters, which spell text a model reads. Flag emoji built from tag
+ * characters are refused too. Other invisible characters still pass, such as variation selectors, U+3164, U+034F and a
+ * lone zero-width joiner (ADR 0012).
+ */
+const UNSAFE_CHARS = /(?!\u200D)[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu
+
 export async function viewPullRequest(url: string): Promise<PullRequestView> {
   if (!PR_URL.test(url)) throw new Error(`not a pull request URL: ${url}`)
   const view: unknown = JSON.parse(await gh(['pr', 'view', url, '--json', 'state,headRefName,baseRefName']))
   if (!isJson(view) || (view.state !== 'OPEN' && view.state !== 'MERGED' && view.state !== 'CLOSED') || typeof view.headRefName !== 'string' || typeof view.baseRefName !== 'string') {
     throw new Error(`gh pr view: unexpected answer for ${url}`)
   }
-  return { state: view.state, head: view.headRefName, base: view.baseRefName }
+  if (view.state !== 'OPEN') return { state: view.state }
+  for (const [which, name] of [['head', view.headRefName], ['base', view.baseRefName]]) {
+    const escaped = name.replace(UNSAFE_CHARS, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`)
+    if (escaped !== name) throw new Error(`gh pr view: the pull request's ${which} branch has a control, format or line break character: ${escaped}`)
+  }
+  return { state: 'OPEN', head: view.headRefName, base: view.baseRefName }
 }
 
 /**
