@@ -425,6 +425,25 @@ test('a pull request for a GitHub origin names that repository', async () => {
   ])
 })
 
+test('a pull request whose branch moves while its commit is pushed fails the run instead of reporting a delivery', async () => {
+  const repo = repository()
+  const workdir = join(repo.root, 'wt')
+  git(repo.root, 'worktree', 'add', '--quiet', '-b', 'feature-x', workdir, 'origin/main')
+  const initialHead = git(workdir, 'rev-parse', 'HEAD')
+  commitFile(workdir, 'change.txt', 'change')
+  const pr = { kind: 'pr' as const, label: 'Pull request #41', url: 'https://github.com/example/factory/pull/41' }
+  const answers = [
+    { kind: 'continue' as const, pr, branch: 'feature-x', base: 'main' },
+    { kind: 'continue' as const, pr, branch: 'feature-y', base: 'main' },
+  ]
+  const recheck: Recheck = { request: async () => answers.shift()!, proceed: () => true }
+
+  await expect(deliver({ root: repo.root, path: workdir, initialHead, delivery: { kind: 'continue', branch: 'feature-x', base: 'main' } }, { title: 'T', body: 'B' }, recheck))
+    .rejects.toThrow('delivery failed: pull request #41 moved to branch feature-y while this run delivered')
+  // The push to the branch read before the move still happened; the retry delivers on the pull request's current branch.
+  expect(git(repo.origin, 'rev-parse', 'refs/heads/feature-x')).toBe(git(workdir, 'rev-parse', 'HEAD'))
+})
+
 test('two runs preparing the same branch at once get distinct names', async () => {
   const repo = repository()
   const [a, b] = await Promise.all([

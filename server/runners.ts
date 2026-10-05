@@ -392,8 +392,12 @@ export async function deliver(prepared: PreparedWorkdir, pr: { title: string; bo
   const now = await recheck.request()
   if (now.kind === 'continue') {
     await push(now.branch)
-    // A merge that lands between the read and the push still takes the push, so only a pull request still open got it.
-    if ((await recheck.request()).kind !== 'continue') throw new Error(`delivery failed: pull request #${PR_URL.exec(now.pr.url)?.[1] ?? '?'} closed while this run delivered`)
+    // A merge or a head move that lands between the read and the push still takes the push, so only the pull request
+    // that is still open on the branch just pushed counts.
+    const after = await recheck.request()
+    const number = PR_URL.exec(now.pr.url)?.[1] ?? '?'
+    if (after.kind !== 'continue') throw new Error(`delivery failed: pull request #${number} closed while this run delivered`)
+    if (after.branch !== now.branch) throw new Error(`delivery failed: pull request #${number} moved to branch ${after.branch} while this run delivered`)
     return { kind: 'pull-request', branch: now.branch, base: now.base, initialHead: runStart, head, pr: now.pr }
   }
   const fresh = await freshDelivery(prepared, runStart, head, now.branch, [...now.retired, plan.branch], recheck.proceed)
