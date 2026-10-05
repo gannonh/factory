@@ -40,8 +40,10 @@ async function list(host: string, path: string): Promise<Json[]> {
 
 /**
  * Control, format, line separator and paragraph separator characters, except the zero-width joiner that emoji use. Git
- * accepts format characters such as bidi overrides, zero-width spaces and tag characters in a branch name, so a name
- * with one would read differently in a prompt, log or note from the branch Factory pushes to, or hide text in the prompt.
+ * accepts format characters in a branch name. Refusing them stops bidi overrides, which make a name read in a different
+ * order from the branch Factory pushes to, and tag characters, which spell text a model reads. Flag emoji built from tag
+ * characters are refused too. Other invisible characters still pass, such as variation selectors, U+3164, U+034F and a
+ * lone zero-width joiner (ADR 0012).
  */
 const UNSAFE_CHARS = /(?!\u200D)[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu
 

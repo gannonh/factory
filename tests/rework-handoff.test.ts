@@ -292,7 +292,7 @@ test.each([
   gh.releaseState('OPEN', 'eng-1-fix-login', landsFirst)
   await until(() => pullRequestLogs(f).length === 1)
   // When Coder lands first it delivers, and its push moves origin/eng-1-fix-login in the shared clone. Reviewer's fetch
-  // waits for that push to end, since the two racing is a separate defect.
+  // waits for that push to end, since the two racing is a separate defect (KAT-3667). Remove this wait when it is fixed.
   if (first === 'newer') await until(() => lastRunOf(f, CODER).status !== 'running')
   gh.releaseState('OPEN', 'eng-1-fix-login', landsSecond)
   const second = lastRunOf(f, first === 'older' ? CODER : REVIEWER)

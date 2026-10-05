@@ -138,6 +138,30 @@ test('closing while a working directory is prepared never starts the process', a
   expect(starts).toBe(0)
 })
 
+test('a local run whose prompt does not change publishes once during setup, when its working directory is ready', async () => {
+  const root = temporaryRoot()
+  let starts = 0
+  const runner: Runner = { execution: 'local', start: () => { starts += 1 }, kill: () => {} }
+  const server = new MockServer({ manual: true, localRoot: root, localRunner: runner })
+  try {
+    for (const trigger of Object.values(server.snapshot().triggers)) server.updateTrigger(trigger.id, { enabled: false })
+    const coder = server.snapshot().agents['ag-coder' as AgentId]
+    server.removeEdges(Object.values(server.snapshot().edges).filter((edge) => edge.kind === 'runs-in' && edge.source === coder.id).map((edge) => edge.id))
+    server.connect(coder.id, server.snapshot().sandboxes['sb-local-1' as SandboxId].id, 'runs-in')
+    const taskId = server.enqueueTask(coder.id, { title: 'same prompt', prompt: 'Make the change', priority: 'normal' })
+    server.advance(1)
+    const published: { revision: number; workdirLogged: boolean; prompt: string }[] = []
+    let initial = true
+    server.subscribe((world) => {
+      if (initial) initial = false
+      else published.push({ revision: server.revision(), workdirLogged: world.logs.some((line) => line.msg.startsWith('working directory: ')), prompt: world.tasks[taskId].prompt })
+    })
+    const before = server.revision()
+    await until(() => starts === 1)
+    expect(published).toEqual([{ revision: before + 1, workdirLogged: true, prompt: 'Make the change' }])
+  } finally { server.close() }
+})
+
 function waitingProcess(timeoutMs = 120_000, options: { linear?: ReturnType<typeof createLinearClient>; clock?: () => number } = {}) {
   const root = temporaryRoot()
   const executable = join(root, 'fake-claude')
