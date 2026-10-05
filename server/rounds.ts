@@ -105,11 +105,11 @@ const MAX_PLACE_CHARS = 1000
 const oneLine = (text: string, max = MAX_NAME_CHARS) => text.replace(/\s+/g, ' ').replace(/[\p{Cc}\p{Cf}]/gu, '').trim().slice(0, max)
 
 /**
- * Splits the feedback after `since` into the trusted comments a prompt quotes and the untrusted ones it leaves out. The
- * newest MAX_LEFT_OUT untrusted comments are named, and one line counts the rest.
+ * Splits the feedback after `since` into the trusted comments a prompt quotes and the untrusted ones it leaves out. An
+ * untrusted comment with no text, such as an outsider's bare approval, is named too. The newest MAX_LEFT_OUT untrusted comments are named, and one line counts the rest.
  */
 export function screen(feedback: readonly Feedback[], since: number): Screened {
-  const untrusted = feedback.filter((f): f is Feedback & { untrusted: string } => f.untrusted !== null && f.at > since && f.body.trim() !== '').sort((a, b) => a.at - b.at)
+  const untrusted = feedback.filter((f): f is Feedback & { untrusted: string } => f.untrusted !== null && f.at > since).sort((a, b) => a.at - b.at)
   const named = untrusted.slice(-MAX_LEFT_OUT).map((f) => `${SOURCE[f.kind]} by ${oneLine(f.author)} (${oneLine(f.untrusted)})`)
   const unnamed = untrusted.length - named.length
   return {
