@@ -467,7 +467,9 @@ test('two runs preparing the same branch at once get distinct names', async () =
     prepareWorkdir(repo.root, 'run-a' as RunId, { kind: 'new', branch: 'eng-1-fix-login', retired: [] }),
     prepareWorkdir(repo.root, 'run-b' as RunId, { kind: 'new', branch: 'eng-1-fix-login', retired: [] }),
   ])
-  expect([a.delivery?.branch, b.delivery?.branch]).toEqual(['eng-1-fix-login', 'eng-1-fix-login-2'])
+  // The per-repository queue fully serializes the name choice, so the two runs always get distinct names, but which
+  // prepare reaches the queue first depends on OS scheduling of the git/fetch steps before it, so compare as a set.
+  expect([a.delivery?.branch, b.delivery?.branch].sort()).toEqual(['eng-1-fix-login', 'eng-1-fix-login-2'])
 })
 
 test('a git or gh step that times out reports the timeout, not its last output line', () => {
