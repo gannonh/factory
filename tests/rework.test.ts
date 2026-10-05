@@ -2,7 +2,9 @@
  * Rework rounds (ADR 0012): an issue moved back to the pickup state after delivery. See `rework-fixture.ts` for the
  * repository, fake `gh` and fake Linear behind every test.
  */
-import { existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { expect, test } from 'vitest'
 import { createApi } from '../server/api'
 import { linearFeedback, rereadRework, reworkable, reworkSection, screen, type Feedback } from '../server/rounds'
@@ -12,8 +14,8 @@ import { LINEAR_POLL_MS, roundOfFlow, type EdgeId, type IntakeRecord, type Issue
 import { makeFixture, memoryStore, RNG } from './fixture'
 import {
   CODER, CONTINUE_41, ENG_1, FRAMING, ISSUE_URL, LIFECYCLE, MERGED_41, NO_STATES, PR_41, PR_42, WALL, agentRunner, clock, coderRuns, control, factory, gh, git,
-  issue, issueTasks, linear, moveIssue, nextRun, poll, prViews, pullRequestLogs, record, repository, roundTwoTaken, seen, setWall, short, until,
-  workdirOf, type Factory,
+  issue, issueTasks, linear, moveIssue, nextRun, poll, prViews, prViewExits, pullRequestLogs, record, repository, roundTwoTaken, seen, setWall, short, tempDir,
+  until, workdirOf, type Factory,
 } from './rework-fixture'
 
 test('a delivered issue moved back to Todo reworks on the same pull request with the review and Linear feedback, then a merged PR starts fresh', async () => {
@@ -288,8 +290,10 @@ test('a run cancelled while it reads its pull request prepares no worktree and l
   await until(() => prViews() === views + 1)
   const run = coderRuns(f)[1]
   f.api.tasks.cancel(run.taskId)
+  const exits = prViewExits()
   gh.releaseView()
   await f.api.sim.settled()
+  expect(prViewExits()).toBe(exits + 1)
   expect(coderRuns(f)[1].status).toBe('cancelled')
   expect(existsSync(workdirOf(f, run))).toBe(false)
   expect(git(repo.root, 'branch', '--list', 'eng-1-fix-login-*')).toBe('')
@@ -310,14 +314,56 @@ test('a server closed while a run reads its merged pull request changes and save
   f.api.sim.advance(1)
   await until(() => prViews() === views + 1)
   const run = coderRuns(f)[1]
+  const exits = prViewExits()
   const closing = f.server.close()
   gh.releaseView()
   await closing
+  expect(prViewExits()).toBe(exits + 1)
   expect(coderRuns(f)[1].status).toBe('running')
   expect(record(f).rework).toMatchObject({ kind: 'continue' })
   expect(existsSync(workdirOf(f, run))).toBe(false)
   const saved = JSON.parse(store.text!) as { intake: Record<string, IntakeRecord>; runs: Record<string, Run> }
   expect([saved.intake[ENG_1].rework?.kind, saved.runs[run.id].status]).toEqual(['continue', 'running'])
+})
+
+/** A `git` first on PATH that waits before every fetch while it is held, so a test can act while a worktree is prepared. */
+function heldGit() {
+  const dir = tempDir()
+  const bin = join(dir, 'bin')
+  mkdirSync(bin)
+  const [hold, waiting] = [join(dir, 'hold'), join(dir, 'waiting')]
+  const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
+  writeFileSync(join(bin, 'git'), `#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = fetch ]; then
+    if [ -e '${hold}' ]; then touch '${waiting}'; fi
+    while [ -e '${hold}' ]; do sleep 0.02; done
+    break
+  fi
+done
+exec '${real}' "$@"
+`)
+  chmodSync(join(bin, 'git'), 0o755)
+  writeFileSync(hold, '')
+  return { bin, waiting: () => existsSync(waiting), release: () => rmSync(hold, { force: true }) }
+}
+
+test('a server closed while its run prepares the worktree never starts the agent', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner())
+  await roundTwoTaken(f)
+
+  const held = heldGit()
+  process.env.PATH = `${held.bin}:${process.env.PATH}`
+  f.api.sim.advance(1)
+  await until(held.waiting)
+
+  const closing = f.server.close()
+  held.release()
+  await closing
+  expect(seen.map((t) => t.title)).toEqual(['ENG-1 Fix login'])
+  expect(coderRuns(f)[1].status).toBe('running')
 })
 
 test('a round quotes only trusted authors, fences their feedback, and names each comment it left out in the run log without its body', async () => {
