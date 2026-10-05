@@ -32,13 +32,15 @@ export function fakeGh(dir = mkdtempSync(join(tmpdir(), 'factory-gh-'))) {
   writeFileSync(join(bin, 'gh'), `#!/usr/bin/env node
 const fs = require('node:fs')
 const argv = process.argv.slice(2)
+// Captured now, before a workdir failure deletes the working directory; the exit hook must not call process.cwd() after that.
+const cwd = process.cwd()
 const read = (file) => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {}
 const prs = read(${JSON.stringify(prsFile)})
 const allFeedback = read(${JSON.stringify(feedbackFile)})
 // Logged only once the state is read, so a test that sees the call can change the state without racing the read.
-fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ cwd: process.cwd(), argv }) + '\\n')
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ cwd, argv }) + '\\n')
 // Logged on exit, so a test that sees the exit knows the call finished, not just started.
-process.on('exit', () => fs.appendFileSync(${JSON.stringify(exitLog)}, JSON.stringify({ cwd: process.cwd(), argv }) + '\\n'))
+process.on('exit', () => fs.appendFileSync(${JSON.stringify(exitLog)}, JSON.stringify({ cwd, argv }) + '\\n'))
 const failing = (op) => {
   const marker = ${JSON.stringify(dir)} + '/fail-' + op
   if (!fs.existsSync(marker)) return false
