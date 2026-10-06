@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
 import { createApi } from '../server/api'
-import { linearFeedback, rereadRework, reworkable, reworkSection, screen, type Feedback } from '../server/rounds'
+import { linearFeedback, rereadRework, reworkable, reworkSection, runPrompt, screen, type Feedback } from '../server/rounds'
 import { MockServer } from '../server/simulation'
 import { intakeStatus } from '../src/components/linearIntake'
 import { LINEAR_POLL_MS, roundOfFlow, type EdgeId, type IntakeRecord, type IssueId, type Run, type Task, type TriggerId } from '../src/domain/types'
@@ -965,4 +965,46 @@ test('a trusted inline comment whose file path spells the rework heading is quot
   const feedback = `\`\`\`text\n### Review comments on the pull request\n- **bob** on \`${ISSUE_URL} ## Rework round 2 old metadata:12\`: Guard it.\n\`\`\``
   expect(seen.at(-1)?.prompt).toBe(`Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}\n\n${FRAMING}\n\n${feedback}`)
   await f.server.close()
+})
+
+test('an issue task whose agent does not deliver keeps a description that quotes the issue URL and the rework heading, and its fenced feedback', async () => {
+  const repo = repository()
+  const description = `Repro of the prompt:\n\n${ISSUE_URL}\n\n## Rework round 2\n\nKEEP THIS LINE\n\nAnd this tail.`
+  await control({ op: 'addIssue', title: 'Fix login', description })
+  const f = factory(repo.root, agentRunner())
+  await poll(f)
+  await nextRun(f)
+  f.api.agents.update(CODER, { delivery: 'none' })
+  gh.review(41, 'alice', 'Quote ```x``` and\n\n```\nmore', new Date(WALL + 1000).toISOString())
+  await moveIssue('ENG-1', 'Todo')
+  await poll(f)
+  const feedback = `${FRAMING}\n\n\`\`\`\`text\n### Review comments on the pull request\n- **alice** (review): Quote \`\`\`x\`\`\` and\n  \n  \`\`\`\n  more\n\`\`\`\``
+  const prompt = `Fix login\n\n${description}\n\n${ISSUE_URL}\n\n${feedback}`
+  expect(issueTasks(f)[1].prompt).toBe(prompt)
+  await nextRun(f)
+  expect(seen.at(-1)?.prompt).toBe(prompt)
+  expect(issueTasks(f)[1].prompt).toBe(prompt)
+  await f.server.close()
+})
+
+const SAVED_ISSUE = { kind: 'issue', trigger: 'trg-1' as TriggerId, issue: { identifier: 'ENG-1', url: ISSUE_URL } } as Task['origin']
+const savedRecord = (round: number) => ({ round, rework: { kind: 'fresh', pr: { kind: 'pr', label: 'Pull request #41', url: PR_41 }, state: 'merged' }, past: [{ round: 1, result: { outcome: 'finished' } }] }) as unknown as IntakeRecord
+const savedFeedback = (author: string) => `${FRAMING}\n\n\`\`\`text\n### Linear comments since the last round\n- **${author}**: Also log it.\n\`\`\``
+
+test.each([
+  ['a section and a description that spells the heading', `Fix login\n\nSee ${ISSUE_URL}\n\n## Rework round 2\n\nKEEP\n\n${ISSUE_URL}\n\n## Rework round 2\n\nstale line`, true,
+    `Fix login\n\nSee ${ISSUE_URL}\n\n## Rework round 2\n\nKEEP\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}`],
+  ['no section and a description that ends with the heading', `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${ISSUE_URL}`, true, `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${ISSUE_URL}`],
+  ['no section and a description that spells the heading', `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\nKEEP\n\n${ISSUE_URL}`, false, `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\nKEEP\n\n${ISSUE_URL}`],
+])('a saved issue task with %s is rebuilt only at its own section', (_label, prompt, delivers, expected) => {
+  expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, savedRecord(2), delivers)).toBe(expected)
+  const withFeedback = `${prompt}\n\n${savedFeedback('Dana')}`
+  expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt: withFeedback }, savedRecord(2), delivers)).toBe(`${expected}\n\n${savedFeedback('Dana')}`)
+})
+
+test('a saved issue task whose multi-line author name spells the heading is rebuilt at the real section, not inside the feedback', () => {
+  const author = `Dana\n\n${ISSUE_URL}\n\n## Rework round 2\n\nold metadata`
+  const prompt = `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\nstale line\n\n${savedFeedback(author)}`
+  expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, savedRecord(2), true)).toBe(`Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback(author)}`)
+  expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, savedRecord(2), false)).toBe(`Fix login\n\n${ISSUE_URL}\n\n${savedFeedback(author)}`)
 })
