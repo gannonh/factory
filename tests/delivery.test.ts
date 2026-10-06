@@ -497,6 +497,116 @@ test('two runs preparing the same branch at once get distinct names', async () =
   expect([a.delivery?.branch, b.delivery?.branch].sort()).toEqual(['eng-1-fix-login', 'eng-1-fix-login-2'])
 })
 
+const PR_41 = { kind: 'pr' as const, label: 'Pull request #41', url: 'https://github.com/example/factory/pull/41' }
+const continuing = (branch: string): Recheck => ({ request: async () => ({ kind: 'continue', pr: PR_41, branch, base: 'main' }), proceed: () => true })
+const resume = (root: string, runId: string, branch: string) => prepareWorkdir(root, runId as RunId, { kind: 'continue', pr: PR_41, branch, base: 'main' })
+
+function originHook(repo: { origin: string }, name: 'pre-receive' | 'post-receive', script: string) {
+  writeFileSync(join(repo.origin, 'hooks', name), `#!/bin/sh\n${script}\n`)
+  chmodSync(join(repo.origin, 'hooks', name), 0o755)
+}
+
+test('a Coder and a Reviewer continuing one pull request both deliver while their pushes and fetches overlap, across 60 pairs', async () => {
+  const repo = repository()
+  const pairs = Array.from({ length: 60 }, (_, i) => `feature-${i}`)
+  // A pause after origin takes a push widens the window in which a push has updated origin but not yet the clone's
+  // remote-tracking ref, so a fetch of the same ref that starts then fails on every run of the race, not on one in a few.
+  originHook(repo, 'post-receive', 'sleep 0.05')
+  for (const branch of pairs) git(repo.seed, 'push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`)
+  const coders = await Promise.all(pairs.map((branch, i) => resume(repo.root, `coder-${i}`, branch)))
+  coders.forEach((coder, i) => commitFile(coder.path, 'coder.txt', `coder change ${i}`))
+  const delivered: Array<{ coder: string; reviewer: string }> = []
+  const failures: string[] = []
+  // Four lanes of pairs run side by side. In each pair the Reviewer's start is queued first and the Coder starts delivering
+  // 0 to 80 ms later, so across the pairs the push lands at every point of the Reviewer's fetch.
+  await Promise.all([0, 1, 2, 3].map(async (lane) => {
+    for (let i = lane; i < pairs.length; i += 4) {
+      const branch = pairs[i]
+      const starting = resume(repo.root, `reviewer-${i}`, branch)
+      await new Promise((resolve) => setTimeout(resolve, (i % 9) * 10))
+      const [coder, reviewer] = await Promise.allSettled([deliver(coders[i], { title: 'T', body: 'B' }, continuing(branch)), starting])
+      if (coder.status === 'rejected') { failures.push(String(coder.reason)); continue }
+      if (reviewer.status === 'rejected') { failures.push(String(reviewer.reason)); continue }
+      // The Reviewer may have started before the Coder's push, so its agent takes the Coder's commit first, as any agent
+      // that finds its branch behind origin does, then adds its own and delivers.
+      git(reviewer.value.path, 'fetch', '--quiet', '--refmap=', 'origin', `refs/heads/${branch}`)
+      git(reviewer.value.path, 'merge', '--quiet', '--ff-only', 'FETCH_HEAD')
+      commitFile(reviewer.value.path, 'reviewer.txt', `reviewer change ${i}`)
+      const second = await deliver(reviewer.value, { title: 'T', body: 'B' }, continuing(branch)).then((result) => result.kind, (error: unknown) => { failures.push(String(error)); return 'failed' })
+      delivered.push({ coder: coder.value.kind, reviewer: second })
+    }
+  }))
+  expect(failures).toEqual([])
+  expect(delivered).toEqual(Array.from({ length: 60 }, () => ({ coder: 'pull-request', reviewer: 'pull-request' })))
+  pairs.forEach((branch, i) => expect(git(repo.origin, 'log', '--format=%s', `main..refs/heads/${branch}`)).toBe(`reviewer change ${i}\ncoder change ${i}`))
+  expect(git(repo.root, 'for-each-ref', 'refs/factory')).toBe('')
+}, 180_000)
+
+test('deliveries to different branches in one root push in parallel', async () => {
+  const repo = repository()
+  const branches = ['alpha', 'beta', 'gamma', 'delta']
+  for (const branch of branches) git(repo.seed, 'push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`)
+  const runs = await Promise.all(branches.map((branch) => resume(repo.root, `run-${branch}`, branch)))
+  runs.forEach((run, i) => commitFile(run.path, 'change.txt', `change ${branches[i]}`))
+  // Each push waits in origin until all four are there at once, so a push that has to wait for another one's turn times out and fails.
+  const barrier = join(tempDir(), 'barrier')
+  originHook(repo, 'pre-receive', `mkdir -p ${barrier}\ntouch ${barrier}/$$\nfor i in $(seq 100); do\n  [ "$(ls ${barrier} | wc -l)" -ge 4 ] && exit 0\n  sleep 0.05\ndone\necho 'pushes did not overlap' >&2\nexit 1`)
+  const results = await Promise.allSettled(runs.map((run, i) => deliver(run, { title: 'T', body: 'B' }, continuing(branches[i]))))
+  expect(results.map((result) => result.status === 'fulfilled' ? result.value.kind : String(result.reason))).toEqual(['pull-request', 'pull-request', 'pull-request', 'pull-request'])
+}, 30_000)
+
+test("a slow push to one branch does not hold up a run starting on another branch's pull request", async () => {
+  const repo = repository()
+  const held = join(tempDir(), 'held')
+  const release = `${held}.release`
+  originHook(repo, 'pre-receive', `while read old new ref; do\n  if [ "$ref" = refs/heads/slow ]; then\n    touch ${held}\n    for i in $(seq 200); do [ -e ${release} ] && break; sleep 0.05; done\n  fi\ndone`)
+  for (const branch of ['slow', 'other']) git(repo.seed, 'push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`)
+  const slow = await resume(repo.root, 'run-slow', 'slow')
+  commitFile(slow.path, 'slow.txt', 'slow change')
+  const pushing = deliver(slow, { title: 'T', body: 'B' }, continuing('slow'))
+  for (let i = 0; i < 200 && !existsSync(held); i++) await new Promise((resolve) => setTimeout(resolve, 25))
+  expect(existsSync(held)).toBe(true)
+  const started = await Promise.race([
+    resume(repo.root, 'run-other', 'other').then(() => 'prepared'),
+    new Promise<string>((resolve) => setTimeout(() => resolve('still waiting'), 3000)),
+  ])
+  writeFileSync(release, '')
+  expect(started).toBe('prepared')
+  expect((await pushing).kind).toBe('pull-request')
+}, 30_000)
+
+test('a ref a crashed run left under refs/factory is deleted by the next preparation, and a pull request branch ref it did not touch stays', async () => {
+  const repo = repository()
+  git(repo.seed, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature')
+  const main = git(repo.root, 'rev-parse', 'HEAD')
+  git(repo.root, 'update-ref', 'refs/factory/killed-run/0', main)
+  git(repo.root, 'update-ref', 'refs/factory/killed-run/1', main)
+  git(repo.root, 'pack-refs', '--all')
+  git(repo.root, 'update-ref', 'refs/factory/killed-run-2/0', main)
+  git(repo.root, 'update-ref', 'refs/heads/kept', main)
+  await resume(repo.root, 'next-run', 'feature')
+  expect(git(repo.root, 'for-each-ref', '--format=%(refname)', 'refs/factory')).toBe('')
+  expect(git(repo.root, 'for-each-ref', '--format=%(refname)', 'refs/heads/kept')).toBe('refs/heads/kept')
+})
+
+test("a preparation in a linked worktree of the repository leaves the refs/factory ref another root's fetch is still reading", async () => {
+  const repo = repository()
+  git(repo.seed, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature')
+  const linked = join(tempDir(), 'linked')
+  git(repo.root, 'worktree', 'add', '--quiet', '--detach', linked)
+  const ids = /^refs\/factory\/slow-run\//
+  // Git holds the slow run's fetch for a second after it wrote its refs, so the other root's preparation starts then.
+  const hook = join(repo.root, '.git', 'hooks', 'reference-transaction')
+  writeFileSync(hook, '#!/bin/sh\n[ "$1" = committed ] && grep -q " refs/factory/slow-run/" && sleep 1\nexit 0\n')
+  chmodSync(hook, 0o755)
+  const slow = resume(repo.root, 'slow-run', 'feature')
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  expect(git(repo.root, 'for-each-ref', '--format=%(refname)', 'refs/factory')).toMatch(ids)
+  await resume(linked, 'other-run', 'feature')
+  expect((await slow).delivery?.branch).toBe('feature')
+  expect(git(repo.root, 'for-each-ref', '--format=%(refname)', 'refs/factory')).toBe('')
+})
+
 test('a git or gh step that times out reports the timeout, not its last output line', () => {
   expect(failureReason(Object.assign(new Error('Command failed'), { killed: true, stderr: 'Creating pull request for x into main\n' }))).toBe('timed out')
   expect(failureReason(Object.assign(new Error('Command failed'), { killed: false, stderr: 'remote: hi\nfatal: unable to access\n' }))).toBe('fatal: unable to access')
