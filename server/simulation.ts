@@ -60,7 +60,7 @@ import { array, boolean, defaulted, id, number, object, oneOf, record } from './
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
 import { LINEAR_URL, createLinearClient, intakeErrorOf, type IssueState, type IssueStatus, type LinearClient, type LinearIssue } from './linear'
 import { cancelRecord, flowAction, flowOutcome, landed, nextWrite, reconcileRecord, workingStates } from './writeBack'
-import { latestOutput, latestPullRequest, linearFeedback, outputText, prNumber, rereadRework, reworkOf, reworkable, roundPrompt, roundTitle, runPrompt, screen, startRound, type RoundContext, type Screened } from './rounds'
+import { feedbackBlock, latestOutput, latestPullRequest, linearFeedback, outputText, prNumber, rereadRework, reworkOf, reworkable, roundPrompt, roundTitle, runPrompt, screen, startRound, type RoundContext, type Screened } from './rounds'
 import { readPullRequest, viewPullRequest } from './github'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
@@ -952,10 +952,11 @@ export class MockServer {
       const states = { pickupState: settings.pickupState, startedState: settings.startedState }
       const next = startRound(record, issue.ref, {
         trigger: id, flowId, takenAt: this.clock(), states, blockers: issue.blockers, rework: context?.rework ?? null, leftOut: context?.leftOut ?? [],
+        feedback: feedbackBlock(context ?? null),
       })
       this.enqueueTaskSilently(agentId, {
         title: roundTitle(issue.ref.identifier, issue.title, round),
-        prompt: roundPrompt({ title: issue.title, description: issue.description, url: issue.ref.url, untrusted: issue.untrusted }, next, context ?? null, this.world.agents[agentId].delivery === 'pull-request'),
+        prompt: roundPrompt({ title: issue.title, description: issue.description, url: issue.ref.url, untrusted: issue.untrusted }, next, this.world.agents[agentId].delivery === 'pull-request'),
         priority: issue.priority,
         origin: { kind: 'issue', trigger: id, issue: issue.ref },
         input: record ? latestOutput(record) : null,

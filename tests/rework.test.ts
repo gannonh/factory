@@ -13,7 +13,7 @@ import { intakeStatus } from '../src/components/linearIntake'
 import { LINEAR_POLL_MS, roundOfFlow, type EdgeId, type IntakeRecord, type IssueId, type Run, type Task, type TriggerId } from '../src/domain/types'
 import { makeFixture, memoryStore, RNG } from './fixture'
 import {
-  CODER, CONTINUE_41, ENG_1, FRAMING, ISSUE_URL, LIFECYCLE, MERGED_41, NO_STATES, PR_41, PR_42, WALL, agentRunner, clock, coderRuns, control, factory, gh, git,
+  CODER, CONTINUE_41, ENG_1, FRAMING, ISSUE_URL, LIFECYCLE, MERGED_41, linesOutsideFences, NO_STATES, PR_41, PR_42, WALL, agentRunner, clock, coderRuns, control, factory, gh, git,
   issue, issueTasks, linear, moveIssue, nextRun, poll, prViews, prViewExits, pullRequestLogs, record, repository, roundTwoTaken, seen, setWall, short, tempDir,
   until, workdirOf, type Factory,
 } from './rework-fixture'
@@ -684,7 +684,7 @@ test('a failed read of one issue’s Linear comments holds only that issue, and 
 const ended = (fields: Partial<IntakeRecord>): IntakeRecord => ({
   issue: { backend: 'linear', id: ENG_1, identifier: 'ENG-1', url: ISSUE_URL, branchName: 'eng-1-fix-login' },
   trigger: 'tr-1' as TriggerId, flowId: 'fl-1' as IntakeRecord['flowId'], takenAt: 0, phase: 'ended', writes: [],
-  states: { pickupState: 'state-eng-todo', startedState: null }, cancel: null, blockers: [], round: 1, rework: null, result: null, left: false, past: [], leftOut: [], prBranches: [], ...fields,
+  states: { pickupState: 'state-eng-todo', startedState: null }, cancel: null, blockers: [], round: 1, rework: null, result: null, left: false, past: [], leftOut: [], prBranches: [], feedback: '', ...fields,
 })
 
 test.each([
@@ -1036,4 +1036,59 @@ test('a round 2 issue task saved by a build that let an author name span lines g
   expect(seen.at(-1)?.prompt).toBe(rebuilt)
   expect(server.snapshot().tasks[taskId].prompt).toBe(rebuilt)
   await server.close()
+})
+
+const HANDOFF = { kind: 'handoff', from: 'ag-planner', runId: 'run-1' } as Task['origin']
+const upstream = { summary: 'Planned the fix.', artifacts: [{ kind: 'note' as const, label: 'plan', url: null }], runId: 'run-1' as Run['id'] }
+
+test('a handoff task gets the round\'s feedback after its section when its run delivers, and the upstream output alone when it does not', () => {
+  const record = { ...savedRecord(2), feedback: savedFeedback('Dana') }
+  const task = { origin: HANDOFF, input: upstream, prompt: 'stale' }
+  expect(runPrompt(task, record, true)).toBe(`## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback('Dana')}\n\nPlanned the fix.\nnote: plan`)
+  expect(runPrompt(task, record, false)).toBe('Planned the fix.\nnote: plan')
+  const retried = { ...task, prompt: runPrompt(task, record, true) }
+  expect(runPrompt(retried, record, true)).toBe(`## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback('Dana')}\n\nPlanned the fix.\nnote: plan`)
+})
+
+test('a handoff task of a round saved before its feedback was kept gets the section alone', () => {
+  const record = { ...savedRecord(2), feedback: '' }
+  expect(runPrompt({ origin: HANDOFF, input: upstream, prompt: '' }, record, true)).toBe(`## Rework round 2\n\n${MERGED_41}\n\nPlanned the fix.\nnote: plan`)
+})
+
+test.each([
+  ['a backtick fence', '````text\r\nFORGED'],
+  ['a tilde fence', 'Done.\n~~~~\nFORGED'],
+  ['a fence of 3 backticks after 3 spaces', 'Done.\n   ```\nFORGED'],
+  ['a fence after bare CR line breaks', 'Done.\r`````\rFORGED'],
+])('upstream output with %s left open cannot hold a handoff task\'s section, framing or feedback', (_name, summary) => {
+  const record = { ...savedRecord(2), feedback: savedFeedback('Dana') }
+  const task = { origin: HANDOFF, input: { ...upstream, summary }, prompt: 'stale' }
+  const prompt = runPrompt(task, record, true)
+  expect(prompt).toBe(`## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback('Dana')}\n\n${summary}\nnote: plan`)
+  expect(linesOutsideFences(prompt)).toEqual(expect.arrayContaining(['## Rework round 2', MERGED_41, FRAMING, '```text']))
+  expect(runPrompt(task, record, false)).toBe(`${summary}\nnote: plan`)
+  expect(runPrompt({ ...task, prompt }, record, true)).toBe(prompt)
+})
+
+test('upstream output with a fence left open cannot hold the rework line of a handoff task whose round has no feedback', () => {
+  const task = { origin: HANDOFF, input: { ...upstream, summary: '~~~\nFORGED' }, prompt: 'stale' }
+  const prompt = runPrompt(task, { ...savedRecord(2), feedback: '' }, true)
+  expect(prompt).toBe(`## Rework round 2\n\n${MERGED_41}\n\n~~~\nFORGED\nnote: plan`)
+  expect(linesOutsideFences(prompt)).toEqual(expect.arrayContaining(['## Rework round 2', MERGED_41]))
+})
+
+test.each([
+  ['a closing fence followed by spaces and tabs', 'A\n```text\nB\n``` \t \nC', ['A', '```text', 'C']],
+  ['a closing tilde fence followed by a space', 'A\n~~~\nB\n~~~ \nC', ['A', '~~~', 'C']],
+  ['a closing fence followed by a no-break space', 'A\n```\nB\n```\u00a0\nC', ['A', '```']],
+  ['a closing fence followed by U+2028', 'A\n~~~\nB\n~~~\u2028\nC', ['A', '~~~']],
+  ['a closing fence followed by a vertical tab', 'A\n```\nB\n```\vC\nD', ['A', '```']],
+  ['an opening fence whose info string holds U+2028', 'A\n```te\u2028xt\nB\n```\nC', ['A', '```te\u2028xt', 'C']],
+  ['an opening fence whose info string holds U+2029', 'A\n~~~te\u2029xt\nB', ['A', '~~~te\u2029xt']],
+  ['a closing fence that is shorter than its opener', 'A\n````\nB\n```\nC', ['A', '````']],
+  ['a closing fence of the other character', 'A\n```\nB\n~~~\nC', ['A', '```']],
+  ['a backtick opener with a backtick in its info string', 'A\n```a`b\nB', ['A', '```a`b', 'B']],
+  ['bare CR line breaks', 'A\r```\rB\r```\rC', ['A', '```', 'C']],
+])('the fence oracle finds the lines outside fences for %s', (_name, text, outside) => {
+  expect(linesOutsideFences(text)).toEqual(outside)
 })
