@@ -66,10 +66,10 @@ export function commitFile(repo: string, file: string, message: string) {
 }
 
 /** A bare `origin` whose default branch is `main`, the sandbox `root` clone, and the `seed` clone that plays GitHub's merges. */
-export function repository() {
+export function repository(objectFormat: 'sha1' | 'sha256' = 'sha1') {
   const dir = tempDir()
   const origin = join(dir, 'origin.git')
-  git(dir, 'init', '--bare', '--initial-branch=main', origin)
+  git(dir, 'init', '--bare', '--initial-branch=main', `--object-format=${objectFormat}`, origin)
   const seed = join(dir, 'seed')
   git(dir, 'clone', '--quiet', origin, seed)
   for (const repo of [seed]) { git(repo, 'config', 'user.email', 'test@example.com'); git(repo, 'config', 'user.name', 'Test') }

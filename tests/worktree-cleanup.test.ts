@@ -11,8 +11,9 @@ import { removeWorkdir } from '../server/runners'
 import { MockServer } from '../server/simulation'
 import type { RunId } from '../src/domain/types'
 import { memoryStore, RNG } from './fixture'
+import { ranOf } from './ran'
 import {
-  CODER, ENG_1, LOCAL, addReviewer, agentRunner, clock, coderRuns, control, factory, git, linear, nextRun, poll, repository, seen, tempDir, until, workdirOf,
+  CODER, ENG_1, LOCAL, addReviewer, agentRunner, clock, coderRuns, control, factory, git, linear, nextRun, poll, realGit, repository, seen, tempDir, until, workdirOf,
   type Factory,
 } from './rework-delivery-fixture'
 
@@ -23,6 +24,7 @@ const originBranches = (origin: string) => git(origin, 'for-each-ref', '--format
 const ownerFile = (f: Pick<Factory, 'root'>, id: string) => join(f.root, '.factory-runs', `${id}.owner`)
 const enqueue = (f: Factory, title = 'Add change') => f.api.agents.enqueue(CODER, { title, prompt: 'p', priority: 'normal' })
 const warnings = (server: MockServer) => server.snapshot().logs.filter((line) => line.level === 'warn').map((line) => line.msg)
+const removals = (server: MockServer) => server.snapshot().logs.filter((line) => line.level === 'info' && line.msg.startsWith('removed ')).map((line) => [line.runId, line.msg])
 const restart = (root: string, store = memoryStore()) => new MockServer({ manual: true, rng: RNG, localRunner: agentRunner(), localRoot: root, linear: linear(), clock, store })
 type Owner = { branch: string; initialHead: string; token: string; server: { pid: number; started: string } }
 const readOwner = (f: Pick<Factory, 'root'>, id: string) => JSON.parse(readFileSync(ownerFile(f, id), 'utf8')) as Owner
@@ -97,6 +99,55 @@ test('a run with delivery off leaves no factory-<run id> branch either', async (
   expect(localBranches(repo.root)).toEqual(['main'])
   expect(originBranches(repo.origin)).toEqual(['main'])
   await f.server.close()
+})
+
+test('a repository with SHA-256 object ids loses its run branch like any other', async () => {
+  const repo = repository('sha256')
+  const f = factory(repo.root, agentRunner())
+  f.api.agents.update(CODER, { delivery: 'none' })
+  enqueue(f)
+  const run = await nextRun(f)
+
+  expect(run.status).toBe('succeeded')
+  expect(ranOf(run).head).toMatch(/^[0-9a-f]{64}$/)
+  expect(runWorktrees(repo.root)).toEqual([])
+  expect(localBranches(repo.root)).toEqual(['main'])
+  expect(warnings(f.server)).toEqual([])
+  await f.server.close()
+})
+
+test('on a git older than 2.36 a run in a git root fails, naming the floor, and leaves nothing', async () => {
+  const repo = repository()
+  const bin = join(tempDir(), 'bin')
+  mkdirSync(bin)
+  writeFileSync(join(bin, 'git'), `#!/bin/sh
+for arg in "$@"; do
+  [ "$arg" = version ] && { echo "git version 2.35.1"; exit 0; }
+  [ "$arg" = --reason ] && { echo "error: unknown option \\\`reason'" >&2; exit 129; }
+done
+exec ${realGit} "$@"
+`)
+  chmodSync(join(bin, 'git'), 0o755)
+  const previous = process.env.PATH
+  process.env.PATH = `${bin}:${previous}`
+  try {
+    const f = factory(repo.root, agentRunner())
+    f.api.agents.update(CODER, { retry: { maxAttempts: 1, backoffMs: 0, backoff: 'fixed' } })
+    enqueue(f)
+    const delivering = await nextRun(f)
+    expect(delivering).toMatchObject({ status: 'failed', error: "delivery failed: git worktree add: error: unknown option `reason' (locking the worktree needs git 2.36 or later; this is git 2.35.1)" })
+
+    f.api.agents.update(CODER, { delivery: 'none' })
+    enqueue(f)
+    const plain = await nextRun(f)
+    expect(plain).toMatchObject({ status: 'failed', error: "git worktree add: error: unknown option `reason' (locking the worktree needs git 2.36 or later; this is git 2.35.1)" })
+
+    expect(seen).toEqual([])
+    expect(runWorktrees(repo.root)).toEqual([])
+    expect(localBranches(repo.root)).toEqual(['main'])
+    expect(readdirSync(join(repo.root, '.factory-runs'))).toEqual([])
+    await f.server.close()
+  } finally { process.env.PATH = previous }
 })
 
 test('a run in a root that is not a git repository keeps its plain directory and logs no removal failure', async () => {
@@ -199,12 +250,13 @@ test('an agent cannot lock its worktree, since Factory holds the lock as its mar
   await f.server.close()
 })
 
-test('a worktree an agent unlocked and relocked is no longer provably Factory’s, so it stays, with a warning, and its owner file goes', async () => {
+test('a worktree an agent unlocked and relocked is no longer provably Factory’s, so it stays, with a warning, and its owner file goes; the next start keeps it too', async () => {
   const repo = repository()
+  const store = memoryStore()
   const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => {
     git(workdir, 'worktree', 'unlock', '.')
     git(workdir, 'worktree', 'lock', '--reason', 'mine now', '.')
-  }))
+  }), undefined, store)
   f.api.agents.update(CODER, { delivery: 'none' })
   enqueue(f)
   const run = await nextRun(f)
@@ -214,9 +266,17 @@ test('a worktree an agent unlocked and relocked is no longer provably Factory’
   expect(localBranches(repo.root)).toEqual([`factory-${run.id}`, 'main'])
   expect(existsSync(ownerFile(f, run.id))).toBe(false)
   expect(warnings(f.server)).toEqual([
-    `left alone, not provably this run's: worktree ${workdirOf(f, run)} (its lock reason is not this run's mark); branch factory-${run.id} (checked out there)`,
+    `left alone: worktree ${workdirOf(f, run)} (its lock reason is not this run's mark); branch factory-${run.id} (checked out there)`,
   ])
   await f.server.close()
+
+  // Now there is no owner file, and this server knows the run ended, but the lock is one Factory did not write.
+  const restarted = restart(repo.root, store)
+  await restarted.settled()
+  expect(runWorktrees(repo.root)).toEqual([workdirOf(f, run)])
+  expect(localBranches(repo.root)).toEqual([`factory-${run.id}`, 'main'])
+  expect(warnings(restarted)).toEqual([`left alone: worktree ${workdirOf(f, run)} (no owner file, and locked: mine now)`])
+  await restarted.close()
 })
 
 test('run-private fetch refs under refs/factory/<run id>/ go with the worktree', async () => {
@@ -295,8 +355,8 @@ test('a start after a crash part way through the removal finishes it, whichever 
   expect(existsSync(ownerFile(f, run.id))).toBe(false)
 
   // Removing again, or removing a run Factory never made a worktree for, changes nothing.
-  expect(await removeWorkdir(repo.root, run.id, true)).toEqual([])
-  expect(await removeWorkdir(repo.root, 'run-never-made' as RunId, false)).toEqual([])
+  expect(await removeWorkdir(repo.root, run.id, true)).toEqual({ left: [], legacy: [] })
+  expect(await removeWorkdir(repo.root, 'run-never-made' as RunId, false)).toEqual({ left: [], legacy: [] })
   expect(localBranches(repo.root)).toEqual(['main'])
   await restarted.close()
 })
@@ -330,7 +390,7 @@ test('a stale owner file, left by a crash after the removal, does not authorize 
   expect(readFileSync(join(workdir, 'unsaved.txt'), 'utf8')).toBe('hours of work')
   expect(localBranches(repo.root)).toEqual(['main', 'mine'])
   expect(existsSync(ownerFile(f, run.id))).toBe(false)
-  expect(warnings(restarted)).toEqual([`left alone, not provably this run's: worktree ${workdir} (its lock reason is not this run's mark)`])
+  expect(warnings(restarted)).toEqual([`left alone: worktree ${workdir} (its lock reason is not this run's mark)`])
   await restarted.close()
 })
 
@@ -349,7 +409,7 @@ test('a branch someone recreated after a crash between the branch deletion and t
   expect(localBranches(repo.root)).toEqual([branch, 'main'])
   expect(git(repo.root, 'rev-parse', branch)).toBe(recreated)
   expect(existsSync(ownerFile(f, run.id))).toBe(false)
-  expect(warnings(restarted)).toEqual([`left alone, not provably this run's: branch ${branch} (its reflog does not start at ${initialHead})`])
+  expect(warnings(restarted)).toEqual([`left alone: branch ${branch} (its reflog does not start at ${initialHead})`])
   await restarted.close()
 })
 
@@ -385,6 +445,15 @@ test('a worktree whose owner server is still alive is left alone, and removed on
   expect(warnings(beside)).toEqual([])
   await beside.close()
 
+  // The owner server could not read its own start time, so a live pid cannot be shown to be a reused one.
+  writeFileSync(ownerFile(f, run.id), JSON.stringify({ ...owner, server: { pid: process.ppid, started: '' } }))
+  const unknown = restart(repo.root)
+  await unknown.settled()
+  expect(runWorktrees(repo.root)).toEqual([workdirOf(f, run)])
+  expect(localBranches(repo.root)).toEqual([`factory-${run.id}`, 'main'])
+  expect(warnings(unknown)).toEqual([])
+  await unknown.close()
+
   // The same pid, but a process started at another time: the owner server died and its pid was reused.
   writeFileSync(ownerFile(f, run.id), JSON.stringify({ ...owner, server: { pid: process.ppid, started: 'Mon Jan  1 00:00:00 2001' } }))
   const reused = restart(repo.root)
@@ -394,11 +463,44 @@ test('a worktree whose owner server is still alive is left alone, and removed on
   await reused.close()
 })
 
-test('a worktree from before owner files is removed with its factory-<run id> branch only when this server knows its run ended; someone else’s stays', async () => {
+test('a server restoring a world whose run another live server still works on leaves that run’s worktree and branch alone', async () => {
+  const repo = repository()
+  const store = memoryStore()
+  const f = factory(repo.root, agentRunner(() => 'hang'), undefined, store)
+  f.api.agents.update(CODER, { retry: { maxAttempts: 1, backoffMs: 0, backoff: 'fixed' } })
+  const run = await startHanging(f)
+  f.server.flush()
+  const owner = readOwner(f, run.id)
+  // Both servers share this process's pid here, so the live owner is stood in by this process's parent.
+  writeFileSync(ownerFile(f, run.id), JSON.stringify({ ...owner, server: { pid: process.ppid, started: processStart(process.ppid) } }))
+
+  const second = restart(repo.root, store)
+  await second.settled()
+  expect(second.snapshot().runs[run.id]).toMatchObject({ status: 'failed', error: 'interrupted by restart' })
+  expect(runWorktrees(repo.root)).toEqual([workdirOf(f, run)])
+  expect(localBranches(repo.root)).toEqual([`factory-${run.id}`, 'main'])
+  expect(existsSync(ownerFile(f, run.id))).toBe(true)
+  expect(warnings(second)).toEqual([`left alone: the worktree and branch of run ${run.id} (server process ${process.ppid}, which made them, is still running)`])
+  await second.close()
+
+  // The server that made them removes them once its run ends.
+  writeFileSync(ownerFile(f, run.id), JSON.stringify(owner))
+  f.api.tasks.cancel(run.taskId)
+  await f.api.sim.settled()
+  expect(runWorktrees(repo.root)).toEqual([])
+  expect(localBranches(repo.root)).toEqual(['main'])
+  expect(existsSync(ownerFile(f, run.id))).toBe(false)
+  await f.server.close()
+})
+
+test('a worktree from before owner files is removed with its factory-<run id> branch only when this server knows its run ended, and that removal is logged with the branch’s commit; someone else’s stays', async () => {
   const repo = repository()
   const store = memoryStore()
   const { f, run } = await killedRun(repo, store)
+  const head = git(repo.root, 'rev-parse', `factory-${run.id}`)
+  // A worktree from before owner files has no owner file and no lock.
   rmSync(ownerFile(f, run.id))
+  git(repo.root, 'worktree', 'unlock', workdirOf(f, run))
   git(repo.root, 'worktree', 'add', '--quiet', '-b', 'mine', join(repo.root, '.factory-runs', 'by-hand'), 'origin/main')
 
   // A server with another data directory does not know the run, so it may be another server's live run.
@@ -407,8 +509,8 @@ test('a worktree from before owner files is removed with its factory-<run id> br
   expect(runWorktrees(repo.root)).toEqual([join(repo.root, '.factory-runs', 'by-hand'), workdirOf(f, run)])
   expect(localBranches(repo.root)).toEqual([`factory-${run.id}`, 'main', 'mine'])
   expect(warnings(stranger).sort()).toEqual([
-    `left alone, not provably this run's: worktree ${join(repo.root, '.factory-runs', 'by-hand')} (no owner file, and this server does not know run by-hand to have ended)`,
-    `left alone, not provably this run's: worktree ${workdirOf(f, run)} (no owner file, and this server does not know run ${run.id} to have ended)`,
+    `left alone: worktree ${join(repo.root, '.factory-runs', 'by-hand')} (no owner file, and this server does not know run by-hand to have ended)`,
+    `left alone: worktree ${workdirOf(f, run)} (no owner file, and this server does not know run ${run.id} to have ended)`,
   ].sort())
   await stranger.close()
 
@@ -416,7 +518,8 @@ test('a worktree from before owner files is removed with its factory-<run id> br
   await restarted.settled()
   expect(runWorktrees(repo.root)).toEqual([join(repo.root, '.factory-runs', 'by-hand')])
   expect(localBranches(repo.root)).toEqual(['main', 'mine'])
-  expect(warnings(restarted)).toEqual([`left alone, not provably this run's: worktree ${join(repo.root, '.factory-runs', 'by-hand')} (no owner file, and this server does not know run by-hand to have ended)`])
+  expect(warnings(restarted)).toEqual([`left alone: worktree ${join(repo.root, '.factory-runs', 'by-hand')} (no owner file, and this server does not know run by-hand to have ended)`])
+  expect(removals(restarted)).toEqual([[run.id, `removed worktree ${workdirOf(f, run)} and branch factory-${run.id}, made before owner files; its commits can be recovered from ${head} until git prunes them`]])
   await restarted.close()
 })
 
