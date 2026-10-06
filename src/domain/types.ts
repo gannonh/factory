@@ -202,11 +202,13 @@ export type Rework =
  * `prBranches` is the head branch of every pull request Factory delivered for the issue, in any round, and the branch a round
  * continued once its pull request turned out merged or closed. A new delivery branch never reuses one. It is empty for a
  * record saved before it was kept.
+ * `feedback` is the round's trusted review feedback as its prompts quote it, fenced, or '' when it has none. A record saved
+ * before it was kept has none, so a handoff task of that round gets no feedback.
  */
 export type IntakeRecord = {
   issue: IssueRef; trigger: TriggerId; flowId: FlowId; takenAt: number; phase: IntakePhase; writes: IssueWrite[]
   states: TriggerStates | null; cancel: FlowCancel | null; blockers: IssueBlocker[]
-  round: number; rework: Rework | null; result: RoundResult | null; left: boolean; past: PastRound[]; leftOut: string[]; prBranches: string[]
+  round: number; rework: Rework | null; result: RoundResult | null; left: boolean; past: PastRound[]; leftOut: string[]; prBranches: string[]; feedback: string
 }
 
 /** An issue that blocks a taken issue in Linear, from any team, with its state when last read. */

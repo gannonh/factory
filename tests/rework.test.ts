@@ -684,7 +684,7 @@ test('a failed read of one issue’s Linear comments holds only that issue, and 
 const ended = (fields: Partial<IntakeRecord>): IntakeRecord => ({
   issue: { backend: 'linear', id: ENG_1, identifier: 'ENG-1', url: ISSUE_URL, branchName: 'eng-1-fix-login' },
   trigger: 'tr-1' as TriggerId, flowId: 'fl-1' as IntakeRecord['flowId'], takenAt: 0, phase: 'ended', writes: [],
-  states: { pickupState: 'state-eng-todo', startedState: null }, cancel: null, blockers: [], round: 1, rework: null, result: null, left: false, past: [], leftOut: [], prBranches: [], ...fields,
+  states: { pickupState: 'state-eng-todo', startedState: null }, cancel: null, blockers: [], round: 1, rework: null, result: null, left: false, past: [], leftOut: [], prBranches: [], feedback: '', ...fields,
 })
 
 test.each([
@@ -1036,4 +1036,21 @@ test('a round 2 issue task saved by a build that let an author name span lines g
   expect(seen.at(-1)?.prompt).toBe(rebuilt)
   expect(server.snapshot().tasks[taskId].prompt).toBe(rebuilt)
   await server.close()
+})
+
+const HANDOFF = { kind: 'handoff', from: 'ag-planner', runId: 'run-1' } as Task['origin']
+const upstream = { summary: 'Planned the fix.', artifacts: [{ kind: 'note' as const, label: 'plan', url: null }], runId: 'run-1' as Run['id'] }
+
+test('a handoff task gets the round\'s feedback after its section when its run delivers, and the upstream output alone when it does not', () => {
+  const record = { ...savedRecord(2), feedback: savedFeedback('Dana') }
+  const task = { origin: HANDOFF, input: upstream, prompt: 'stale' }
+  expect(runPrompt(task, record, true)).toBe(`Planned the fix.\nnote: plan\n\n## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback('Dana')}`)
+  expect(runPrompt(task, record, false)).toBe('Planned the fix.\nnote: plan')
+  const retried = { ...task, prompt: runPrompt(task, record, true) }
+  expect(runPrompt(retried, record, true)).toBe(`Planned the fix.\nnote: plan\n\n## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback('Dana')}`)
+})
+
+test('a handoff task of a round saved before its feedback was kept gets the section alone', () => {
+  const record = { ...savedRecord(2), feedback: '' }
+  expect(runPrompt({ origin: HANDOFF, input: upstream, prompt: '' }, record, true)).toBe(`Planned the fix.\nnote: plan\n\n## Rework round 2\n\n${MERGED_41}`)
 })
