@@ -202,7 +202,8 @@ async function dropPrivateRefs(git: Git): Promise<void> {
  * The commits at the tips of origin's `branches`, fetched into refs private to run `runId`, which are deleted again once
  * read. A fetch never writes `refs/remotes/origin/*`, the refs a sibling's push to the same branch also writes, and
  * `--refmap=` stops git from updating them on the side. Nor does it write `FETCH_HEAD`, which the siblings share.
- * A crashed or failed earlier call can leave refs behind, so each call first deletes those of runs that are not fetching.
+ * A crashed or failed earlier call can leave refs behind. The delete when a call ends, and the one before the next fetch,
+ * remove the refs of every run that is not fetching.
  */
 async function fetchTips(git: Git, runId: string, branches: readonly string[]): Promise<string[]> {
   const refs = branches.map((_, i) => `refs/factory/${runId}/${i}`)
