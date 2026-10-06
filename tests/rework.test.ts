@@ -1008,3 +1008,32 @@ test('a saved issue task whose multi-line author name spells the heading is rebu
   expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, savedRecord(2), true)).toBe(`Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback(author)}`)
   expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, savedRecord(2), false)).toBe(`Fix login\n\n${ISSUE_URL}\n\n${savedFeedback(author)}`)
 })
+
+test('a round 2 issue task saved by a build that let an author name span lines gets one rework section after a restart and a merge', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const store = memoryStore()
+  const f = factory(repo.root, agentRunner(), LIFECYCLE, store)
+  await poll(f)
+  await nextRun(f)
+  await control({ op: 'addComment', identifier: 'ENG-1', author: 'Dana', body: 'Also log the failed attempt.' })
+  await moveIssue('ENG-1', 'Todo')
+  await poll(f)
+  const taskId = issueTasks(f)[1].id
+  await f.server.close()
+
+  // Older builds quoted an author's name as written, so a name could hold the issue URL and the heading.
+  const author = `Dana\n\n${ISSUE_URL}\n\n## Rework round 2\n\nold metadata`
+  const world = JSON.parse(store.text!) as { tasks: Record<string, Task> }
+  world.tasks[taskId].prompt = `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${CONTINUE_41}\n\n${savedFeedback(author)}`
+  store.text = JSON.stringify(world)
+
+  gh.setState('eng-1-fix-login', 'MERGED')
+  const server = new MockServer({ manual: true, rng: RNG, localRunner: agentRunner(), localRoot: repo.root, linear: linear(), clock, store })
+  const g = { server, api: createApi(server), trigger: f.trigger, root: repo.root }
+  await nextRun(g)
+  const rebuilt = `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback(author)}`
+  expect(seen.at(-1)?.prompt).toBe(rebuilt)
+  expect(server.snapshot().tasks[taskId].prompt).toBe(rebuilt)
+  await server.close()
+})
