@@ -10,7 +10,7 @@ import { MockServer } from '../server/simulation'
 import type { RunId } from '../src/domain/types'
 import { memoryStore, RNG } from './fixture'
 import {
-  CODER, ENG_1, addReviewer, agentRunner, clock, coderRuns, control, factory, git, linear, nextRun, poll, repository, seen, until, workdirOf,
+  CODER, ENG_1, addReviewer, agentRunner, clock, coderRuns, control, factory, git, linear, nextRun, poll, repository, seen, tempDir, until, workdirOf,
   type Factory,
 } from './rework-delivery-fixture'
 
@@ -77,6 +77,19 @@ test('a run with delivery off leaves no factory-<run id> branch either', async (
   expect(runWorktrees(repo.root)).toEqual([])
   expect(localBranches(repo.root)).toEqual(['main'])
   expect(originBranches(repo.origin)).toEqual(['main'])
+  await f.server.close()
+})
+
+test('a run in a root that is not a git repository keeps its plain directory and logs no removal failure', async () => {
+  const root = tempDir()
+  const f = factory(root, { execution: 'local', start: (_input, emit) => emit({ kind: 'complete', status: 'succeeded', result: 'Done.' }), kill() {} })
+  f.api.agents.update(CODER, { delivery: 'none' })
+  enqueue(f)
+  const run = await nextRun(f)
+
+  expect(run.status).toBe('succeeded')
+  expect(existsSync(workdirOf(f, run))).toBe(true)
+  expect(f.server.snapshot().logs.filter((line) => line.level === 'warn')).toEqual([])
   await f.server.close()
 })
 

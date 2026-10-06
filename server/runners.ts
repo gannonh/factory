@@ -1,5 +1,5 @@
 import { spawn, spawnSync, execFile } from 'node:child_process'
-import { appendFile, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import type { Agent, Artifact, LogLevel, PullRequestRef, Run, RunId, Task } from '../src/domain/types'
@@ -474,7 +474,9 @@ const ownerFile = (workdir: string) => `${workdir}.owner`
  * branch's name behind for the next start. A failed `add` creates neither, and drops the file again.
  */
 async function claiming(workdir: string, branch: string, add: () => Promise<unknown>) {
-  await writeFile(ownerFile(workdir), JSON.stringify({ branch, pid: process.pid } satisfies Owner))
+  // Renamed into place, so a crash never leaves a half-written file that names no branch.
+  await writeFile(`${ownerFile(workdir)}.tmp`, JSON.stringify({ branch, pid: process.pid } satisfies Owner))
+  await rename(`${ownerFile(workdir)}.tmp`, ownerFile(workdir))
   try { await add() } catch (error) { await rm(ownerFile(workdir), { force: true }); throw error }
 }
 
@@ -512,8 +514,11 @@ export async function removeWorkdir(root: string, runId: RunId): Promise<void> {
     const git = async (...args: string[]) => {
       try { await execFileAsync('git', ['-C', rootPath, ...args], { timeout: LOCAL_TIMEOUT_MS }) } catch (error) { throw new Error(`git ${args[0]} ${args[1]}: ${failureReason(error)}`) }
     }
-    const registered = (await registeredWorktrees(rootPath)).get(workdir)
     const owner = await readOwner(workdir)
+    // A root that is not a git repository has plain run directories, which this leaves alone.
+    const listed = await registeredWorktrees(rootPath).catch((error: unknown) => { if (owner) throw error; return null })
+    if (!listed) return
+    const registered = listed.get(workdir)
     // A worktree from before owner files is Factory's only when it is on the branch Factory names after the run.
     const branch = owner?.branch ?? (registered === `factory-${basename(runId)}` ? registered : null)
     if (!branch) return
