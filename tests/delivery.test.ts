@@ -575,6 +575,20 @@ test("a slow push to one branch does not hold up a run starting on another branc
   expect((await pushing).kind).toBe('pull-request')
 }, 30_000)
 
+test('a ref a crashed run left under refs/factory is deleted by the next preparation, and a pull request branch ref it did not touch stays', async () => {
+  const repo = repository()
+  git(repo.seed, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature')
+  const main = git(repo.root, 'rev-parse', 'HEAD')
+  git(repo.root, 'update-ref', 'refs/factory/killed-run/0', main)
+  git(repo.root, 'update-ref', 'refs/factory/killed-run/1', main)
+  git(repo.root, 'pack-refs', '--all')
+  git(repo.root, 'update-ref', 'refs/factory/killed-run-2/0', main)
+  git(repo.root, 'update-ref', 'refs/heads/kept', main)
+  await resume(repo.root, 'next-run', 'feature')
+  expect(git(repo.root, 'for-each-ref', '--format=%(refname)', 'refs/factory')).toBe('')
+  expect(git(repo.root, 'for-each-ref', '--format=%(refname)', 'refs/heads/kept')).toBe('refs/heads/kept')
+})
+
 test('a git or gh step that times out reports the timeout, not its last output line', () => {
   expect(failureReason(Object.assign(new Error('Command failed'), { killed: true, stderr: 'Creating pull request for x into main\n' }))).toBe('timed out')
   expect(failureReason(Object.assign(new Error('Command failed'), { killed: false, stderr: 'remote: hi\nfatal: unable to access\n' }))).toBe('fatal: unable to access')

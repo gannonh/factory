@@ -138,8 +138,9 @@ export async function prepareWorkdir(root: string, runId: RunId, delivery: Deliv
   return { root: rootPath, path: workdir, initialHead: null, delivery: null }
 }
 
-// Two runs on one repository must not pick the same free branch name or fetch at once. Pushes stay outside the queue, so a
-// slow push never holds up another run's start and pushes to different branches overlap.
+// Two runs on one repository must not pick the same free branch name or fetch at once. A fresh branch's push runs in the
+// queue with the name it claims. Every other push stays outside it, so a slow push of a pull request's branch never holds
+// up another run's start and pushes to different branches overlap.
 const deliveryQueues = new Map<string, Promise<unknown>>()
 
 function inDeliveryQueue<T>(rootPath: string, work: () => Promise<T>): Promise<T> {
@@ -172,9 +173,9 @@ async function exec(command: 'git' | 'gh', cwd: string, step: string, args: stri
   }
 }
 
-type Git = (step: string, args: string[], timeout?: number) => Promise<string>
+type Git = (step: string, args: string[], timeout?: number, input?: Buffer) => Promise<string>
 
-const gitIn = (cwd: string): Git => async (step, args, timeout) => (await exec('git', cwd, step, args, { timeout })).stdout.toString()
+const gitIn = (cwd: string): Git => async (step, args, timeout, input) => (await exec('git', cwd, step, args, { timeout, input })).stdout.toString()
 
 async function defaultBranch(git: Git): Promise<string> {
   const symref = await git('git ls-remote', ['ls-remote', '--symref', 'origin', 'HEAD'], NETWORK_TIMEOUT_MS)
@@ -184,17 +185,30 @@ async function defaultBranch(git: Git): Promise<string> {
 }
 
 /**
+ * Deletes every `refs/factory/*` ref, in one transaction: deleting refs from separate processes at once contends for
+ * `packed-refs.lock`, and a delete that loses leaves its ref behind. It may fail without harm, since the next call
+ * deletes what is left. Only called inside the delivery queue, where no run holds a ref it still needs.
+ */
+async function dropPrivateRefs(git: Git): Promise<void> {
+  const refs = (await git('git for-each-ref', ['for-each-ref', '--format=%(refname)', 'refs/factory/'])).split('\n').filter(Boolean)
+  if (refs.length > 0) await git('git update-ref', ['update-ref', '--stdin'], undefined, Buffer.from(refs.map((ref) => `delete ${ref}\n`).join('')))
+}
+
+/**
  * The commits at the tips of origin's `branches`, fetched into refs private to run `runId`, which are deleted again once
  * read. A fetch never writes `refs/remotes/origin/*`, the refs a sibling's push to the same branch also writes, and
  * `--refmap=` stops git from updating them on the side. Nor does it write `FETCH_HEAD`, which the siblings share.
+ * Only called inside the delivery queue, so every ref it finds under `refs/factory/` is one a crashed or failed earlier
+ * call left, and it deletes them before it fetches.
  */
 async function fetchTips(git: Git, runId: string, branches: readonly string[]): Promise<string[]> {
   const refs = branches.map((_, i) => `refs/factory/${runId}/${i}`)
-  await git('git fetch', ['fetch', '--no-tags', '--no-write-fetch-head', '--refmap=', 'origin', ...branches.map((branch, i) => `+refs/heads/${branch}:${refs[i]}`)], NETWORK_TIMEOUT_MS)
+  await dropPrivateRefs(git).catch(() => undefined)
   try {
+    await git('git fetch', ['fetch', '--no-tags', '--no-write-fetch-head', '--refmap=', 'origin', ...branches.map((branch, i) => `+refs/heads/${branch}:${refs[i]}`)], NETWORK_TIMEOUT_MS)
     return await Promise.all(refs.map(async (ref) => (await git('git rev-parse', ['rev-parse', '--verify', `${ref}^{commit}`])).trim()))
   } finally {
-    await Promise.all(refs.map((ref) => git('git update-ref', ['update-ref', '-d', ref]).catch(() => undefined)))
+    await dropPrivateRefs(git).catch(() => undefined)
   }
 }
 
