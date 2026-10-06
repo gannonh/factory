@@ -461,6 +461,31 @@ test('a pull request whose branch moves while its commit is pushed fails the run
   expect(git(repo.origin, 'rev-parse', 'refs/heads/feature-x')).toBe(git(workdir, 'rev-parse', 'HEAD'))
 })
 
+test('a continuing run pushes to the branch its pre-push read names, not the one prepared, and reports the base it last read', async () => {
+  const repo = repository()
+  const workdir = join(repo.root, 'wt')
+  git(repo.root, 'worktree', 'add', '--quiet', '-b', 'feature-x', workdir, 'origin/main')
+  const initialHead = git(workdir, 'rev-parse', 'HEAD')
+  commitFile(workdir, 'change.txt', 'change')
+  const pr = { kind: 'pr' as const, label: 'Pull request #41', url: 'https://github.com/example/factory/pull/41' }
+  // The run was prepared on develop. A sibling's read of the pull request saved a rename and a retarget before the push,
+  // and another retarget landed while the push ran.
+  const answers = [
+    { kind: 'continue' as const, pr, branch: 'feature-y', base: 'release' },
+    { kind: 'continue' as const, pr, branch: 'feature-y', base: 'hotfix' },
+  ]
+  let reads = 0
+  const recheck: Recheck = { request: async () => { reads += 1; return answers.shift()! }, proceed: () => true }
+
+  const delivered = await deliver({ root: repo.root, path: workdir, initialHead, delivery: { kind: 'continue', branch: 'feature-x', base: 'develop' } }, { title: 'T', body: 'B' }, recheck)
+
+  expect(delivered).toMatchObject({ kind: 'pull-request', branch: 'feature-y', base: 'hotfix', pr })
+  expect(reads).toBe(2)
+  expect(git(repo.origin, 'rev-parse', 'refs/heads/feature-y')).toBe(git(workdir, 'rev-parse', 'HEAD'))
+  expect(git(repo.origin, 'branch', '--list', 'feature-x')).toBe('')
+  expect(gh.creates()).toEqual([])
+})
+
 test('two runs preparing the same branch at once get distinct names', async () => {
   const repo = repository()
   const [a, b] = await Promise.all([

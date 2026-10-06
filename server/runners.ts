@@ -400,7 +400,7 @@ export async function deliver(prepared: PreparedWorkdir, pr: { title: string; bo
     const number = PR_URL.exec(now.pr.url)?.[1] ?? '?'
     if (after.kind !== 'continue') throw new Error(`delivery failed: pull request #${number} closed while this run delivered`)
     if (after.branch !== now.branch) throw new Error(`delivery failed: pull request #${number} moved to branch ${after.branch} while this run delivered`)
-    return { kind: 'pull-request', branch: now.branch, base: now.base, initialHead: runStart, head, pr: now.pr }
+    return { kind: 'pull-request', branch: now.branch, base: after.base, initialHead: runStart, head, pr: now.pr }
   }
   const fresh = await freshDelivery(prepared, runStart, head, now.branch, [...now.retired, plan.branch], recheck.proceed)
   if (fresh.kind === 'empty') return { kind: 'no-changes', branch: null }

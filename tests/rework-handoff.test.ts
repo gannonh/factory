@@ -398,6 +398,8 @@ test('a sibling whose older read of two retargets lands first delivers to the pu
   await until(() => lastRunOf(f, REVIEWER).status === 'succeeded')
   const startedFrom = workdirLog(reviewer)
   expect(startedFrom).toBe(`working directory: ${workdirOf(f, reviewer)} on branch eng-1-fix-login from origin/develop`)
+  // Two reads at run start, Reviewer's reread after the overtaken one, its read right before the push and one after it.
+  expect(prViews()).toBe(views + 5)
   expect(pullRequestLogs(f)).toEqual(['pull request #41 was retargeted to develop', 'pull request #41 was retargeted to release'])
   expect(lastRunOf(f, REVIEWER).output?.artifacts.filter((a) => a.kind === 'pr')).toEqual([{ kind: 'pr', label: 'Pull request #41', url: PR_41 }])
   expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login')).toBe(git(workdirOf(f, reviewer), 'rev-parse', 'HEAD'))
