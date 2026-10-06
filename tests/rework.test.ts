@@ -178,6 +178,21 @@ Signed by Factory. Runs: ${thirdRun.id}. Agents: Coder.`)
   await f.server.close()
 })
 
+test('an issue task saved with a rework section whose agent stopped delivering gets the issue alone', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner())
+  await roundTwoTaken(f)
+  expect(issueTasks(f)[1].prompt).toBe(`Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${CONTINUE_41}`)
+  f.api.agents.update(CODER, { delivery: 'none' })
+  const run = await nextRun(f)
+  expect(run.status).toBe('succeeded')
+  expect(seen.at(-1)?.prompt).toBe(`Fix login\n\n${ISSUE_URL}`)
+  expect(issueTasks(f)[1].prompt).toBe(`Fix login\n\n${ISSUE_URL}`)
+  expect(gh.creates()).toHaveLength(1)
+  await f.server.close()
+})
+
 test.each([
   ['deleted', true],
   ['kept', false],

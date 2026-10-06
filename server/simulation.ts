@@ -955,7 +955,7 @@ export class MockServer {
       })
       this.enqueueTaskSilently(agentId, {
         title: roundTitle(issue.ref.identifier, issue.title, round),
-        prompt: roundPrompt({ title: issue.title, description: issue.description, url: issue.ref.url, untrusted: issue.untrusted }, next, context ?? null),
+        prompt: roundPrompt({ title: issue.title, description: issue.description, url: issue.ref.url, untrusted: issue.untrusted }, next, context ?? null, this.world.agents[agentId].delivery === 'pull-request'),
         priority: issue.priority,
         origin: { kind: 'issue', trigger: id, issue: issue.ref },
         input: record ? latestOutput(record) : null,

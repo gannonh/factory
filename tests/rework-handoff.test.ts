@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { expect, test } from 'vitest'
 import type { AgentId, EdgeId, Run } from '../src/domain/types'
 import {
-  CODER, CONTINUE_41, LIFECYCLE, LOCAL, MERGED_41, NO_STATES, PR_41, PR_42, WALL, agentRunner, coderRuns, control, factory, gh, git, moveIssue, poll, prViews,
+  CODER, CONTINUE_41, FRAMING, ISSUE_URL, LIFECYCLE, LOCAL, MERGED_41, NO_STATES, PR_41, PR_42, WALL, agentRunner, coderRuns, control, factory, gh, git, moveIssue, poll, prViews,
   pullRequestLogs, record, repository, seen, setWall, short, tempDir, until, workdirOf, type Factory,
 } from './rework-fixture'
 
@@ -85,6 +85,44 @@ pr: Pull request #41 (${PR_41})`)
   expect(git(workdirOf(f, coder), 'branch', '--show-current')).toBe(`factory-${coder.id}`)
   expect(gh.creates()).toHaveLength(1)
   expect(record(f)).toMatchObject({ round: 2, phase: 'ended', rework: { kind: 'continue' }, result: { pr: { url: PR_41 } } })
+  await f.server.close()
+})
+
+test('an issue task whose agent does not deliver gets the round\'s fenced feedback and no continue line, and the agent after it still continues', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = handoffFactory(repo.root)
+  await poll(f)
+  await drain(f)
+  gh.review(41, 'alice', 'Handle the empty case.', new Date(WALL + 1000).toISOString())
+  await moveIssue('ENG-1', 'Todo')
+  setWall(WALL + 5000)
+  await poll(f)
+  await drain(f)
+  const feedback = `${FRAMING}\n\n\`\`\`text\n### Review comments on the pull request\n- **alice** (review): Handle the empty case.\n\`\`\``
+  const prompts = promptsOf(f, 2)
+  expect(prompts['Planner']).toBe(`Fix login\n\n${ISSUE_URL}\n\n${feedback}`)
+  expect(f.server.snapshot().tasks[seen.find((t) => t.agentId === PLANNER && t.title.includes('(round 2)'))!.id].prompt).toBe(prompts['Planner'])
+  expect(prompts['Coder']).toBe(`${plannerOutput(f)}\n\n## Rework round 2\n\n${CONTINUE_41}`)
+  expect(record(f)).toMatchObject({ round: 2, rework: { kind: 'continue' }, result: { pr: { url: PR_41 } } })
+  await f.server.close()
+})
+
+test.each([['before the round was taken', true], ['while the round waited', false]])('an issue task whose agent does not deliver is never told the round starts fresh when the pull request merged %s', async (_when, before) => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = handoffFactory(repo.root)
+  await poll(f)
+  await drain(f)
+  if (before) gh.setState('eng-1-fix-login', 'MERGED')
+  await moveIssue('ENG-1', 'Todo')
+  await poll(f)
+  if (!before) gh.setState('eng-1-fix-login', 'MERGED')
+  await drain(f)
+  expect(record(f)).toMatchObject({ round: 2, rework: { kind: 'fresh', state: 'merged' } })
+  const prompts = promptsOf(f, 2)
+  expect(prompts['Planner']).toBe(`Fix login\n\n${ISSUE_URL}`)
+  expect(prompts['Coder']).toBe(`${plannerOutput(f)}\n\n## Rework round 2\n\n${MERGED_41}`)
   await f.server.close()
 })
 
