@@ -179,32 +179,35 @@ export function reworkSection(record: IntakeRecord): string | null {
 }
 
 /**
- * The task prompt: the issue, then for a round after the first how it continues and the feedback since the last round. A
- * trusted workspace user's issue keeps its title and description as written. An untrusted issue's title and description
- * are fenced and framed as untrusted data instead.
+ * The task prompt: the issue, then for a round after the first how it continues, when `delivers`, and the feedback since the
+ * last round. Only an agent that delivers pull requests works on the round's branch, so only it is told how the round
+ * continues. A trusted workspace user's issue keeps its title and description as written. An untrusted issue's title and
+ * description are fenced and framed as untrusted data instead.
  */
-export function roundPrompt(issue: { title: string; description: string; url: string; untrusted: string | null }, record: IntakeRecord, context: RoundContext | null): string {
+export function roundPrompt(issue: { title: string; description: string; url: string; untrusted: string | null }, record: IntakeRecord, context: RoundContext | null, delivers: boolean): string {
   const sections: string[] = []
   if (context?.review.length) sections.push(['### Review comments on the pull request', ...context.review.map(feedbackLine)].join('\n'))
   if (context?.linear.length) sections.push(['### Linear comments since the last round', ...context.linear.map(feedbackLine)].join('\n'))
   const text = issue.untrusted === null ? joined([issue.title, issue.description]) : fence(joined([issue.title, issue.description]), UNTRUSTED_ISSUE_FRAMING)
-  return joined([text, issue.url, reworkSection(record), sections.length > 0 ? fenced(sections) : null])
+  return joined([text, issue.url, delivers ? reworkSection(record) : null, sections.length > 0 ? fenced(sections) : null])
 }
 
 /**
  * An issue task's prompt as `roundPrompt` wrote it, split around its `Rework round N` section: the issue up to its URL,
- * and the fenced feedback after the section. Null when the prompt has no section. The split holds while three things do:
- * the section is the last heading that follows the URL, since the free-text description comes before it; the quoted
- * feedback cannot hold that heading, since `feedbackLine` indents every body line after the first and puts the author's
- * name and the file path on one line; and the section ends at its first blank line, which `reworkSection` checks.
+ * and the fenced feedback after the section. Null when the prompt has no section, such as one written for an agent that did
+ * not deliver. The split reads the prompt from its end, never from its start, since the issue's description is free text
+ * that can quote anything: the feedback block is the trailing fence, found by its closing line, which no backtick run
+ * inside it can match. What precedes it ends with the URL, or with the section's line after a blank line. Only that line
+ * can follow the heading, since `reworkSection` checks that it holds no blank line, and the URL itself never is that line.
  */
 function issueParts(prompt: string, url: string, round: number): { issue: string; feedback: string } | null {
-  const heading = `${url}\n\n## Rework round ${round}\n\n`
-  const at = prompt.lastIndexOf(heading)
-  if (at < 0) return null
-  const rest = prompt.slice(at + heading.length)
-  const end = rest.indexOf('\n\n')
-  return { issue: prompt.slice(0, at + url.length), feedback: end < 0 ? '' : rest.slice(end + 2) }
+  const bar = /\n(`{3,})$/.exec(prompt)?.[1]
+  const start = bar === undefined ? -1 : prompt.lastIndexOf(`\n\n${FEEDBACK_FRAMING}\n\n${bar}text\n`)
+  const head = start < 0 ? prompt : prompt.slice(0, start)
+  const line = head.lastIndexOf('\n\n')
+  const heading = `${url}\n\n## Rework round ${round}`
+  if (line < 0 || head.slice(line + 2) === url || !head.slice(0, line).endsWith(heading)) return null
+  return { issue: head.slice(0, line - heading.length + url.length), feedback: start < 0 ? '' : prompt.slice(start + 2) }
 }
 
 /** A run's output as the prompt of a task its handoff creates: the summary, then a line per artifact. */
@@ -213,13 +216,13 @@ export const outputText = (output: RunOutput): string =>
 
 /**
  * The prompt for a run of the task, from the round's record as the run starts. An issue task's `Rework round N` section is
- * rebuilt between its issue text and feedback; round 1 has no section, so its prompt stays as written. A handoff task gets
- * the upstream output, plus the section only when the run delivers, since only a delivering run works on the round's
- * branch (ADR 0012). Any other task keeps its prompt.
+ * rebuilt between its issue text and feedback when the run delivers, and dropped when it does not; round 1 has no section,
+ * so its prompt stays as written. A handoff task gets the upstream output, plus the section only when the run delivers,
+ * since only a delivering run works on the round's branch (ADR 0012). Any other task keeps its prompt.
  */
 export function runPrompt(task: Pick<Task, 'origin' | 'input' | 'prompt'>, record: IntakeRecord | undefined, delivers: boolean): string {
   const parts = task.origin.kind === 'issue' && record && record.round > 1 ? issueParts(task.prompt, task.origin.issue.url, record.round) : null
-  if (parts && record) return joined([parts.issue, reworkSection(record), parts.feedback])
+  if (parts && record) return joined([parts.issue, delivers ? reworkSection(record) : null, parts.feedback])
   if (task.origin.kind === 'handoff' && task.input) return joined([outputText(task.input), delivers && record ? reworkSection(record) : null])
   return task.prompt
 }

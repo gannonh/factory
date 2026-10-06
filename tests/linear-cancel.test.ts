@@ -261,7 +261,7 @@ test('a cancelled issue moved back to the pickup state starts round 2 fresh, and
   const tasks = Object.values(f.world().tasks).sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
   expect(tasks.map((t) => [t.title, t.status])).toEqual([['ENG-1 Fix login', 'cancelled'], ['ENG-1 Fix login (round 2)', 'running']])
   expect(tasks[1]).toMatchObject({
-    prompt: 'Fix login\n\nhttps://linear.app/fake/issue/ENG-1/fix-login\n\n## Rework round 2\n\nThe previous round was cancelled without a pull request, so this round starts fresh.',
+    prompt: 'Fix login\n\nhttps://linear.app/fake/issue/ENG-1/fix-login',
     input: null,
   })
   expect(f.world().intake[ENG_1]).toMatchObject({
