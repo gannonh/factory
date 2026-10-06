@@ -328,8 +328,8 @@ test.each([
 ] as const)('sibling runs that read two retargets of the pull request, the %s read landing first, leave the round on the newest base', async (first, logs) => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
-  // Reviewer's round 2 agent never answers. When its older read lands first, its delivery would open a second pull request
-  // against the stale base (KAT-3664), and in the fake gh that replaces #41 before Coder reads it again.
+  // Reviewer's round 2 agent never answers, so the logs and the record show only what the two reads leave behind. The next
+  // test lets the agent whose older read lands first deliver.
   const f = fanOutFactory(repo.root, agentRunner((task) => (task.agentId === REVIEWER && task.title.includes('(round 2)') ? 'hang' : 'commit')))
   await roundTwoPlanned(f)
   for (const base of ['develop', 'release']) git(repo.origin, 'branch', base, 'main')
@@ -356,6 +356,53 @@ test.each([
   await until(() => startedFrom() !== undefined)
   expect(startedFrom()).toBe(`working directory: ${workdirOf(f, second)} on branch eng-1-fix-login from origin/release`)
   expect(pullRequestLogs(f)).toEqual(logs)
+  expect(record(f).rework).toEqual({ kind: 'continue', pr: { kind: 'pr', label: 'Pull request #41', url: PR_41 }, branch: 'eng-1-fix-login', base: 'release' })
+  await f.server.close()
+}, 30_000)
+
+test('a sibling whose older read of two retargets lands first delivers to the pull request on its newest base and opens no second one', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  // Coder's round 2 agent never answers, so Reviewer is the only run that delivers. Reviewer's round 2 agent answers when
+  // the test says, after Coder has fetched, since a push racing another run's fetch is a separate defect (KAT-3667).
+  const inner = agentRunner((task) => (task.agentId === CODER && task.title.includes('(round 2)') ? 'hang' : 'commit'))
+  let answer: (() => void) | null = null
+  const runner: typeof inner = {
+    ...inner,
+    start(args, emit) {
+      if (args.task.agentId === REVIEWER && args.task.title.includes('(round 2)')) answer = () => inner.start(args, emit)
+      else inner.start(args, emit)
+    },
+  }
+  const f = fanOutFactory(repo.root, runner)
+  await roundTwoPlanned(f)
+  for (const base of ['develop', 'release']) git(repo.origin, 'branch', base, 'main')
+  gh.holdState('OPEN', 'eng-1-fix-login', 'develop')
+  gh.holdState('OPEN', 'eng-1-fix-login', 'release')
+  const views = prViews()
+  gh.openPullRequest('eng-1-fix-login', PR_41, 'develop')
+  f.api.agents.setPaused(REVIEWER, false)
+  f.api.sim.advance(1)
+  await until(() => prViews() === views + 1)
+  gh.openPullRequest('eng-1-fix-login', PR_41, 'release')
+  f.api.agents.setPaused(CODER, false)
+  f.api.sim.advance(1)
+  await until(() => prViews() === views + 2)
+  const reviewer = lastRunOf(f, REVIEWER)
+  const workdirLog = (run: Run) => f.server.snapshot().logs.find((l) => l.runId === run.id && l.msg.startsWith('working directory: '))?.msg
+  gh.releaseState('OPEN', 'eng-1-fix-login', 'develop')
+  await until(() => answer !== null)
+  gh.releaseState('OPEN', 'eng-1-fix-login', 'release')
+  await until(() => workdirLog(lastRunOf(f, CODER)) !== undefined)
+  answer!()
+  await until(() => lastRunOf(f, REVIEWER).status === 'succeeded')
+  const startedFrom = workdirLog(reviewer)
+  expect(startedFrom).toBe(`working directory: ${workdirOf(f, reviewer)} on branch eng-1-fix-login from origin/develop`)
+  expect(pullRequestLogs(f)).toEqual(['pull request #41 was retargeted to develop', 'pull request #41 was retargeted to release'])
+  expect(lastRunOf(f, REVIEWER).output?.artifacts.filter((a) => a.kind === 'pr')).toEqual([{ kind: 'pr', label: 'Pull request #41', url: PR_41 }])
+  expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login')).toBe(git(workdirOf(f, reviewer), 'rev-parse', 'HEAD'))
+  expect(gh.creates().map((c) => c.argv.slice(2, 6))).toEqual([['--head', 'eng-1-fix-login', '--base', 'main']])
+  expect(Object.values(gh.prs()).map((pr) => [pr.number, pr.baseRefName])).toEqual([[41, 'release']])
   expect(record(f).rework).toEqual({ kind: 'continue', pr: { kind: 'pr', label: 'Pull request #41', url: PR_41 }, branch: 'eng-1-fix-login', base: 'release' })
   await f.server.close()
 }, 30_000)
