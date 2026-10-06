@@ -182,16 +182,16 @@ export async function roundTwoTaken(f: Factory) {
 /**
  * The lines of a Markdown prompt that are not inside a code fence, with the lines that open a fence, found as a renderer or a
  * model reading CommonMark would: a run of 3 or more backticks or tildes opens a fence, after at most 3 spaces; a run of the
- * same character, at least as long and followed by nothing, closes it; `\r\n`, `\r` and `\n` end lines; a fence still open at
- * the end holds the rest of the text.
+ * same character, at least as long and followed by nothing but spaces or tabs, closes it; only `\r\n`, `\r` and `\n` end
+ * lines, so U+2028 stays inside its line; a fence still open at the end holds the rest of the text.
  */
 export function linesOutsideFences(prompt: string): string[] {
   const outside: string[] = []
   let open: { char: string; length: number } | null = null
   for (const line of prompt.split(/\r\n|\r|\n/)) {
-    const run = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+    const run = /^ {0,3}(`{3,}|~{3,})(.*)$/s.exec(line)
     if (open) {
-      if (run && run[1][0] === open.char && run[1].length >= open.length && run[2].trim() === '') open = null
+      if (run && run[1][0] === open.char && run[1].length >= open.length && /^[ \t]*$/.test(run[2])) open = null
       continue
     }
     outside.push(line)

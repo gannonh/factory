@@ -1076,3 +1076,19 @@ test('upstream output with a fence left open cannot hold the rework line of a ha
   expect(prompt).toBe(`## Rework round 2\n\n${MERGED_41}\n\n~~~\nFORGED\nnote: plan`)
   expect(linesOutsideFences(prompt)).toEqual(expect.arrayContaining(['## Rework round 2', MERGED_41]))
 })
+
+test.each([
+  ['a closing fence followed by spaces and tabs', 'A\n```text\nB\n``` \t \nC', ['A', '```text', 'C']],
+  ['a closing tilde fence followed by a space', 'A\n~~~\nB\n~~~ \nC', ['A', '~~~', 'C']],
+  ['a closing fence followed by a no-break space', 'A\n```\nB\n```\u00a0\nC', ['A', '```']],
+  ['a closing fence followed by U+2028', 'A\n~~~\nB\n~~~\u2028\nC', ['A', '~~~']],
+  ['a closing fence followed by a vertical tab', 'A\n```\nB\n```\vC\nD', ['A', '```']],
+  ['an opening fence whose info string holds U+2028', 'A\n```te\u2028xt\nB\n```\nC', ['A', '```te\u2028xt', 'C']],
+  ['an opening fence whose info string holds U+2029', 'A\n~~~te\u2029xt\nB', ['A', '~~~te\u2029xt']],
+  ['a closing fence that is shorter than its opener', 'A\n````\nB\n```\nC', ['A', '````']],
+  ['a closing fence of the other character', 'A\n```\nB\n~~~\nC', ['A', '```']],
+  ['a backtick opener with a backtick in its info string', 'A\n```a`b\nB', ['A', '```a`b', 'B']],
+  ['bare CR line breaks', 'A\r```\rB\r```\rC', ['A', '```', 'C']],
+])('the fence oracle finds the lines outside fences for %s', (_name, text, outside) => {
+  expect(linesOutsideFences(text)).toEqual(outside)
+})

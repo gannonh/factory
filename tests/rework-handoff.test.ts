@@ -6,10 +6,14 @@ import { execFile, execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
+import { createApi } from '../server/api'
 import { outputText } from '../server/rounds'
+import { MockServer } from '../server/simulation'
+import type { WorldStore } from '../server/worldFile'
 import type { AgentId, EdgeId, Run } from '../src/domain/types'
+import { memoryStore, RNG } from './fixture'
 import {
-  CODER, CONTINUE_41, FRAMING, ISSUE_URL, LIFECYCLE, LOCAL, linesOutsideFences, MERGED_41, NO_STATES, PR_41, PR_42, WALL, agentRunner, coderRuns, control, factory, gh, git, moveIssue, poll, prViews,
+  CODER, CONTINUE_41, FRAMING, ISSUE_URL, LIFECYCLE, LOCAL, linesOutsideFences, MERGED_41, NO_STATES, PR_41, PR_42, WALL, agentRunner, clock, coderRuns, control, factory, gh, git, linear, moveIssue, poll, prViews,
   pullRequestLogs, record, repository, seen, setWall, short, tempDir, until, workdirOf, type Factory,
 } from './rework-fixture'
 
@@ -18,8 +22,8 @@ const REVIEWER = 'ag-reviewer' as AgentId
 const QA = 'ag-qa' as AgentId
 
 /** `factory()` with the trigger feeding Planner, who hands off to Coder, who hands off to Reviewer, all on the local sandbox. Only Coder delivers. */
-function handoffFactory(root: string, runner = agentRunner(), settings = LIFECYCLE): Factory {
-  const f = factory(root, runner, settings)
+function handoffFactory(root: string, runner = agentRunner(), settings = LIFECYCLE, store?: WorldStore): Factory {
+  const f = factory(root, runner, settings, store)
   const drop = Object.values(f.server.snapshot().edges).filter((e) => (e.kind === 'triggers' && e.source === f.trigger) || (e.kind === 'runs-in' && e.source === REVIEWER))
   f.api.graph.removeEdges(drop.map((e) => e.id as EdgeId))
   f.api.graph.connect(f.trigger, PLANNER, 'triggers')
@@ -47,7 +51,7 @@ async function drain(f: Factory, stop: () => boolean = () => false, timeoutMs = 
 
 const lastRunOf = (f: Factory, agentId: AgentId): Run => Object.values(f.server.snapshot().runs).filter((r) => r.agentId === agentId).sort((a, b) => a.startedAt - b.startedAt || (a.id < b.id ? -1 : 1)).at(-1)!
 
-/** Planner's round 2 output, which Coder's round 2 prompt starts with. */
+/** Planner's round 2 output, which Coder's round 2 prompt ends with. */
 const plannerOutput = (f: Factory) => {
   const planner = lastRunOf(f, PLANNER)
   return `Implemented ENG-1 Fix login (round 2).\nbranch: factory-${planner.id}\ncommit: ${short(workdirOf(f, planner))} change for ENG-1 Fix login (round 2) (attempt 1)`
@@ -87,6 +91,34 @@ pr: Pull request #41 (${PR_41})`)
   expect(gh.creates()).toHaveLength(1)
   expect(record(f)).toMatchObject({ round: 2, phase: 'ended', rework: { kind: 'continue' }, result: { pr: { url: PR_41 } } })
   await f.server.close()
+})
+
+test('a delivering handoff task of a round saved before its feedback was kept gets the rework section alone after a restart', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const store = memoryStore()
+  const f = handoffFactory(repo.root, agentRunner(), LIFECYCLE, store)
+  await poll(f)
+  await drain(f)
+  gh.review(41, 'alice', 'Handle the empty case.', new Date(WALL + 1000).toISOString())
+  await moveIssue('ENG-1', 'Todo')
+  setWall(WALL + 5000)
+  await poll(f)
+  await drain(f, () => Object.values(f.server.snapshot().tasks).some((t) => t.agentId === CODER && t.title.includes('(round 2)')))
+  expect(record(f).feedback).toContain('- **alice** (review): Handle the empty case.')
+  const planned = plannerOutput(f)
+  await f.server.close()
+
+  const saved = JSON.parse(store.text!) as { intake: Record<string, Record<string, unknown>> }
+  for (const old of Object.values(saved.intake)) delete old.feedback
+  store.text = JSON.stringify(saved)
+
+  const server = new MockServer({ manual: true, rng: RNG, localRunner: agentRunner(), localRoot: repo.root, linear: linear(), clock, store })
+  const g = { server, api: createApi(server), trigger: f.trigger, root: repo.root }
+  expect(record(g)).toMatchObject({ round: 2, feedback: '' })
+  await drain(g)
+  expect(coderRoundTwoPrompts()).toEqual([`## Rework round 2\n\n${CONTINUE_41}\n\n${planned}`])
+  await server.close()
 })
 
 test('an issue task whose agent does not deliver gets the round\'s fenced feedback and no continue line, and the agent after it still continues', async () => {
