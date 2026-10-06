@@ -752,6 +752,22 @@ test('a comment that starts with more whitespace than the read keeps is still qu
   await f.server.close()
 })
 
+test('a poll waits for the next poll while the open pull request\u2019s head branch has an invisible character', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner())
+  await poll(f)
+  await nextRun(f)
+  await moveIssue('ENG-1', 'Todo')
+  gh.openPullRequest('eng-1-fix-login\u{E0100}', PR_41)
+  await poll(f)
+  expect(issueTasks(f)).toHaveLength(1)
+  expect(f.server.snapshot().logs.map((l) => l.msg)).toContain(
+    `ENG-1: could not read ${PR_41}, so its next round waits for the next poll: gh pr view: the pull request's head branch has a control, format or line break character: eng-1-fix-login\\u{e0100}`,
+  )
+  await f.server.close()
+})
+
 test('a gh read that fails for another reason still leaves the issue waiting for the next poll', async () => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
@@ -826,7 +842,15 @@ test.each([
   ['head', 'a line separator', 'eng-1-\u2028login', 'main', 'eng-1-\\u{2028}login'],
   ['head', 'a zero-width space', 'eng-1-fix-login\u200B', 'main', 'eng-1-fix-login\\u{200b}'],
   ['head', 'tag characters', 'eng-1-fix-login\u{E0049}\u{E0067}', 'main', 'eng-1-fix-login\\u{e0049}\\u{e0067}'],
+  ['head', 'a variation selector run', 'eng-1-fix-login\uFE00\u{E0100}\u{E01EF}', 'main', 'eng-1-fix-login\\u{fe00}\\u{e0100}\\u{e01ef}'],
+  ['head', 'a text-style variation selector', 'eng-1-fix-\u2764\uFE0E-login', 'main', 'eng-1-fix-\u2764\\u{fe0e}-login'],
+  ['head', 'a Hangul filler', 'eng-1-fix-login\u3164', 'main', 'eng-1-fix-login\\u{3164}'],
+  ['head', 'a halfwidth Hangul filler', 'eng-1-fix-login\uFFA0', 'main', 'eng-1-fix-login\\u{ffa0}'],
+  ['head', 'a Hangul choseong filler', 'eng-1-fix-login\u115F', 'main', 'eng-1-fix-login\\u{115f}'],
+  ['head', 'a Hangul jungseong filler', 'eng-1-fix-login\u1160', 'main', 'eng-1-fix-login\\u{1160}'],
+  ['head', 'a combining grapheme joiner', 'eng-1-fix-login\u034F', 'main', 'eng-1-fix-login\\u{34f}'],
   ['base', 'a zero-width space', 'eng-1-fix-login', 'main\u200B', 'main\\u{200b}'],
+  ['base', 'a variation selector', 'eng-1-fix-login', 'main\u{E0100}', 'main\\u{e0100}'],
 ] as const)('an open pull request whose %s branch has %s fails the run, and no log shows the raw name', async (which, _label, head, base, escaped) => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
@@ -838,17 +862,19 @@ test.each([
   expect(failed).toMatchObject({ status: 'failed', attempt: 1, error: reason })
   const logs = f.server.snapshot().logs.map((l) => l.msg)
   expect(logs).toContain(`run failed (${reason}); retrying attempt 2/2 in 0s`)
-  expect(logs.filter((m) => /[\u202E\u2028\u200B\u{E0049}]/u.test(m))).toEqual([])
+  expect(logs.filter((m) => /[\u202E\u2028\u200B\u{E0049}\uFE00\uFE0E\u{E0100}\u{E01EF}\u3164\uFFA0\u115F\u1160\u034F]/u.test(m))).toEqual([])
   expect(record(f).rework).toMatchObject({ kind: 'continue', branch: 'eng-1-fix-login', base: 'main' })
   await f.server.close()
 })
 
-test('an open pull request on an emoji branch continues on it', async () => {
+test.each([
+  ['a zero-width joiner', 'eng-1-\u{1F468}\u200D\u{1F4BB}-login'],
+  ['a variation selector 16', 'eng-1-\u2764\uFE0F-login'],
+])('an open pull request on an emoji branch with %s continues on it', async (_label, emoji) => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
   const f = factory(repo.root, agentRunner())
   await roundTwoTaken(f)
-  const emoji = 'eng-1-\u{1F468}\u200D\u{1F4BB}-login'
   git(repo.root, 'check-ref-format', '--branch', emoji)
   git(repo.origin, 'branch', '-m', 'eng-1-fix-login', emoji)
   gh.openPullRequest(emoji, PR_41)
