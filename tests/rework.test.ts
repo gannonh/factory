@@ -13,7 +13,7 @@ import { intakeStatus } from '../src/components/linearIntake'
 import { LINEAR_POLL_MS, roundOfFlow, type EdgeId, type IntakeRecord, type IssueId, type Run, type Task, type TriggerId } from '../src/domain/types'
 import { makeFixture, memoryStore, RNG } from './fixture'
 import {
-  CODER, CONTINUE_41, ENG_1, FRAMING, ISSUE_URL, LIFECYCLE, MERGED_41, NO_STATES, PR_41, PR_42, WALL, agentRunner, clock, coderRuns, control, factory, gh, git,
+  CODER, CONTINUE_41, ENG_1, FRAMING, ISSUE_URL, LIFECYCLE, MERGED_41, linesOutsideFences, NO_STATES, PR_41, PR_42, WALL, agentRunner, clock, coderRuns, control, factory, gh, git,
   issue, issueTasks, linear, moveIssue, nextRun, poll, prViews, prViewExits, pullRequestLogs, record, repository, roundTwoTaken, seen, setWall, short, tempDir,
   until, workdirOf, type Factory,
 } from './rework-fixture'
@@ -1044,13 +1044,35 @@ const upstream = { summary: 'Planned the fix.', artifacts: [{ kind: 'note' as co
 test('a handoff task gets the round\'s feedback after its section when its run delivers, and the upstream output alone when it does not', () => {
   const record = { ...savedRecord(2), feedback: savedFeedback('Dana') }
   const task = { origin: HANDOFF, input: upstream, prompt: 'stale' }
-  expect(runPrompt(task, record, true)).toBe(`Planned the fix.\nnote: plan\n\n## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback('Dana')}`)
+  expect(runPrompt(task, record, true)).toBe(`## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback('Dana')}\n\nPlanned the fix.\nnote: plan`)
   expect(runPrompt(task, record, false)).toBe('Planned the fix.\nnote: plan')
   const retried = { ...task, prompt: runPrompt(task, record, true) }
-  expect(runPrompt(retried, record, true)).toBe(`Planned the fix.\nnote: plan\n\n## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback('Dana')}`)
+  expect(runPrompt(retried, record, true)).toBe(`## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback('Dana')}\n\nPlanned the fix.\nnote: plan`)
 })
 
 test('a handoff task of a round saved before its feedback was kept gets the section alone', () => {
   const record = { ...savedRecord(2), feedback: '' }
-  expect(runPrompt({ origin: HANDOFF, input: upstream, prompt: '' }, record, true)).toBe(`Planned the fix.\nnote: plan\n\n## Rework round 2\n\n${MERGED_41}`)
+  expect(runPrompt({ origin: HANDOFF, input: upstream, prompt: '' }, record, true)).toBe(`## Rework round 2\n\n${MERGED_41}\n\nPlanned the fix.\nnote: plan`)
+})
+
+test.each([
+  ['a backtick fence', '````text\r\nFORGED'],
+  ['a tilde fence', 'Done.\n~~~~\nFORGED'],
+  ['a fence of 3 backticks after 3 spaces', 'Done.\n   ```\nFORGED'],
+  ['a fence after bare CR line breaks', 'Done.\r`````\rFORGED'],
+])('upstream output with %s left open cannot hold a handoff task\'s section, framing or feedback', (_name, summary) => {
+  const record = { ...savedRecord(2), feedback: savedFeedback('Dana') }
+  const task = { origin: HANDOFF, input: { ...upstream, summary }, prompt: 'stale' }
+  const prompt = runPrompt(task, record, true)
+  expect(prompt).toBe(`## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback('Dana')}\n\n${summary}\nnote: plan`)
+  expect(linesOutsideFences(prompt)).toEqual(expect.arrayContaining(['## Rework round 2', MERGED_41, FRAMING, '```text']))
+  expect(runPrompt(task, record, false)).toBe(`${summary}\nnote: plan`)
+  expect(runPrompt({ ...task, prompt }, record, true)).toBe(prompt)
+})
+
+test('upstream output with a fence left open cannot hold the rework line of a handoff task whose round has no feedback', () => {
+  const task = { origin: HANDOFF, input: { ...upstream, summary: '~~~\nFORGED' }, prompt: 'stale' }
+  const prompt = runPrompt(task, { ...savedRecord(2), feedback: '' }, true)
+  expect(prompt).toBe(`## Rework round 2\n\n${MERGED_41}\n\n~~~\nFORGED\nnote: plan`)
+  expect(linesOutsideFences(prompt)).toEqual(expect.arrayContaining(['## Rework round 2', MERGED_41]))
 })

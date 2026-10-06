@@ -225,15 +225,16 @@ export const outputText = (output: RunOutput): string =>
 /**
  * The prompt for a run of the task, from the round's record as the run starts. An issue task's `Rework round N` section is
  * rebuilt between its issue text and feedback when the run delivers, and dropped when it does not; round 1 has no section,
- * so its prompt stays as written. A handoff task gets the upstream output, plus the section and the round's feedback from
- * the record only when the run delivers, since only a delivering run works on the round's branch (ADR 0012). The prompt is
- * built from the task's input and the record, never from the saved prompt, so a retry cannot add them twice and no text in
- * the upstream output can move or drop them. Any other task keeps its prompt.
+ * so its prompt stays as written. A handoff task gets the upstream output, and when the run delivers, the section and the
+ * round's feedback from the record before it, since only a delivering run works on the round's branch (ADR 0012). The
+ * upstream output is agent-written and may end inside an open code fence, so it goes last: nothing after it can be swallowed
+ * by a fence it did not open. The prompt is built from the task's input and the record, never from the saved prompt, so a
+ * retry cannot add them twice and no text in the upstream output can move or drop them. Any other task keeps its prompt.
  */
 export function runPrompt(task: Pick<Task, 'origin' | 'input' | 'prompt'>, record: IntakeRecord | undefined, delivers: boolean): string {
   const parts = task.origin.kind === 'issue' && record && record.round > 1 ? issueParts(task.prompt, task.origin.issue.url, record.round) : null
   if (parts && record) return joined([parts.issue, delivers ? reworkSection(record) : null, parts.feedback])
-  if (task.origin.kind === 'handoff' && task.input) return joined([outputText(task.input), delivers && record ? reworkSection(record) : null, delivers && record ? record.feedback : null])
+  if (task.origin.kind === 'handoff' && task.input) return joined([delivers && record ? reworkSection(record) : null, delivers && record ? record.feedback : null, outputText(task.input)])
   return task.prompt
 }
 
