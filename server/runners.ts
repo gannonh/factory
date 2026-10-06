@@ -1,5 +1,5 @@
 import { spawn, spawnSync, execFile } from 'node:child_process'
-import { appendFile, mkdir, readFile, realpath, stat } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import type { Agent, Artifact, LogLevel, PullRequestRef, Run, RunId, Task } from '../src/domain/types'
@@ -131,7 +131,7 @@ export async function prepareWorkdir(root: string, runId: RunId, delivery: Deliv
   if (delivery) return prepareDelivery(rootPath, workdir, `factory-${basename(runId)}`, delivery)
   const initialHead = await execFileAsync('git', ['-C', rootPath, 'rev-parse', '--verify', 'HEAD']).then(({ stdout }) => stdout.trim()).catch(() => null)
   if (initialHead) {
-    await execFileAsync('git', ['-C', rootPath, 'worktree', 'add', '-b', `factory-${runId}`, workdir, initialHead])
+    await claiming(workdir, `factory-${runId}`, () => execFileAsync('git', ['-C', rootPath, 'worktree', 'add', '-b', `factory-${runId}`, workdir, initialHead]))
     return { root: rootPath, path: workdir, initialHead, delivery: null }
   }
   await mkdir(workdir)
@@ -212,14 +212,14 @@ async function prepareDeliveryNow(rootPath: string, workdir: string, runBranch: 
     await git('check branch name', ['check-ref-format', '--branch', base])
     await git('git fetch', ['fetch', '--no-tags', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`, `+refs/heads/${requested}:refs/remotes/origin/${requested}`], NETWORK_TIMEOUT_MS)
     const initialHead = (await git('git rev-parse', ['rev-parse', '--verify', `refs/remotes/origin/${requested}^{commit}`])).trim()
-    await git('git worktree add', ['worktree', 'add', '--no-track', '-b', runBranch, workdir, initialHead])
+    await claiming(workdir, runBranch, () => git('git worktree add', ['worktree', 'add', '--no-track', '-b', runBranch, workdir, initialHead]))
     return { root: rootPath, path: workdir, initialHead, delivery: { kind: 'continue', branch: requested, base } }
   }
   const base = await defaultBranch(git)
   await git('git fetch', ['fetch', '--no-tags', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`], NETWORK_TIMEOUT_MS)
   const branch = await freeBranch(git, requested, request.retired)
   const initialHead = (await git('git rev-parse', ['rev-parse', '--verify', `refs/remotes/origin/${base}^{commit}`])).trim()
-  await git('git worktree add', ['worktree', 'add', '--no-track', '-b', branch, workdir, initialHead])
+  await claiming(workdir, branch, () => git('git worktree add', ['worktree', 'add', '--no-track', '-b', branch, workdir, initialHead]))
   return { root: rootPath, path: workdir, initialHead, delivery: { kind: 'new', branch, base } }
 }
 
@@ -464,6 +464,93 @@ export async function gitArtifacts(
 
 type JsonRecord = Record<string, unknown>
 const record = (value: unknown): value is JsonRecord => typeof value === 'object' && value !== null && !Array.isArray(value)
+
+/** What `<workdir>.owner` records: the local branch Factory created with the worktree, and the server process that did. */
+type Owner = { branch: string; pid: number }
+const ownerFile = (workdir: string) => `${workdir}.owner`
+
+/**
+ * Writes the owner file before `add` creates the worktree and its branch, so a server killed in between still leaves the
+ * branch's name behind for the next start. A failed `add` creates neither, and drops the file again.
+ */
+async function claiming(workdir: string, branch: string, add: () => Promise<unknown>) {
+  await writeFile(ownerFile(workdir), JSON.stringify({ branch, pid: process.pid } satisfies Owner))
+  try { await add() } catch (error) { await rm(ownerFile(workdir), { force: true }); throw error }
+}
+
+async function readOwner(workdir: string): Promise<Owner | null> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(ownerFile(workdir), 'utf8'))
+    if (record(parsed) && typeof parsed.branch === 'string' && typeof parsed.pid === 'number') return { branch: parsed.branch, pid: parsed.pid }
+  } catch { /* absent or torn by a crash */ }
+  return null
+}
+
+/** Each worktree git registers for `rootPath` by path, with the branch checked out in it, if any. */
+async function registeredWorktrees(rootPath: string): Promise<Map<string, string | null>> {
+  const listing = (await execFileAsync('git', ['-C', rootPath, 'worktree', 'list', '--porcelain'], { timeout: LOCAL_TIMEOUT_MS })).stdout
+  const worktrees = new Map<string, string | null>()
+  for (const block of listing.split('\n\n')) {
+    const lines = block.split('\n')
+    const path = lines.find((line) => line.startsWith('worktree '))?.slice('worktree '.length)
+    if (path) worktrees.set(path, lines.find((line) => line.startsWith('branch refs/heads/'))?.slice('branch refs/heads/'.length) ?? null)
+  }
+  return worktrees
+}
+
+/**
+ * Removes what a run left under `<root>/.factory-runs`: its git worktree, the worktree's registration and the local branch
+ * Factory created with it. A branch already pushed stays on origin. Every step is safe to repeat and the owner file goes
+ * last, so a crash part way leaves the trace the next call follows. A run with no worktree, such as one in a plain
+ * directory, is left alone.
+ */
+export async function removeWorkdir(root: string, runId: RunId): Promise<void> {
+  const rootPath = await realpath(root).catch(() => null)
+  if (!rootPath) return
+  const workdir = join(rootPath, '.factory-runs', basename(runId))
+  return inDeliveryQueue(rootPath, async () => {
+    const git = async (...args: string[]) => {
+      try { await execFileAsync('git', ['-C', rootPath, ...args], { timeout: LOCAL_TIMEOUT_MS }) } catch (error) { throw new Error(`git ${args[0]} ${args[1]}: ${failureReason(error)}`) }
+    }
+    const registered = (await registeredWorktrees(rootPath)).get(workdir)
+    const owner = await readOwner(workdir)
+    // A worktree from before owner files is Factory's only when it is on the branch Factory names after the run.
+    const branch = owner?.branch ?? (registered === `factory-${basename(runId)}` ? registered : null)
+    if (!branch) return
+    if (registered !== undefined) await git('worktree', 'remove', '--force', workdir).catch(() => undefined)
+    await rm(workdir, { recursive: true, force: true, maxRetries: 3 })
+    await git('worktree', 'prune')
+    const exists = await execFileAsync('git', ['-C', rootPath, 'show-ref', '--verify', '--quiet', `refs/heads/${branch}`]).then(() => true, () => false)
+    if (exists) await git('branch', '-D', branch)
+    await rm(ownerFile(workdir), { force: true })
+  })
+}
+
+/** Whether another server process than this one still holds `pid`. Its runs are not this server's to remove. */
+function heldByAnotherServer(pid: number): boolean {
+  if (pid === process.pid) return false
+  try { process.kill(pid, 0); return true } catch (error) { return (error as { code?: string }).code === 'EPERM' }
+}
+
+/**
+ * Calls `remove` for each run under `root` that has an owner file, or a registered worktree under `.factory-runs`, that
+ * `live` does not claim and whose owner server is gone.
+ */
+export async function reconcileWorkdirs(root: string, live: (runId: RunId) => boolean, remove: (runId: RunId) => Promise<void>): Promise<void> {
+  const rootPath = await realpath(root).catch(() => null)
+  if (!rootPath) return
+  const runs = join(rootPath, '.factory-runs')
+  const ids = new Set<string>()
+  for (const name of await readdir(runs).catch(() => [])) if (name.endsWith('.owner')) ids.add(name.slice(0, -'.owner'.length))
+  for (const path of await registeredWorktrees(rootPath).then((found) => found.keys(), () => [])) if (dirname(path) === runs) ids.add(basename(path))
+  for (const id of ids) {
+    const runId = id as RunId
+    const owner = await readOwner(join(runs, id))
+    if (live(runId) || (owner && heldByAnotherServer(owner.pid))) continue
+    await remove(runId)
+  }
+}
+
 const usageTokens = (value: unknown) => {
   if (!record(value)) return null
   const input = value.input_tokens

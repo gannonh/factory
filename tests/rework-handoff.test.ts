@@ -14,8 +14,9 @@ import type { AgentId, EdgeId, Run } from '../src/domain/types'
 import { memoryStore, RNG } from './fixture'
 import {
   CODER, CONTINUE_41, FRAMING, ISSUE_URL, LIFECYCLE, LOCAL, linesOutsideFences, MERGED_41, NO_STATES, PR_41, PR_42, WALL, agentRunner, clock, coderRuns, control, factory, gh, git, linear, moveIssue, poll, prViews,
-  pullRequestLogs, record, repository, seen, setWall, short, tempDir, until, workdirOf, type Factory,
+  pullRequestLogs, record, repository, seen, setWall, tempDir, until, workdirOf, type Factory,
 } from './rework-fixture'
+import { ranOf } from './ran'
 
 const PLANNER = 'ag-planner' as AgentId
 const REVIEWER = 'ag-reviewer' as AgentId
@@ -54,7 +55,7 @@ const lastRunOf = (f: Factory, agentId: AgentId): Run => Object.values(f.server.
 /** Planner's round 2 output, which Coder's round 2 prompt ends with. */
 const plannerOutput = (f: Factory) => {
   const planner = lastRunOf(f, PLANNER)
-  return `Implemented ENG-1 Fix login (round 2).\nbranch: factory-${planner.id}\ncommit: ${short(workdirOf(f, planner))} change for ENG-1 Fix login (round 2) (attempt 1)`
+  return `Implemented ENG-1 Fix login (round 2).\nbranch: factory-${planner.id}\ncommit: ${ranOf(planner).short} change for ENG-1 Fix login (round 2) (attempt 1)`
 }
 
 /** The prompt of each of Coder's round 2 attempts. */
@@ -74,7 +75,7 @@ test('a delivering agent reached by handoff in round 2 is told to continue on th
   await drain(f)
   expect(record(f)).toMatchObject({ round: 1, phase: 'ended', result: { pr: { url: PR_41 } } })
   const planner1 = lastRunOf(f, PLANNER)
-  expect(promptsOf(f, 1)['Coder']).toBe(`Implemented ENG-1 Fix login.\nbranch: factory-${planner1.id}\ncommit: ${short(workdirOf(f, planner1))} change for ENG-1 Fix login (attempt 1)`)
+  expect(promptsOf(f, 1)['Coder']).toBe(`Implemented ENG-1 Fix login.\nbranch: factory-${planner1.id}\ncommit: ${ranOf(planner1).short} change for ENG-1 Fix login (attempt 1)`)
 
   await moveIssue('ENG-1', 'Todo')
   await poll(f)
@@ -84,10 +85,10 @@ test('a delivering agent reached by handoff in round 2 is told to continue on th
   expect(prompts['Coder']).toBe(`## Rework round 2\n\n${CONTINUE_41}\n\n${plannerOutput(f)}`)
   expect(prompts['Reviewer']).toBe(`Implemented ENG-1 Fix login (round 2) → Coder.
 branch: eng-1-fix-login
-commit: ${short(workdirOf(f, coder))} change for ENG-1 Fix login (round 2) → Coder (attempt 1)
+commit: ${ranOf(coder).short} change for ENG-1 Fix login (round 2) → Coder (attempt 1)
 pr: Pull request #41 (${PR_41})`)
   expect(pullRequestLogs(f)).toEqual([])
-  expect(git(workdirOf(f, coder), 'branch', '--show-current')).toBe(`factory-${coder.id}`)
+  expect(ranOf(coder).branch).toBe(`factory-${coder.id}`)
   expect(gh.creates()).toHaveLength(1)
   expect(record(f)).toMatchObject({ round: 2, phase: 'ended', rework: { kind: 'continue' }, result: { pr: { url: PR_41 } } })
   await f.server.close()
@@ -282,7 +283,7 @@ test('a delivering agent reached by handoff in a round whose pull request merged
   await drain(f)
   const merged = `Pull request #41 (${PR_41}) was merged, so this round starts a fresh branch and opens a new pull request.`
   expect(promptsOf(f, 2)['Coder']).toBe(`## Rework round 2\n\n${merged}\n\n${plannerOutput(f)}`)
-  expect(git(workdirOf(f, coderRuns(f).at(-1)!), 'branch', '--show-current')).toBe('eng-1-fix-login-2')
+  expect(ranOf(coderRuns(f).at(-1)!).branch).toBe('eng-1-fix-login-2')
   expect(record(f)).toMatchObject({ round: 2, rework: { kind: 'fresh', state: 'merged' }, result: { pr: { url: PR_42 } } })
   await f.server.close()
 })
@@ -300,7 +301,7 @@ test('a delivering agent reached by handoff in a round whose pull request moved 
   await drain(f)
   const coder = lastRunOf(f, CODER)
   expect(promptsOf(f, 2)['Coder']).toBe(`## Rework round 2\n\n${CONTINUE_41.replace('eng-1-fix-login', 'eng-1-login')}\n\n${plannerOutput(f)}`)
-  expect(git(repo.origin, 'rev-parse', 'eng-1-login')).toBe(git(workdirOf(f, coder), 'rev-parse', 'HEAD'))
+  expect(git(repo.origin, 'rev-parse', 'eng-1-login')).toBe(ranOf(coder).head)
   expect(pullRequestLogs(f)).toEqual(['pull request #41 moved to branch eng-1-login'])
   expect(record(f)).toMatchObject({ round: 2, rework: { kind: 'continue', branch: 'eng-1-login' }, result: { pr: { url: PR_41 } } })
   expect(gh.creates()).toHaveLength(1)
@@ -351,7 +352,7 @@ test('a delivering handoff retry after its pull request merged gets one rework s
     `## Rework round 2\n\n${CONTINUE_41}\n\n${plannerOutput(f)}`,
     `## Rework round 2\n\n${merged}\n\n${plannerOutput(f)}`,
   ])
-  expect(git(workdirOf(f, coderRuns(f).at(-1)!), 'branch', '--show-current')).toBe('eng-1-fix-login-2')
+  expect(ranOf(coderRuns(f).at(-1)!).branch).toBe('eng-1-fix-login-2')
   await f.server.close()
 })
 
@@ -528,7 +529,7 @@ test('a sibling whose older read of two retargets lands first delivers to the pu
   expect(prViews()).toBe(views + 5)
   expect(pullRequestLogs(f)).toEqual(['pull request #41 was retargeted to develop', 'pull request #41 was retargeted to release'])
   expect(lastRunOf(f, REVIEWER).output?.artifacts.filter((a) => a.kind === 'pr')).toEqual([{ kind: 'pr', label: 'Pull request #41', url: PR_41 }])
-  expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login')).toBe(git(workdirOf(f, reviewer), 'rev-parse', 'HEAD'))
+  expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login')).toBe(ranOf(reviewer).head)
   expect(gh.creates().map((c) => c.argv.slice(2, 6))).toEqual([['--head', 'eng-1-fix-login', '--base', 'main']])
   expect(Object.values(gh.prs()).map((pr) => [pr.number, pr.baseRefName])).toEqual([[41, 'release']])
   expect(record(f).rework).toEqual({ kind: 'continue', pr: { kind: 'pr', label: 'Pull request #41', url: PR_41 }, branch: 'eng-1-fix-login', base: 'release' })
@@ -561,8 +562,8 @@ test('a merged read after a parallel read saved a branch move still makes the ru
   expect(record(f)).toMatchObject({ round: 2, rework: { kind: 'fresh', state: 'merged' } })
   expect(promptsOf(f, 2)['Coder']).toBe(`## Rework round 2\n\n${MERGED_41}\n\n${plannerOutput(f)}`)
   expect(promptsOf(f, 2)['Reviewer']).toBe(`## Rework round 2\n\n${CONTINUE_41.replace('eng-1-fix-login', 'eng-1-login')}\n\n${plannerOutput(f)}`)
-  expect(git(workdirOf(f, coder), 'branch', '--show-current')).toBe('eng-1-fix-login-2')
-  expect(git(workdirOf(f, reviewer), 'branch', '--show-current')).toBe(`factory-${reviewer.id}`)
+  expect(ranOf(coder).branch).toBe('eng-1-fix-login-2')
+  expect(ranOf(reviewer).branch).toBe(`factory-${reviewer.id}`)
   await f.server.close()
 }, 30_000)
 

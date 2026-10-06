@@ -16,6 +16,7 @@ import {
   ENG_1, ISSUE_URL, PR_41, PR_42, LIFECYCLE, REVIEWER, addReviewer, agentRunner, agentRuns, clock, coderRuns, commitFile, control, factory, gh, git,
   issue, issueTasks, linear, moveIssue, nextRun, poll, prViews, realGit, record, repository, roundTwoTaken, seen, tempDir, until, workdirOf, type Factory,
 } from './rework-delivery-fixture'
+import { ranOf } from './ran'
 
 /** Squash-merges `branch` into origin's `main`, as GitHub does, then commits `edit` to change.txt on `main` when given. */
 function squashMerge(repo: { seed: string }, branch: string, edit?: string) {
@@ -27,14 +28,9 @@ function squashMerge(repo: { seed: string }, branch: string, edit?: string) {
   git(repo.seed, 'push', '--quiet', 'origin', 'HEAD:refs/heads/main')
 }
 
-/**
- * GitHub deleting a merged PR's branch, and the sandbox root losing the local copy that `run` (round 1's by default)
- * worked on, so only Factory's rule keeps the name retired.
- */
-function deleteBranch(f: Factory, repo: { origin: string; root: string }, branch: string, run: Run = coderRuns(f)[0]) {
+/** GitHub deleting a merged PR's branch, so only Factory's rule keeps the name retired. */
+function deleteBranch(repo: { origin: string }, branch: string) {
   git(repo.origin, 'update-ref', '-d', `refs/heads/${branch}`)
-  git(repo.root, 'worktree', 'remove', '--force', workdirOf(f, run))
-  git(repo.root, 'branch', '-D', branch)
 }
 
 /**
@@ -99,11 +95,10 @@ test.each([
   const views = prViews()
 
   const run = await nextRun(f)
-  const workdir = workdirOf(f, run)
   expect(run.status).toBe('succeeded')
   expect(prViews()).toBe(views + 1)
-  expect(git(workdir, 'branch', '--show-current')).toBe('eng-1-fix-login-2')
-  expect(git(workdir, 'rev-parse', 'HEAD~1')).toBe(git(repo.origin, 'rev-parse', 'main'))
+  expect(ranOf(run).branch).toBe('eng-1-fix-login-2')
+  expect(ranOf(run).parent).toBe(git(repo.origin, 'rev-parse', 'main'))
   expect(git(repo.origin, 'for-each-ref', '--format=%(refname:short) %(objectname)', 'refs/heads/eng-1-fix-login')).toBe(deleteBranch ? '' : `eng-1-fix-login ${mergedTip}`)
   expect(gh.creates().map((c) => c.argv.slice(2, 4))).toEqual([['--head', 'eng-1-fix-login'], ['--head', 'eng-1-fix-login-2']])
   expect(run.output?.artifacts.at(-1)).toEqual({ kind: 'pr', label: 'Pull request #42', url: PR_42 })
@@ -133,7 +128,7 @@ test('an unreadable pull request fails round 2’s run without guessing a branch
 
   const retried = await nextRun(f)
   expect(retried).toMatchObject({ status: 'succeeded', attempt: 2 })
-  expect(git(workdirOf(f, retried), 'branch', '--show-current')).toBe('eng-1-fix-login-2')
+  expect(ranOf(retried).branch).toBe('eng-1-fix-login-2')
   expect(record(f).rework).toMatchObject({ kind: 'fresh', state: 'merged' })
   await f.server.close()
 })
@@ -159,20 +154,34 @@ test('a restart after round 2’s run read the merge retries fresh without readi
   expect(retried).toMatchObject({ status: 'succeeded', attempt: 2 })
   expect(seen.at(-1)?.prompt.split('\n\n').at(-1)).toBe(closed)
   expect(prViews()).toBe(views)
-  expect(git(workdirOf(g, retried), 'branch', '--show-current')).toBe('eng-1-fix-login-3')
+  expect(ranOf(retried).branch).toBe('eng-1-fix-login-2')
   expect((await issue('ENG-1')).comments.at(-1)?.body.split('\n\n')[1]).toBe('Pull request #41 was closed, so this round opened a new pull request.')
   await server.close()
 })
 
 const ROUND_2 = (task: Task) => task.title.endsWith('(round 2)')
-/** The run's worktree as delivery left it, the root's stash list, and how many worktrees remain besides the root. */
-const untouched = (f: Factory, run: Run) => ({
-  branch: git(workdirOf(f, run), 'branch', '--show-current'),
-  head: git(workdirOf(f, run), 'rev-parse', 'HEAD'),
-  status: git(workdirOf(f, run), 'status', '--porcelain'),
+/** The worktree at `dir` as delivery left it, the root's stash list, and how many worktrees the root has besides itself. */
+const untouched = (f: Factory, dir: string) => ({
+  branch: git(dir, 'branch', '--show-current'),
+  head: git(dir, 'rev-parse', 'HEAD'),
+  status: git(dir, 'status', '--porcelain'),
   stash: git(f.root, 'stash', 'list'),
   worktrees: git(f.root, 'worktree', 'list', '--porcelain').split('\n').filter((line) => line.startsWith('worktree ')).length - 1,
 })
+
+/**
+ * Runs Coder's next run with the removal of its worktree held at `git worktree remove`, and reads `look` once delivery is
+ * done and the worktree is still there.
+ */
+async function nextRunReading<T>(f: Factory, look: (dir: string) => T): Promise<{ run: Run; read: T }> {
+  const held = holdGit('worktree', 'remove')
+  held.hold()
+  const finished = nextRun(f)
+  await until(held.reached)
+  const read = look(workdirOf(f, coderRuns(f).at(-1)!))
+  held.release()
+  return { run: await finished, read }
+}
 const MERGED_LINE = `Pull request #41 (${PR_41}) was merged, so this round starts a fresh branch and opens a new pull request.`
 const MERGED_NOTE = ['**Factory finished this issue (round 2).**', 'Pull request #41 was merged, so this round opened a new pull request.']
 const refs = (repo: string, pattern: string) => git(repo, 'for-each-ref', '--format=%(refname:short)', pattern)
@@ -189,7 +198,7 @@ test.each([
       mergedTip = git(repo.origin, 'rev-parse', 'refs/heads/eng-1-fix-login')
       squashMerge(repo, 'eng-1-fix-login')
       gh.setState('eng-1-fix-login', 'MERGED')
-      if (deleted) deleteBranch(f, repo, 'eng-1-fix-login')
+      if (deleted) deleteBranch(repo, 'eng-1-fix-login')
     }
     return 'commit'
   }))
@@ -197,11 +206,10 @@ test.each([
   const views = prViews()
 
   const run = await nextRun(f)
-  const workdir = workdirOf(f, run)
   expect(run.status).toBe('succeeded')
   expect(prViews()).toBe(views + 2)
   expect(git(repo.origin, 'for-each-ref', '--format=%(refname:short) %(objectname)', 'refs/heads/eng-1-fix-login')).toBe(deleted ? '' : `eng-1-fix-login ${mergedTip}`)
-  expect(git(workdir, 'rev-parse', 'HEAD~1')).toBe(mergedTip)
+  expect(ranOf(run).parent).toBe(mergedTip)
   expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login-2~1')).toBe(git(repo.origin, 'rev-parse', 'main'))
   expect(git(repo.origin, 'log', '--format=%s', 'main..eng-1-fix-login-2')).toBe('change for ENG-1 Fix login (round 2) (attempt 1)')
   expect(gh.creates().map((c) => c.argv.slice(2, 6))).toEqual([['--head', 'eng-1-fix-login', '--base', 'main'], ['--head', 'eng-1-fix-login-2', '--base', 'main']])
@@ -234,11 +242,10 @@ test('a run whose commits conflict with the squash-merged default branch fails w
   await roundTwoTaken(f)
   const roundOneTip = git(repo.origin, 'rev-parse', 'eng-1-fix-login')
 
-  const failed = await nextRun(f)
-  const agentTip = git(workdirOf(f, failed), 'rev-parse', 'HEAD')
+  const { run: failed, read } = await nextRunReading(f, (dir) => ({ ...untouched(f, dir), subject: git(dir, 'log', '-1', '--format=%s') }))
+  const agentTip = ranOf(failed).head
   expect(failed).toMatchObject({ status: 'failed', attempt: 1, error: "delivery failed: the run's commits conflict with origin/main in change.txt" })
-  expect(untouched(f, failed)).toEqual({ branch: `factory-${failed.id}`, head: agentTip, status: '', stash: '', worktrees: 2 })
-  expect(git(workdirOf(f, failed), 'log', '-1', '--format=%s')).toBe('change for ENG-1 Fix login (round 2) (attempt 1)')
+  expect(read).toEqual({ branch: `factory-${failed.id}`, head: agentTip, status: '', stash: '', worktrees: 1, subject: 'change for ENG-1 Fix login (round 2) (attempt 1)' })
   expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login')).toBe(roundOneTip)
   expect(refs(repo.origin, 'refs/heads/eng-1-fix-login-*')).toBe('')
   expect(refs(repo.root, 'refs/heads/eng-1-fix-login-*')).toBe('')
@@ -247,7 +254,7 @@ test('a run whose commits conflict with the squash-merged default branch fails w
 
   const retried = await nextRun(f)
   expect(retried).toMatchObject({ status: 'succeeded', attempt: 2 })
-  expect(git(workdirOf(f, retried), 'branch', '--show-current')).toBe('eng-1-fix-login-2')
+  expect(ranOf(retried).branch).toBe('eng-1-fix-login-2')
   expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login-2~1')).toBe(git(repo.origin, 'rev-parse', 'main'))
   expect(record(f)).toMatchObject({ result: { pr: { url: PR_42 } } })
   await f.server.close()
@@ -280,7 +287,7 @@ test('the retry after a fresh delivery’s gh pr create fails never reuses the d
       merged = true
       squashMerge(repo, 'eng-1-fix-login')
       gh.setState('eng-1-fix-login', 'MERGED')
-      deleteBranch(f, repo, 'eng-1-fix-login')
+      deleteBranch(repo, 'eng-1-fix-login')
       gh.failNext('create')
     }
     return 'commit'
@@ -291,7 +298,7 @@ test('the retry after a fresh delivery’s gh pr create fails never reuses the d
   expect(failed).toMatchObject({ status: 'failed', error: 'delivery failed: gh pr create: GraphQL: was submitted too quickly (createPullRequest)' })
   const retried = await nextRun(f)
   expect(retried).toMatchObject({ status: 'succeeded', attempt: 2 })
-  expect(git(workdirOf(f, retried), 'branch', '--show-current')).toBe('eng-1-fix-login-3')
+  expect(ranOf(retried).branch).toBe('eng-1-fix-login-3')
   expect(refs(repo.origin, 'refs/heads/eng-1-fix-login')).toBe('')
   expect(gh.creates().map((c) => c.argv[3])).toEqual(['eng-1-fix-login', 'eng-1-fix-login-2', 'eng-1-fix-login-3'])
   await f.server.close()
@@ -369,7 +376,7 @@ test('a delivering agent that starts after the round went fresh never reuses the
     if (ROUND_2(task)) {
       squashMerge(repo, 'eng-1-fix-login')
       gh.setState('eng-1-fix-login', 'MERGED')
-      deleteBranch(f, repo, 'eng-1-fix-login')
+      deleteBranch(repo, 'eng-1-fix-login')
     }
     return 'commit'
   }))
@@ -380,7 +387,7 @@ test('a delivering agent that starts after the round went fresh never reuses the
   expect(coder.output?.artifacts.at(-1)).toEqual({ kind: 'pr', label: 'Pull request #42', url: PR_42 })
   const reviewer = await nextRun(f, REVIEWER)
   expect(reviewer.status).toBe('succeeded')
-  expect(git(workdirOf(f, reviewer), 'branch', '--show-current')).toBe('eng-1-fix-login-3')
+  expect(ranOf(reviewer).branch).toBe('eng-1-fix-login-3')
   expect(refs(repo.origin, 'refs/heads/eng-1-fix-login')).toBe('')
   expect(gh.creates().map((c) => c.argv[3])).toEqual(['eng-1-fix-login', 'eng-1-fix-login-2', 'eng-1-fix-login-3'])
   await f.server.close()
@@ -439,10 +446,9 @@ test('a fresh delivery replays the run’s commits outside the agent’s worktre
   }))
   await roundTwoTaken(f)
 
-  const run = await nextRun(f)
+  const { run, read } = await nextRunReading(f, (dir) => ({ ...untouched(f, dir), subject: git(dir, 'log', '-1', '--format=%s') }))
   expect(run.status).toBe('succeeded')
-  expect(untouched(f, run)).toEqual({ branch: `factory-${run.id}`, head: git(workdirOf(f, run), 'rev-parse', 'HEAD'), status: 'M base.txt\n?? gen.lock', stash: '', worktrees: 2 })
-  expect(git(workdirOf(f, run), 'log', '-1', '--format=%s')).toBe('change for ENG-1 Fix login (round 2) (attempt 1)')
+  expect(read).toEqual({ branch: `factory-${run.id}`, head: ranOf(run).head, status: 'M base.txt\n?? gen.lock', stash: '', worktrees: 1, subject: 'change for ENG-1 Fix login (round 2) (attempt 1)' })
   expect(git(repo.origin, 'log', '--format=%s', 'main..eng-1-fix-login-2')).toBe('change for ENG-1 Fix login (round 2) (attempt 1)')
   expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login-2~1')).toBe(git(repo.origin, 'rev-parse', 'main'))
   expect(git(repo.origin, 'show', 'eng-1-fix-login-2:gen.lock')).toBe('tracked on main')
@@ -546,7 +552,7 @@ test('round 3 replaying after round 2’s new pull request merged never reuses r
   await nextRun(f)
   squashMerge(repo, 'eng-1-fix-login')
   gh.setState('eng-1-fix-login', 'MERGED')
-  deleteBranch(f, repo, 'eng-1-fix-login')
+  deleteBranch(repo, 'eng-1-fix-login')
   await moveIssue('ENG-1', 'Todo')
   await poll(f)
   const second = await nextRun(f)
@@ -663,12 +669,12 @@ test('a replay needs no worktree, hooks, signing or committer identity, and keep
   }))
   try {
     await roundTwoTaken(f)
-    const run = await nextRun(f)
-    expect(run.status).toBe('succeeded')
     const format = '--format=%an <%ae> %ad%n%cn <%ce> %cd%n%B'
-    expect(git(repo.origin, 'log', '-1', format, 'eng-1-fix-login-2')).toBe(git(workdirOf(f, run), 'log', '-1', format, 'HEAD'))
+    const { run, read: agentCommit } = await nextRunReading(f, (dir) => git(dir, 'log', '-1', format, 'HEAD'))
+    expect(run.status).toBe('succeeded')
+    expect(git(repo.origin, 'log', '-1', format, 'eng-1-fix-login-2')).toBe(agentCommit)
     expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login-2~1')).toBe(git(repo.origin, 'rev-parse', 'main'))
-    expect(git(repo.root, 'worktree', 'list', '--porcelain').split('\n').filter((line) => line.startsWith('worktree ')).length).toBe(3)
+    expect(git(repo.root, 'worktree', 'list', '--porcelain').split('\n').filter((line) => line.startsWith('worktree ')).length).toBe(1)
     expect(refs(repo.root, 'refs/heads/eng-1-fix-login-*')).toBe('')
     expect(run.output?.artifacts.at(-1)).toEqual({ kind: 'pr', label: 'Pull request #42', url: PR_42 })
   } finally {
@@ -686,11 +692,11 @@ test('with Coder handing off to a Reviewer that does not deliver, round 3 never 
   const f = factory(repo.root, agentRunner())
   addReviewer(f, 'none')
   await poll(f)
-  const first = await nextRun(f)
+  await nextRun(f)
   await nextRun(f, REVIEWER)
   expect(record(f)).toMatchObject({ round: 1, phase: 'ended', result: { pr: { url: PR_41 } } })
   gh.setState('eng-1-fix-login', 'MERGED')
-  deleteBranch(f, repo, 'eng-1-fix-login', first)
+  deleteBranch(repo, 'eng-1-fix-login')
 
   await moveIssue('ENG-1', 'Todo')
   await poll(f)
@@ -698,7 +704,7 @@ test('with Coder handing off to a Reviewer that does not deliver, round 3 never 
   await nextRun(f, REVIEWER)
   expect(second.output?.artifacts.find((a) => a.kind === 'branch')).toEqual({ kind: 'branch', label: 'eng-1-fix-login-2', url: null })
   gh.setState('eng-1-fix-login-2', 'MERGED')
-  deleteBranch(f, repo, 'eng-1-fix-login-2', second)
+  deleteBranch(repo, 'eng-1-fix-login-2')
 
   await moveIssue('ENG-1', 'Todo')
   await poll(f)
@@ -715,14 +721,14 @@ test('when two delivering agents each open a pull request in round 1, round 2 re
   const f = factory(repo.root, agentRunner())
   addReviewer(f)
   await poll(f)
-  const coder = await nextRun(f)
-  const reviewer = await nextRun(f, REVIEWER)
+  await nextRun(f)
+  await nextRun(f, REVIEWER)
   expect(gh.creates().map((c) => c.argv[3])).toEqual(['eng-1-fix-login', 'eng-1-fix-login-2'])
   expect(record(f)).toMatchObject({ round: 1, result: { pr: { url: PR_42 } }, prBranches: ['eng-1-fix-login', 'eng-1-fix-login-2'] })
   gh.setState('eng-1-fix-login', 'MERGED')
   gh.setState('eng-1-fix-login-2', 'MERGED')
-  deleteBranch(f, repo, 'eng-1-fix-login', coder)
-  deleteBranch(f, repo, 'eng-1-fix-login-2', reviewer)
+  deleteBranch(repo, 'eng-1-fix-login')
+  deleteBranch(repo, 'eng-1-fix-login-2')
 
   await moveIssue('ENG-1', 'Todo')
   await poll(f)
@@ -763,8 +769,8 @@ test('a pull request unreadable after round 2’s agent works fails the run befo
 
   const retried = await nextRun(f)
   expect(retried).toMatchObject({ status: 'succeeded', attempt: 2 })
-  expect(git(workdirOf(f, retried), 'branch', '--show-current')).toBe('eng-1-fix-login-2')
-  expect(git(workdirOf(f, retried), 'rev-parse', 'HEAD~1')).toBe(git(repo.origin, 'rev-parse', 'main'))
+  expect(ranOf(retried).branch).toBe('eng-1-fix-login-2')
+  expect(ranOf(retried).parent).toBe(git(repo.origin, 'rev-parse', 'main'))
   expect(record(f)).toMatchObject({ rework: { kind: 'fresh', state: 'merged' }, result: { pr: { url: PR_42 } } })
   await f.server.close()
 })
@@ -839,7 +845,7 @@ test('a pull request merged between delivery’s read and its push fails the run
 
   const retried = await nextRun(f)
   expect(retried).toMatchObject({ status: 'succeeded', attempt: 2 })
-  expect(git(workdirOf(f, retried), 'branch', '--show-current')).toBe('eng-1-fix-login-2')
+  expect(ranOf(retried).branch).toBe('eng-1-fix-login-2')
   expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login-2~1')).toBe(git(repo.origin, 'rev-parse', 'main'))
   expect(gh.creates().map((c) => c.argv[3])).toEqual(['eng-1-fix-login', 'eng-1-fix-login-2'])
   expect(record(f)).toMatchObject({ rework: { kind: 'fresh', state: 'merged' }, prBranches: ['eng-1-fix-login', 'eng-1-fix-login-2'], result: { pr: { url: PR_42 } } })
@@ -938,19 +944,17 @@ test('a record saved before delivered branches were kept never reuses the branch
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
   const store = memoryStore()
-  let roundOne: Run | undefined
   let g: Factory | undefined
   const runner = agentRunner((task) => {
     if (ROUND_2(task)) {
       squashMerge(repo, 'eng-1-fix-login')
       gh.setState('eng-1-fix-login', 'MERGED')
-      deleteBranch(g!, repo, 'eng-1-fix-login', roundOne)
+      deleteBranch(repo, 'eng-1-fix-login')
     }
     return 'commit'
   })
   const f = factory(repo.root, runner, LIFECYCLE, store)
   await roundTwoTaken(f)
-  roundOne = coderRuns(f)[0]
   await f.server.close()
   const saved = JSON.parse(store.text!) as { intake: Record<string, Partial<IntakeRecord>> }
   delete saved.intake[ENG_1].prBranches

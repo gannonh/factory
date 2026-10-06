@@ -16,6 +16,7 @@ import { MockServer } from '../server/simulation'
 import type { WorldStore } from '../server/worldFile'
 import type { AgentId, EdgeId, IntakeRecord, IssueId, LinearSettings, Run, SandboxId, Task, TriggerId } from '../src/domain/types'
 import { fakeGh } from './fake-gh'
+import { recordRan } from './ran'
 import { RNG } from './fixture'
 
 const roots: string[] = []
@@ -112,6 +113,7 @@ export function agentRunner(
       if (what === 'fail') return emit({ kind: 'complete', status: 'failed', result: null, reason: 'tests failed' })
       commitFile(workdir, file(task), `change for ${task.title} (attempt ${run.attempt})`)
       after(task, workdir, run.attempt)
+      recordRan(run.id, workdir)
       emit({ kind: 'complete', status: 'succeeded', result: `Implemented ${task.title}.` })
     },
     kill() {},
