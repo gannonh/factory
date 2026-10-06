@@ -184,30 +184,35 @@ async function defaultBranch(git: Git): Promise<string> {
   return base
 }
 
+// Runs whose fetch is reading its refs. Two roots that are worktrees of one repository share `refs/factory/` but not a queue.
+const fetching = new Set<string>()
+
 /**
- * Deletes every `refs/factory/*` ref, in one transaction: deleting refs from separate processes at once contends for
- * `packed-refs.lock`, and a delete that loses leaves its ref behind. It may fail without harm, since the next call
- * deletes what is left. Only called inside the delivery queue, where no run holds a ref it still needs.
+ * Deletes the `refs/factory/*` refs of every run that is not fetching, in one transaction: deleting refs from separate
+ * processes at once contends for `packed-refs.lock`, and a delete that loses leaves its ref behind. It may fail without
+ * harm, since the next call deletes what is left.
  */
 async function dropPrivateRefs(git: Git): Promise<void> {
-  const refs = (await git('git for-each-ref', ['for-each-ref', '--format=%(refname)', 'refs/factory/'])).split('\n').filter(Boolean)
-  if (refs.length > 0) await git('git update-ref', ['update-ref', '--stdin'], undefined, Buffer.from(refs.map((ref) => `delete ${ref}\n`).join('')))
+  const names = (await git('git for-each-ref', ['for-each-ref', '--format=%(refname)', 'refs/factory/'])).split('\n')
+  const stale = names.filter((name) => name && !fetching.has(name.split('/')[2]))
+  if (stale.length > 0) await git('git update-ref', ['update-ref', '--stdin'], undefined, Buffer.from(stale.map((ref) => `delete ${ref}\n`).join('')))
 }
 
 /**
  * The commits at the tips of origin's `branches`, fetched into refs private to run `runId`, which are deleted again once
  * read. A fetch never writes `refs/remotes/origin/*`, the refs a sibling's push to the same branch also writes, and
  * `--refmap=` stops git from updating them on the side. Nor does it write `FETCH_HEAD`, which the siblings share.
- * Only called inside the delivery queue, so every ref it finds under `refs/factory/` is one a crashed or failed earlier
- * call left, and it deletes them before it fetches.
+ * A crashed or failed earlier call can leave refs behind, so each call first deletes those of runs that are not fetching.
  */
 async function fetchTips(git: Git, runId: string, branches: readonly string[]): Promise<string[]> {
   const refs = branches.map((_, i) => `refs/factory/${runId}/${i}`)
   await dropPrivateRefs(git).catch(() => undefined)
+  fetching.add(runId)
   try {
     await git('git fetch', ['fetch', '--no-tags', '--no-write-fetch-head', '--refmap=', 'origin', ...branches.map((branch, i) => `+refs/heads/${branch}:${refs[i]}`)], NETWORK_TIMEOUT_MS)
     return await Promise.all(refs.map(async (ref) => (await git('git rev-parse', ['rev-parse', '--verify', `${ref}^{commit}`])).trim()))
   } finally {
+    fetching.delete(runId)
     await dropPrivateRefs(git).catch(() => undefined)
   }
 }

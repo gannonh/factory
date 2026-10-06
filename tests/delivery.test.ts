@@ -589,6 +589,24 @@ test('a ref a crashed run left under refs/factory is deleted by the next prepara
   expect(git(repo.root, 'for-each-ref', '--format=%(refname)', 'refs/heads/kept')).toBe('refs/heads/kept')
 })
 
+test("a preparation in a linked worktree of the repository leaves the refs/factory ref another root's fetch is still reading", async () => {
+  const repo = repository()
+  git(repo.seed, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature')
+  const linked = join(tempDir(), 'linked')
+  git(repo.root, 'worktree', 'add', '--quiet', '--detach', linked)
+  const ids = /^refs\/factory\/slow-run\//
+  // Git holds the slow run's fetch for a second after it wrote its refs, so the other root's preparation starts then.
+  const hook = join(repo.root, '.git', 'hooks', 'reference-transaction')
+  writeFileSync(hook, '#!/bin/sh\n[ "$1" = committed ] && grep -q " refs/factory/slow-run/" && sleep 1\nexit 0\n')
+  chmodSync(hook, 0o755)
+  const slow = resume(repo.root, 'slow-run', 'feature')
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  expect(git(repo.root, 'for-each-ref', '--format=%(refname)', 'refs/factory')).toMatch(ids)
+  await resume(linked, 'other-run', 'feature')
+  expect((await slow).delivery?.branch).toBe('feature')
+  expect(git(repo.root, 'for-each-ref', '--format=%(refname)', 'refs/factory')).toBe('')
+})
+
 test('a git or gh step that times out reports the timeout, not its last output line', () => {
   expect(failureReason(Object.assign(new Error('Command failed'), { killed: true, stderr: 'Creating pull request for x into main\n' }))).toBe('timed out')
   expect(failureReason(Object.assign(new Error('Command failed'), { killed: false, stderr: 'remote: hi\nfatal: unable to access\n' }))).toBe('fatal: unable to access')
