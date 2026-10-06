@@ -752,18 +752,23 @@ test('a comment that starts with more whitespace than the read keeps is still qu
   await f.server.close()
 })
 
-test('a poll waits for the next poll while the open pull request\u2019s head branch has an invisible character', async () => {
+test.each([
+  ['a variation selector', 'eng-1-fix-login\u{E0100}', 'eng-1-fix-login\\u{e0100}'],
+  ['a Hangul filler', 'eng-1-fix-login\u3164', 'eng-1-fix-login\\u{3164}'],
+  ['a combining grapheme joiner', 'eng-1-fix-login\u034F', 'eng-1-fix-login\\u{34f}'],
+  ['a text-style variation selector', 'eng-1-fix-\u2764\uFE0E-login', 'eng-1-fix-\u2764\\u{fe0e}-login'],
+])('a poll waits for the next poll while the open pull request\u2019s head branch has %s', async (_name, head, escaped) => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
   const f = factory(repo.root, agentRunner())
   await poll(f)
   await nextRun(f)
   await moveIssue('ENG-1', 'Todo')
-  gh.openPullRequest('eng-1-fix-login\u{E0100}', PR_41)
+  gh.openPullRequest(head, PR_41)
   await poll(f)
   expect(issueTasks(f)).toHaveLength(1)
   expect(f.server.snapshot().logs.map((l) => l.msg)).toContain(
-    `ENG-1: could not read ${PR_41}, so its next round waits for the next poll: gh pr view: the pull request's head branch has a control, format or line break character: eng-1-fix-login\\u{e0100}`,
+    `ENG-1: could not read ${PR_41}, so its next round waits for the next poll: gh pr view: the pull request's head branch has a control, format or line break character: ${escaped}`,
   )
   await f.server.close()
 })

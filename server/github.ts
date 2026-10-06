@@ -102,7 +102,7 @@ async function list(host: string, path: string): Promise<Json[]> {
 
 /**
  * Control, format, line separator, paragraph separator and default-ignorable characters, except the zero-width joiner and
- * variation selector 16 that emoji use. Git accepts all of them in a branch name. Refusing them stops bidi overrides,
+ * variation selector 16 that emoji use. Git accepts all of them except the ASCII controls, so a pull request can carry them in its branch name. Refusing them stops bidi overrides,
  * which make a name read in a different order from the branch Factory pushes to, tag characters, which spell text a model
  * reads, and the invisible characters that carry bytes or take up no room: variation selectors other than 16, Hangul
  * fillers such as U+3164 and the combining grapheme joiner (U+034F). Flag emoji built from tag characters are refused
