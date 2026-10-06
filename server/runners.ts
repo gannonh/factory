@@ -138,7 +138,8 @@ export async function prepareWorkdir(root: string, runId: RunId, delivery: Deliv
   return { root: rootPath, path: workdir, initialHead: null, delivery: null }
 }
 
-// Two runs on one repository must not pick the same free branch name or fetch at once.
+// Two runs on one repository must not pick the same free branch name or fetch at once. Pushes stay outside the queue, so a
+// slow push never holds up another run's start and pushes to different branches overlap.
 const deliveryQueues = new Map<string, Promise<unknown>>()
 
 function inDeliveryQueue<T>(rootPath: string, work: () => Promise<T>): Promise<T> {
@@ -182,6 +183,21 @@ async function defaultBranch(git: Git): Promise<string> {
   return base
 }
 
+/**
+ * The commits at the tips of origin's `branches`, fetched into refs private to run `runId`, which are deleted again once
+ * read. A fetch never writes `refs/remotes/origin/*`, the refs a sibling's push to the same branch also writes, and
+ * `--refmap=` stops git from updating them on the side. Nor does it write `FETCH_HEAD`, which the siblings share.
+ */
+async function fetchTips(git: Git, runId: string, branches: readonly string[]): Promise<string[]> {
+  const refs = branches.map((_, i) => `refs/factory/${runId}/${i}`)
+  await git('git fetch', ['fetch', '--no-tags', '--no-write-fetch-head', '--refmap=', 'origin', ...branches.map((branch, i) => `+refs/heads/${branch}:${refs[i]}`)], NETWORK_TIMEOUT_MS)
+  try {
+    return await Promise.all(refs.map(async (ref) => (await git('git rev-parse', ['rev-parse', '--verify', `${ref}^{commit}`])).trim()))
+  } finally {
+    await Promise.all(refs.map((ref) => git('git update-ref', ['update-ref', '-d', ref]).catch(() => undefined)))
+  }
+}
+
 /** The first of `requested`, `<requested>-2`, `<requested>-3`, … that is free locally and on origin and not in `taken`. */
 async function freeBranch(git: Git, requested: string, taken: readonly string[]): Promise<string> {
   const used = new Set(taken)
@@ -210,15 +226,13 @@ async function prepareDeliveryNow(rootPath: string, workdir: string, runBranch: 
   if (request.kind === 'continue') {
     const { base } = request
     await git('check branch name', ['check-ref-format', '--branch', base])
-    await git('git fetch', ['fetch', '--no-tags', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`, `+refs/heads/${requested}:refs/remotes/origin/${requested}`], NETWORK_TIMEOUT_MS)
-    const initialHead = (await git('git rev-parse', ['rev-parse', '--verify', `refs/remotes/origin/${requested}^{commit}`])).trim()
+    const [, initialHead] = await fetchTips(git, basename(workdir), [base, requested])
     await git('git worktree add', ['worktree', 'add', '--no-track', '-b', runBranch, workdir, initialHead])
     return { root: rootPath, path: workdir, initialHead, delivery: { kind: 'continue', branch: requested, base } }
   }
   const base = await defaultBranch(git)
-  await git('git fetch', ['fetch', '--no-tags', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`], NETWORK_TIMEOUT_MS)
+  const [initialHead] = await fetchTips(git, basename(workdir), [base])
   const branch = await freeBranch(git, requested, request.retired)
-  const initialHead = (await git('git rev-parse', ['rev-parse', '--verify', `refs/remotes/origin/${base}^{commit}`])).trim()
   await git('git worktree add', ['worktree', 'add', '--no-track', '-b', branch, workdir, initialHead])
   return { root: rootPath, path: workdir, initialHead, delivery: { kind: 'new', branch, base } }
 }
@@ -289,8 +303,7 @@ function freshDelivery(prepared: PreparedWorkdir, runStart: string, head: string
     const git = gitIn(prepared.root)
     await git('check branch name', ['check-ref-format', '--branch', requested])
     const base = await defaultBranch(git)
-    await git('git fetch', ['fetch', '--no-tags', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`], NETWORK_TIMEOUT_MS)
-    const onto = (await git('git rev-parse', ['rev-parse', '--verify', `refs/remotes/origin/${base}^{commit}`])).trim()
+    const [onto] = await fetchTips(git, basename(prepared.path), [base])
     const tip = await replay(prepared.root, runStart, head, onto, base)
     if (tip === onto) return { kind: 'empty' }
     const lost: string[] = []
