@@ -270,10 +270,17 @@ export class MockServer {
 
   /** `report` is off for a run that reset removed from the world, which has no log to warn in. */
   private async dropWorkdir(runId: RunId, root: string, report = true) {
-    try { await removeWorkdir(root, runId) } catch (error) {
+    const run = this.world.runs[runId]
+    const where = run ? { runId, agentId: run.agentId } : {}
+    try {
+      const left = await removeWorkdir(root, runId, run !== undefined && run.status !== 'running')
+      if (left.length && report) {
+        this.log('warn', `left alone, not provably this run's: ${left.join('; ')}`, where)
+        this.publish()
+      }
+    } catch (error) {
       if (!report) return
-      const run = this.world.runs[runId]
-      this.log('warn', `worktree of run ${runId} not removed, the next start retries: ${error instanceof Error ? error.message : String(error)}`, run ? { runId, agentId: run.agentId } : {})
+      this.log('warn', `worktree of run ${runId} not removed, the next start retries: ${error instanceof Error ? error.message : String(error)}`, where)
       this.publish()
     }
   }
@@ -731,6 +738,10 @@ export class MockServer {
     if (!sandbox) return
     if (patch.capacity !== undefined && !isCapacity(patch.capacity)) return
     if (patch.host !== undefined && (sandbox.kind !== 'local' || !isAbsolute(patch.host))) return
+    // A run's worktree is removed from, and at start looked for under, the sandbox's root as it is then (ADR 0009).
+    if (patch.host !== undefined && patch.host !== sandbox.host && sandbox.leases.length > 0) {
+      throw new Error('a run is in progress on this sandbox; change its root once it ends')
+    }
     this.patchSandbox(id, patch)
     this.publish()
   }

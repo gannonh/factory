@@ -62,7 +62,8 @@ test.each([
     PATH: `${fakeClaude()}:${fakeGh(tempDir()).bin}:${process.env.PATH}`,
   }
   const first = await boot(env)
-  expect(await post(first.port, 'agents.update', ['ag-coder', { delivery: 'pull-request' }])).toMatchObject({ ok: true })
+  // One attempt only, so the restarted server does not retry the interrupted run and make a second worktree under the assertions.
+  expect(await post(first.port, 'agents.update', ['ag-coder', { delivery: 'pull-request', retry: { maxAttempts: 1, backoffMs: 0, backoff: 'fixed' } }])).toMatchObject({ ok: true })
   expect(await post(first.port, 'agents.enqueue', ['ag-coder', { title: 'Add change', prompt: 'p', priority: 'normal' }])).toMatchObject({ ok: true })
   const runs = join(repo.root, '.factory-runs')
   await until(() => existsSync(runs) && readdirSync(runs).some((name) => existsSync(join(runs, name, 'agent.pid'))), 30_000)

@@ -247,7 +247,7 @@ test('an issue run cuts the issue branch from the fetched origin main, opens a P
   expect(run.status).toBe('succeeded')
   expect(ranOf(run).branch).toBe('eng-1-fix-login')
   expect(ranOf(run).parent).toBe(originMain)
-  expect(['upstream.txt', 'local.txt'].map((file) => ranOf(run).files.includes(file))).toEqual([true, false])
+  expect(ranOf(run).files).toEqual(['base.txt', 'change.txt', 'upstream.txt'])
   expect(f.server.snapshot().logs.map((l) => l.msg)).toContain(`working directory: ${workdir} on branch eng-1-fix-login from origin/main`)
   expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login')).toBe(ranOf(run).head)
   expect(gh.creates().map((c) => c.argv)).toEqual([[
