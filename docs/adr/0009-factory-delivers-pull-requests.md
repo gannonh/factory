@@ -10,7 +10,15 @@ When the agent's run succeeds, the server counts the commits on the worktree's `
 
 When an issue's flow ends finished or failed, write-back queues one attach write for each distinct pull request that the flow's succeeded local runs produced. `ensureAttachment` looks for an attachment with that URL on the issue and creates one only when none exists. Attach writes go out independently of moves, like notes. The completion note lists the run's artifacts, so it names the pull request or the "No changes" note.
 
-Agents with delivery `none` keep the worktree on `factory-<run id>` from the root's HEAD, and Factory pushes nothing for them.
+Agents with delivery `none` work in a worktree on `factory-<run id>` from the root's HEAD, and Factory pushes nothing for them.
+
+### When a run's worktree and branch are removed
+
+A run's worktree at `<root>/.factory-runs/<run id>`, its registration under `.git/worktrees`, and the local branch Factory created with it are removed when the run ends, in any status: succeeded, failed, cancelled or interrupted. That branch is `factory-<run id>`, or the delivery branch for a new pull request. A branch already pushed stays on origin, and so does a pull request. Removal comes last in the run's end, after delivery pushed and opened the pull request and after the commit list was read for the run's output, because those are the only readers of the worktree. Everything else that outlives the run lives elsewhere: the output and its artifacts are saved with the run, the log is in the run log store, a handoff task carries the output, a retry or a rework round gets a worktree of its own from origin, and no two runs share a local branch. A run that ends while its worktree is still being created is removed once the creation finishes.
+
+`git worktree remove --force` takes the directory and the registration, `git worktree prune` clears a registration whose directory is already gone, and `git branch -D` takes the branch. Each step is safe to repeat, and an owner file `.factory-runs/<run id>.owner`, written before the worktree is created and deleted last, names the branch and the server process that made it. A server killed part way through leaves the file, so the next start finishes the job. At start the server also removes the worktrees of runs it does not know to be running: those the restored world marks interrupted, those the saved world never recorded because the save is throttled, and those a crash left half removed. A worktree whose owner file names another server process that is still alive is left alone, and so is a worktree with neither an owner file nor the branch `factory-<run id>`. A failed removal is logged on the run and retried at the next start. The next start does not look for an agent process that outlived a killed server, so such a process keeps running after its directory is gone.
+
+Removal drops the commits an agent made in that worktree and that no push reached: a run with delivery `none`, a run whose delivery failed before its push, and a run killed mid-way. The run's output still lists their branch and commit labels, but the branch no longer exists in the sandbox root. A run in a root that is not a git repository works in a plain directory, which is not a worktree and stays.
 
 ## Reason
 
@@ -20,7 +28,9 @@ Credentials and naming stay with Factory. The agent needs no permission to push 
 
 Linear's GitHub integration links a pull request to an issue when the PR's branch is the issue's branch name. Using `branchName` gets that link without Factory writing to GitHub beyond the PR itself. The attachment that write-back adds shows the PR on the issue even when the integration is not installed. Keying it by URL keeps a repeated write from adding a second one.
 
-A retry never overwrites a pushed branch. An attempt that pushed and then failed to open its PR leaves that branch as it was, and the next attempt pushes a suffixed branch. Nothing is force-pushed, and no attempt's commits are lost.
+A retry never overwrites a pushed branch. An attempt that pushed and then failed to open its PR leaves that branch as it was on origin, and the next attempt pushes a suffixed branch. Nothing is force-pushed. An attempt whose push never happened leaves nothing on origin, and since its local branch is removed with its worktree, the next attempt can take the same name.
+
+Removing a run's worktree keeps the sandbox root, which is often the operator's own clone, from collecting a worktree and a branch for every run. Left in place, those branches also made the first-free-name rule skip names for good, so later delivery branches drifted to `-3`, `-4` and higher.
 
 Cutting from the fetched default branch keeps one run's local state from leaking into another's pull request. The sandbox root can have any branch checked out, with local commits, and the pull request still holds only the run's own commits.
 
