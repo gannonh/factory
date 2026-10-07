@@ -165,18 +165,55 @@ function fenced(sections: string[]): string {
   return fence(sections.join('\n\n'), FEEDBACK_FRAMING)
 }
 
+const HTML_BLOCK_ENDING_ON_A_MARKER: ReadonlyArray<[RegExp, RegExp]> = [
+  [/^<(?:script|pre|style|textarea)(?:[\s>]|$)/i, /<\/(?:script|pre|style|textarea)>/i],
+  [/^<!--/, /-->/],
+  [/^<\?/, /\?>/],
+  [/^<!\[CDATA\[/, /\]\]>/],
+  [/^<![A-Za-z]/, />/],
+]
+
 /**
- * `text` with the code fence it leaves open closed, found as `linesOutsideFences` in the rework fixture finds fences: the
- * closing line is the opener's character, as many times, alone on its line. A fence the text closes itself, or never opens, is
- * left as written. `\n` after a text that ends in a bare CR still starts a line of its own.
+ * `text` with the code fence it leaves open closed, so a CommonMark reader finds what follows outside any fence: the closing
+ * line is the opener's character, as many times, alone on its line. A fence the text closes itself, or never opens, is left as
+ * written. Only a fence at the top level can swallow what follows: one inside a list item or a block quote ends where its
+ * container does, and the text is followed by a blank line and an unindented line. So a fence counts only when no list item,
+ * block quote or HTML block can hold it, and a text where that is unclear is left as written, as it was before a closing line
+ * existed: a closing line there could open a fence of its own. A container is over after a blank line and an unindented line
+ * that starts none; an unindented fence line ends it at once. An HTML block is over at a blank line, or at its end marker.
+ * `\n` after a text that ends in a bare CR still starts a line of its own.
  */
 export function closeFences(text: string): string {
   let open: { char: string; length: number } | null = null
+  let container = false
+  let html = false
+  let afterBlank = true
   for (const line of text.split(/\r\n|\r|\n/)) {
     const run = /^ {0,3}(`{3,}|~{3,})(.*)$/s.exec(line)
     if (open) {
       if (run && run[1][0] === open.char && run[1].length >= open.length && /^[ \t]*$/.test(run[2])) open = null
-    } else if (run && !(run[1][0] === '`' && run[2].includes('`'))) open = { char: run[1][0], length: run[1].length }
+      continue
+    }
+    if (/^[ \t]*$/.test(line)) {
+      html = false
+      afterBlank = true
+      continue
+    }
+    const blankBefore = afterBlank
+    afterBlank = false
+    const indent = /^ {4}|^ {0,3}\t/.test(line) ? 4 : line.length - line.trimStart().length
+    if (indent >= 4) continue
+    const rest = line.slice(indent)
+    if (run && !(run[1][0] === '`' && run[2].includes('`'))) {
+      if (html || (container && indent > 0)) return text
+      container = false
+      open = { char: run[1][0], length: run[1].length }
+    } else if (/^>|^(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/.test(rest)) container = true
+    else if (rest.startsWith('<')) {
+      const marker = HTML_BLOCK_ENDING_ON_A_MARKER.find(([start]) => start.test(rest))
+      if (marker && !marker[1].test(rest)) return text
+      html ||= !marker
+    } else if (indent === 0 && blankBefore) container = false
   }
   return open ? `${text}\n${open.char.repeat(open.length)}` : text
 }

@@ -3,7 +3,7 @@
  * task's prompt (ADR 0012). The fence oracle is `linesOutsideFences` in `rework-fixture.ts`.
  */
 import { expect, test } from 'vitest'
-import { runPrompt } from '../server/rounds'
+import { roundPrompt, runPrompt } from '../server/rounds'
 import type { IntakeRecord, Task } from '../src/domain/types'
 import {
   CONTINUE_41, FRAMING, ISSUE_URL, MERGED_41, PR_41, agentRunner, control, factory, issueTasks, linesOutsideFences, moveIssue, nextRun, poll, repository, seen,
@@ -93,4 +93,35 @@ test('a round 1 issue task saved by an older build with a fence left open has it
   expect(run(closed)).toBe(closed)
   expect(run(`Fix login\n\n${ISSUE_URL}`)).toBe(`Fix login\n\n${ISSUE_URL}`)
   expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt: old }, undefined, true)).toBe(closed)
+})
+
+const ISSUE = { title: 'Fix login', url: ISSUE_URL, untrusted: null }
+const round2Record = { ...savedRecord, feedback } as unknown as IntakeRecord
+const FACTORY_LINES = [ISSUE_URL, '## Rework round 2', MERGED_41, FRAMING]
+
+test.each([
+  ['a list item holding the open fence', 'Steps:\n1. Run:\n   ```\n   npm test'],
+  ['a bullet holding a tilde fence', '- Run:\n  ~~~sh\n  npm test'],
+  ['a block quote holding the open fence', '> ```\n> code'],
+  ['an HTML block holding fence-looking lines', '<div>\n  ~~~~~x\n<div>\n'],
+  ['an HTML block holding a backtick line', '<div>\n```\n</div>'],
+  ['an HTML comment left open before a fence', '<!--\n\n```\nlog'],
+  ['a list item before an indented fence', '- a\n\n  ```\n  log'],
+])('a description with %s keeps Factory\'s lines outside any code block and is read as written', (_name, description) => {
+  const prompt = roundPrompt({ ...ISSUE, description }, round2Record, true)
+  expect(prompt).toBe(`Fix login\n\n${description}\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}\n\n${feedback}`)
+  expect(linesOutsideFences(prompt)).toEqual(expect.arrayContaining(FACTORY_LINES))
+})
+
+test.each([
+  ['a list that ended', '- a\n- b\n\n```\nlog', '```'],
+  ['a block quote that ended', '> quote\n\n~~~\nlog', '~~~'],
+  ['an HTML block that ended', '<div>x</div>\n\n````\nlog', '````'],
+  ['a one-line HTML comment', '<!-- note -->\n\n```\nlog', '```'],
+  ['a block quote line, the fence unindented after it', '> note\n```\ncode', '```'],
+  ['a fence opened right after a list line', '1. a\n```\nlog', '```'],
+])('a description whose unclosed top-level fence follows %s has it closed', (_name, description, closer) => {
+  const prompt = roundPrompt({ ...ISSUE, description }, round2Record, true)
+  expect(prompt).toBe(`Fix login\n\n${description}\n${closer}\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}\n\n${feedback}`)
+  expect(linesOutsideFences(prompt)).toEqual(expect.arrayContaining(FACTORY_LINES))
 })
