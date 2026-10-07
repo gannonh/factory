@@ -106,9 +106,10 @@ async function list(host: string, path: string): Promise<Json[]> {
  * which make a name read in a different order from the branch Factory pushes to, tag characters, which spell text a model
  * reads, and the invisible characters that carry bytes or take up no room: variation selectors other than 16, Hangul
  * fillers such as U+3164 and the combining grapheme joiner (U+034F). Flag emoji built from tag characters are refused
- * too. A lone zero-width joiner and the Braille blank (U+2800) still pass (ADR 0012).
+ * too. The Braille blank (U+2800) is not default-ignorable but renders blank, so it is refused by name. The other Braille
+ * patterns pass because each shows dots, and a lone zero-width joiner still passes (ADR 0012).
  */
-const UNSAFE_CHARS = /(?![\u200D\uFE0F])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]/gu
+const UNSAFE_CHARS = /(?![\u200D\uFE0F])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800]/gu
 
 export async function viewPullRequest(url: string): Promise<PullRequestView> {
   if (!PR_URL.test(url)) throw new Error(`not a pull request URL: ${url}`)
