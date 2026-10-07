@@ -634,12 +634,13 @@ export async function removeWorkdir(root: string, runId: RunId, ended: boolean):
     if (await lstat(workdir).then((info) => info.isSymbolicLink(), () => false)) throw new Error(`${workdir} is a symlink`)
     const left: string[] = []
     const legacy: string[] = []
-    const removeWorktree = async () => {
+    const removeWorktree = async (markProven: boolean) => {
       // Two forces: the worktree is locked with Factory's mark, and may be dirty. Git validates the path before deleting.
       await git('worktree', 'remove', '--force', '--force', workdir).catch(async (error: unknown) => {
-        // A worktree whose `.git` file is gone fails git's validation, while its registration still carries the mark.
-        const gitFileGone = await stat(join(workdir, '.git')).then(() => false, () => true)
-        if (!gitFileGone) throw error
+        // Git refuses when `.git` is not its worktree file. The agent deleted it, or replaced it with a directory or a link,
+        // while the registration still carries the mark, so a proven run's directory goes and then its registration.
+        const gitFile = await lstat(join(workdir, '.git')).then((info) => info.isFile(), () => null)
+        if (gitFile !== null && !(markProven && !gitFile)) throw error
         await rm(workdir, { recursive: true, force: true, maxRetries: 3 })
         await git('worktree', 'remove', '--force', '--force', workdir)
       })
@@ -648,7 +649,7 @@ export async function removeWorkdir(root: string, runId: RunId, ended: boolean):
     if (owner) {
       let kept: Registered | null = null
       if (found) {
-        if (found.lock === owner.token) await removeWorktree()
+        if (found.lock === owner.token) await removeWorktree(true)
         else { kept = found; left.push(`worktree ${workdir} (its lock reason is not this run's mark)`) }
       }
       if (await branchExists(owner.branch)) {
@@ -665,7 +666,7 @@ export async function removeWorkdir(root: string, runId: RunId, ended: boolean):
       else {
         // The branch may hold commits nothing pushed; its tip is reported so an operator can still reach them by SHA.
         const head = (await git('rev-parse', '--verify', '--quiet', `refs/heads/${found.branch}`).catch(() => '')).trim()
-        await removeWorktree()
+        await removeWorktree(false)
         if (head) await git('branch', '-D', found.branch)
         legacy.push(`worktree ${workdir}${head ? ` and branch ${found.branch}` : ''}, made before owner files${head ? `; its commits can be recovered from ${head} until git prunes them` : ''}`)
       }

@@ -13,7 +13,7 @@ import type { RunId } from '../src/domain/types'
 import { memoryStore, RNG } from './fixture'
 import { ranOf } from './ran'
 import {
-  CODER, ENG_1, LOCAL, addReviewer, agentRunner, clock, coderRuns, control, factory, git, linear, nextRun, poll, realGit, repository, seen, tempDir, until, workdirOf,
+  CODER, ENG_1, LOCAL, addReviewer, agentRunner, clock, commitFile, coderRuns, control, factory, git, linear, nextRun, poll, realGit, repository, seen, tempDir, until, workdirOf,
   type Factory,
 } from './rework-delivery-fixture'
 
@@ -29,6 +29,18 @@ const restart = (root: string, store = memoryStore()) => new MockServer({ manual
 type Owner = { branch: string; initialHead: string; token: string; server: { pid: number; started: string } }
 const readOwner = (f: Pick<Factory, 'root'>, id: string) => JSON.parse(readFileSync(ownerFile(f, id), 'utf8')) as Owner
 const processStart = (pid: number) => execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' } }).trim()
+
+/** What an agent does with `rm .git && git init`: the worktree's `.git` file becomes the directory of a new repository with a commit. */
+function replaceGitFile(workdir: string) {
+  rmSync(join(workdir, '.git'))
+  git(workdir, 'init', '--quiet')
+  git(workdir, 'config', 'user.email', 'agent@example.com')
+  git(workdir, 'config', 'user.name', 'Agent')
+  commitFile(workdir, 'fresh.txt', 'fresh')
+  commitFile(workdir, 'fresh.txt', 'fresher')
+}
+
+const registrations = (root: string) => existsSync(join(root, '.git', 'worktrees')) ? readdirSync(join(root, '.git', 'worktrees')) : []
 
 /** Starts a run whose agent never answers and waits until its worktree is there. */
 async function startHanging(f: Factory) {
@@ -372,6 +384,57 @@ test('a worktree whose .git file the agent deleted is still removed, since its r
   expect(runWorktrees(repo.root)).toEqual([])
   expect(localBranches(repo.root)).toEqual(['main'])
   expect(existsSync(ownerFile(f, run.id))).toBe(false)
+  await restarted.close()
+})
+
+test('a run whose agent replaced .git with a directory ends with no worktree, registration, branch, owner file or removal warning', async () => {
+  const repo = repository()
+  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => replaceGitFile(workdir)))
+  f.api.agents.update(CODER, { delivery: 'none' })
+  enqueue(f)
+  const run = await nextRun(f)
+
+  expect(run.status).toBe('succeeded')
+  expect(existsSync(workdirOf(f, run))).toBe(false)
+  expect(runWorktrees(repo.root)).toEqual([])
+  expect(registrations(repo.root)).toEqual([])
+  expect(localBranches(repo.root)).toEqual(['main'])
+  expect(existsSync(ownerFile(f, run.id))).toBe(false)
+  expect(warnings(f.server).filter((msg) => msg.includes('worktree'))).toEqual([])
+  await f.server.close()
+})
+
+test('a killed run whose agent replaced .git with a directory is removed at the next start without a warning', async () => {
+  const repo = repository()
+  const { f, run, workdir } = await killedRun(repo)
+  replaceGitFile(workdir)
+
+  const restarted = restart(repo.root)
+  await restarted.settled()
+  expect(existsSync(workdir)).toBe(false)
+  expect(runWorktrees(repo.root)).toEqual([])
+  expect(registrations(repo.root)).toEqual([])
+  expect(localBranches(repo.root)).toEqual(['main'])
+  expect(existsSync(ownerFile(f, run.id))).toBe(false)
+  expect(warnings(restarted)).toEqual([])
+  await restarted.close()
+})
+
+test('a worktree someone made at the run’s path, with a .git directory and no mark, stays with one warning', async () => {
+  const repo = repository()
+  const { f, run, workdir, branch } = await killedRun(repo)
+  git(repo.root, 'worktree', 'remove', '--force', '--force', workdir)
+  git(repo.root, 'branch', '-D', branch)
+  git(repo.root, 'worktree', 'add', '--quiet', '-b', 'mine', workdir, 'origin/main')
+  replaceGitFile(workdir)
+  writeFileSync(join(workdir, 'unsaved.txt'), 'hours of work')
+
+  const restarted = restart(repo.root)
+  await restarted.settled()
+  expect(readFileSync(join(workdir, 'unsaved.txt'), 'utf8')).toBe('hours of work')
+  expect(runWorktrees(repo.root)).toEqual([workdir])
+  expect(existsSync(ownerFile(f, run.id))).toBe(false)
+  expect(warnings(restarted)).toEqual([`left alone: worktree ${workdir} (its lock reason is not this run's mark)`])
   await restarted.close()
 })
 
