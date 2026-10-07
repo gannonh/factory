@@ -13,7 +13,7 @@ import type { RunId } from '../src/domain/types'
 import { memoryStore, RNG } from './fixture'
 import { ranOf } from './ran'
 import {
-  CODER, ENG_1, LOCAL, addReviewer, agentRunner, clock, coderRuns, control, factory, git, linear, nextRun, poll, realGit, repository, seen, tempDir, until, workdirOf,
+  CODER, ENG_1, commitFile, LOCAL, addReviewer, agentRunner, clock, coderRuns, control, factory, git, linear, nextRun, poll, realGit, repository, seen, tempDir, until, workdirOf,
   type Factory,
 } from './rework-delivery-fixture'
 
@@ -550,5 +550,118 @@ test('a run started while .factory-runs is a symlink fails before any worktree i
   expect(readdirSync(elsewhere)).toEqual([])
   expect(runWorktrees(repo.root)).toEqual([])
   expect(localBranches(repo.root)).toEqual(['main'])
+  await f.server.close()
+})
+
+const SIDE = 'agent-side-branch'
+/** Reflog times are whole seconds, so a branch the agent makes has to be made in a later second than the owner file. */
+const pause = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1100)
+const sideBranchConfig = (root: string) => { try { return git(root, 'config', '--get-regexp', `^branch\\.${SIDE}\\.`) } catch { return '' } }
+/** The agent makes `SIDE` from the run's branch, commits on it and, with `push`, pushes it with `-u`. */
+const sideBranchAgent = (push: boolean) => agentRunner(undefined, undefined, (_task, workdir) => {
+  pause()
+  git(workdir, 'switch', '--quiet', '-c', SIDE)
+  commitFile(workdir, 'side.txt', 'side')
+  if (push) git(workdir, 'push', '--quiet', '-u', 'origin', SIDE)
+})
+
+test('a branch the agent made in its worktree leaves the sandbox root with the run, and the output does not name it', async () => {
+  const repo = repository()
+  const f = factory(repo.root, sideBranchAgent(false))
+  f.api.agents.update(CODER, { delivery: 'none' })
+  enqueue(f)
+  const run = await nextRun(f)
+
+  expect(run.status).toBe('succeeded')
+  expect(localBranches(repo.root)).toEqual(['main'])
+  expect(run.output?.artifacts.filter((a) => a.kind === 'branch')).toEqual([])
+  expect(warnings(f.server)).toEqual([])
+  await f.server.close()
+})
+
+test('a branch the agent pushed with -u leaves no branch.<name> config in the root, and stays on origin', async () => {
+  const repo = repository()
+  const f = factory(repo.root, sideBranchAgent(true))
+  f.api.agents.update(CODER, { delivery: 'none' })
+  enqueue(f)
+  const run = await nextRun(f)
+
+  expect(run.status).toBe('succeeded')
+  expect(localBranches(repo.root)).toEqual(['main'])
+  expect(sideBranchConfig(repo.root)).toBe('')
+  expect(originBranches(repo.origin)).toEqual([SIDE, 'main'])
+  await f.server.close()
+})
+
+test('a branch of the same name that existed before the run stays, with one warning naming it', async () => {
+  const repo = repository()
+  execFileSync(realGit, ['-C', repo.root, 'branch', SIDE, 'main'], { env: { ...process.env, GIT_COMMITTER_DATE: '2020-01-01T00:00:00Z' } })
+  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => {
+    pause()
+    git(workdir, 'switch', '--quiet', SIDE)
+    commitFile(workdir, 'side.txt', 'side')
+  }))
+  f.api.agents.update(CODER, { delivery: 'none' })
+  enqueue(f)
+  const run = await nextRun(f)
+
+  expect(run.status).toBe('succeeded')
+  expect(localBranches(repo.root)).toEqual([SIDE, 'main'])
+  expect(warnings(f.server)).toEqual([`left alone: branch ${SIDE} (it existed before the run)`])
+  await f.server.close()
+})
+
+test('a branch made without a reflog stays, since nothing proves the run made it', async () => {
+  const repo = repository()
+  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => {
+    pause()
+    git(workdir, '-c', 'core.logAllRefUpdates=false', 'update-ref', `refs/heads/${SIDE}`, 'HEAD')
+  }))
+  f.api.agents.update(CODER, { delivery: 'none' })
+  enqueue(f)
+  await nextRun(f)
+
+  expect(localBranches(repo.root)).toEqual([SIDE, 'main'])
+  await f.server.close()
+})
+
+test('a branch the agent made in a run killed with its server is removed when the next server starts', async () => {
+  const repo = repository()
+  const store = memoryStore()
+  const { f, run, workdir } = await killedRun(repo, store)
+  pause()
+  git(workdir, 'switch', '--quiet', '-c', SIDE)
+
+  const restarted = restart(repo.root, store)
+  await restarted.settled()
+
+  expect(restarted.snapshot().runs[run.id]).toMatchObject({ status: 'failed', error: 'interrupted by restart' })
+  expect(localBranches(repo.root)).toEqual(['main'])
+  expect(existsSync(ownerFile(f, run.id))).toBe(false)
+  await restarted.close()
+})
+
+test('with no end time for the run, an agent’s branch stays and is described', async () => {
+  const repo = repository()
+  const { f, run, workdir } = await killedRun(repo)
+  pause()
+  git(workdir, 'switch', '--quiet', '-c', SIDE)
+
+  expect(await removeWorkdir(repo.root, run.id, true)).toEqual({ left: [`branch ${SIDE} (its creation is not shown to be inside the run)`], legacy: [] })
+  expect(localBranches(repo.root)).toEqual([SIDE, 'main'])
+  expect(existsSync(ownerFile(f, run.id))).toBe(false)
+  await f.server.close()
+})
+
+test('a branch made while another run’s owner file is in the root stays, and the other run’s own branch is not mentioned', async () => {
+  const repo = repository()
+  const { f, run, workdir } = await killedRun(repo)
+  writeFileSync(`${join(repo.root, '.factory-runs', 'other-run')}.owner`, JSON.stringify({ ...readOwner(f, run.id), branch: 'factory-other-run' }))
+  pause()
+  git(workdir, 'switch', '--quiet', '-c', SIDE)
+  git(repo.root, 'branch', 'factory-other-run')
+
+  expect(await removeWorkdir(repo.root, run.id, true, Date.now())).toEqual({ left: [`branch ${SIDE} (another run was working in this root)`], legacy: [] })
+  expect(localBranches(repo.root)).toEqual([SIDE, 'factory-other-run', 'main'])
   await f.server.close()
 })

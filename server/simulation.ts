@@ -54,7 +54,7 @@ import {
   type WriteStatus,
 } from '../src/domain/types'
 import type { WorldStore } from './worldFile'
-import { ClaudeRunner, SimulatedRunner, deliver, gitArtifacts, prepareWorkdir, reconcileWorkdirs, removeWorkdir, type Delivery, type DeliveryRequest, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
+import { ClaudeRunner, SimulatedRunner, agentBranchesToRemove, deliver, gitArtifacts, prepareWorkdir, reconcileWorkdirs, removeWorkdir, type Delivery, type DeliveryRequest, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
 import type { RunLogStore } from './runLogs'
 import { array, boolean, defaulted, id, number, object, oneOf, record } from './parse'
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
@@ -273,7 +273,7 @@ export class MockServer {
     const run = this.world.runs[runId]
     const where = run ? { runId, agentId: run.agentId } : {}
     try {
-      const { left, legacy } = await removeWorkdir(root, runId, run !== undefined && run.status !== 'running')
+      const { left, legacy } = await removeWorkdir(root, runId, run !== undefined && run.status !== 'running', run && run.status !== 'running' ? run.endedAt : null)
       if (!report) return
       for (const item of legacy) this.log('info', `removed ${item}`, where)
       if (left.length) this.log('warn', `left alone: ${left.join('; ')}`, where)
@@ -1196,7 +1196,9 @@ export class MockServer {
         return []
       }
     }
-    let artifacts: RunOutput['artifacts'] = prepared && !delivering ? await listCommits(prepared) : []
+    // The output is read by later agents, so it names no branch that removal is about to take.
+    const taken = prepared && !delivering ? new Set(await agentBranchesToRemove(prepared.root, run.id, prepared.path)) : new Set<string>()
+    let artifacts: RunOutput['artifacts'] = prepared && !delivering ? (await listCommits(prepared)).filter((a) => a.kind !== 'branch' || !taken.has(a.label)) : []
     if (this.world.runs[run.id]?.status !== 'running') return
     if (delivering) {
       const task = this.world.tasks[run.taskId]
