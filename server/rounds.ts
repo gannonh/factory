@@ -1,3 +1,5 @@
+import MarkdownIt from 'markdown-it'
+import type Token from 'markdown-it/lib/token.mjs'
 import type {
   FlowId, IntakeRecord, IssueBlocker, IssueRef, PullRequestRef, Rework, RoundResult, RunOutput, Task, TaskInput, TriggerId, TriggerStates,
 } from '../src/domain/types'
@@ -169,66 +171,43 @@ function fenced(sections: string[]): string {
   return fence(sections.join('\n\n'), FEEDBACK_FRAMING)
 }
 
-const HTML_BLOCK_ENDING_ON_A_MARKER: ReadonlyArray<[RegExp, RegExp]> = [
-  [/^<(?:script|pre|style|textarea)(?:[\s>]|$)/i, /<\/(?:script|pre|style|textarea)>/i],
-  [/^<!--/, /-->/],
-  [/^<\?/, /\?>/],
-  [/^<!\[CDATA\[/, /\]\]>/],
-  [/^<![A-Za-z]/, />/],
-]
+const reader = new MarkdownIt('commonmark')
+
+const PROBE = 'p\n\n## h\n\n```text\nq\n```'
+const PROBE_BLOCKS = ['paragraph_open:0', 'inline:1:p', 'paragraph_close:0', 'heading_open:0', 'inline:1:h', 'heading_close:0', 'fence:0:q\n']
+
+/** Whether a CommonMark reader finds a paragraph, a heading and a fence of their own after `text`, as it finds Factory's lines. */
+function endsOutsideCode(text: string): boolean {
+  const tokens = reader.parse(`${text}\n\n${PROBE}`, {}).slice(-PROBE_BLOCKS.length)
+  const key = (t: Token) => (t.type === 'inline' || t.type === 'fence' ? `${t.type}:${t.level}:${t.content}` : `${t.type}:${t.level}`)
+  return tokens.length === PROBE_BLOCKS.length && tokens.every((t, i) => key(t) === PROBE_BLOCKS[i])
+}
+
+const END_MARKERS = ['</script>', '-->', '?>', ']]>', '>']
+const CONTAINER_PREFIXES = ['', ' ', '  ', '   ', '> ', '>', '- ', '1. ', '> > ', '> - ', '- > ', '- - ']
 
 /**
- * `text` with the code fence it leaves open closed, so a CommonMark reader finds what follows outside any fence: the closing
- * line is the opener's character, as many times, alone on its line. A fence the text closes itself, or never opens, is left as
- * written. Only a fence at the top level can swallow what follows: one inside a list item or a block quote ends where its
- * container does, and the text is followed by a blank line and an unindented line. So a fence counts only when no list item,
- * block quote or HTML block can hold it, and a text where that is unclear is left as written, as it was before a closing line
- * existed: a closing line there could open a fence of its own. A container is over after a blank line and an unindented line
- * that starts none; an unindented fence line ends it at once. An HTML block is over at a blank line, or at its end marker, which
- * may be many lines on.
+ * The lines that can end what `text` leaves open, in the order they are tried: the end line of an HTML block, then a fence
+ * closing line behind each prefix a list item or block quote can put in front of it, then both.
+ */
+function endings(text: string): string[] {
+  const openers = reader.parse(text, {}).filter((t) => t.type === 'fence').map((t) => t.markup).reverse()
+  const lines = [...new Set(openers)].flatMap((closer) => CONTAINER_PREFIXES.map((prefix) => `${prefix}${closer}`))
+  return [...lines, ...END_MARKERS, ...END_MARKERS.flatMap((marker) => lines.map((line) => `${marker}\n${line}`))]
+}
+
+/**
+ * `text` with the lines added after it that a CommonMark reader needs to find what follows outside any code block or HTML
+ * block. A code fence, an HTML comment or a script block that the text leaves open would swallow the issue URL, the rework
+ * section and the feedback. A fence in a list item or block quote can need its closing line behind the container's prefix,
+ * so each candidate is tried against markdown-it and the first that works is kept. Text that already ends outside any block
+ * is returned as written, and so is text no candidate fixes, so the result is never worse than the text.
  * `\n` after a text that ends in a bare CR still starts a line of its own.
  */
 export function closeFences(text: string): string {
-  let open: { char: string; length: number } | null = null
-  let container = false
-  let html = false
-  let rawEnd: RegExp | null = null
-  let afterBlank = true
-  for (const line of text.split(/\r\n|\r|\n/)) {
-    const run = /^ {0,3}(`{3,}|~{3,})(.*)$/s.exec(line)
-    if (open) {
-      if (run && run[1][0] === open.char && run[1].length >= open.length && /^[ \t]*$/.test(run[2])) open = null
-      continue
-    }
-    if (rawEnd) {
-      if (rawEnd.test(line)) rawEnd = null
-      continue
-    }
-    if (/^[ \t]*$/.test(line)) {
-      html = false
-      afterBlank = true
-      continue
-    }
-    const blankBefore = afterBlank
-    afterBlank = false
-    const indent = /^ {4}|^ {0,3}\t/.test(line) ? 4 : line.length - line.trimStart().length
-    if (indent >= 4) continue
-    const rest = line.slice(indent)
-    if (run && !(run[1][0] === '`' && run[2].includes('`'))) {
-      if (html || (container && indent > 0)) return text
-      container = false
-      open = { char: run[1][0], length: run[1].length }
-    } else if (/^>|^(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/.test(rest)) container = true
-    else if (rest.startsWith('<')) {
-      const marker = HTML_BLOCK_ENDING_ON_A_MARKER.find(([start]) => start.test(rest))
-      if (marker && !marker[1].test(rest)) {
-        if (html || container) return text
-        rawEnd = marker[1]
-      }
-      html ||= !marker
-    } else if (indent === 0 && blankBefore) container = false
-  }
-  return open ? `${text}\n${open.char.repeat(open.length)}` : text
+  if (endsOutsideCode(text)) return text
+  const fix = endings(text).find((ending) => endsOutsideCode(`${text}\n${ending}`))
+  return fix === undefined ? text : `${text}\n${fix}`
 }
 
 const joined = (parts: ReadonlyArray<string | null>) => parts.filter((part) => part !== null && part !== '').join('\n\n')

@@ -191,15 +191,16 @@ export async function roundTwoTaken(f: Factory) {
 }
 
 /**
- * The lines of a Markdown prompt that no CommonMark reader reads as code, with the lines that open a fence, found by
- * markdown-it's block parser with HTML blocks on: it knows list items, block quotes and HTML blocks, which end or hide a fence. A fence or an
- * indented code block holds every line of its token past a fence's opening line. Line breaks are `\r\n`, `\r` and `\n`, as in markdown-it.
+ * The lines of a Markdown prompt that no CommonMark reader reads as code or as a raw HTML block, with the lines that open a
+ * fence, found by markdown-it's block parser with HTML blocks on: it knows list items, block quotes and HTML blocks, which end
+ * or hide a fence. A fence or an indented code block holds every line of its token past a fence's opening line, and an HTML
+ * block holds all of its lines. Line breaks are `\r\n`, `\r` and `\n`, as in markdown-it.
  */
 export function linesOutsideFences(prompt: string): string[] {
   const lines = prompt.split(/\r\n|\r|\n/)
   const code = new Set<number>()
   for (const token of new MarkdownIt({ html: true }).parse(lines.join('\n'), {})) {
-    if ((token.type !== 'fence' && token.type !== 'code_block') || !token.map) continue
+    if ((token.type !== 'fence' && token.type !== 'code_block' && token.type !== 'html_block') || !token.map) continue
     for (let i = token.map[0] + (token.type === 'fence' ? 1 : 0); i < token.map[1]; i++) code.add(i)
   }
   return lines.filter((_line, i) => !code.has(i))

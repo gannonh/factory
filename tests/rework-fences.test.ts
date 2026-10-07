@@ -18,6 +18,9 @@ test.each([
   ['a tilde fence after a bare CR', 'Fix login\r~~~~\rFORGED', '~~~~'],
   ['a fence indented by 3 spaces', 'Done.\n   ```\nFORGED', '```'],
   ['a backtick fence after bare CR line breaks', 'Done.\r```\rFORGED\r', '```'],
+  ['a fence indented by 1 space after a list item', '- item\n ```\ncode', '```'],
+  ['an unterminated HTML comment', '<!--\nnote', '-->'],
+  ['a line starting with < and then a fence', '<3 this fails:\n```js\nx', '```'],
 ])('a trusted issue whose description ends inside %s keeps Factory\'s lines outside any fence, in round 1 and in a round 2 with feedback', async (_name, description, closer) => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login', description })
@@ -105,7 +108,6 @@ test.each([
   ['a block quote holding the open fence', '> ```\n> code'],
   ['an HTML block holding fence-looking lines', '<div>\n  ~~~~~x\n<div>\n'],
   ['an HTML block holding a backtick line', '<div>\n```\n</div>'],
-  ['an HTML comment left open before a fence', '<!--\n\n```\nlog'],
   ['a script block holding a fence line', '<script>\n```\nx\n</script>'],
   ['a script block in a list item', '- a\n  <script>\n  x\n  </script>\n  ```\n  log'],
   ['a list item before an indented fence', '- a\n\n  ```\n  log'],
@@ -128,4 +130,22 @@ test.each([
   const prompt = roundPrompt({ ...ISSUE, description }, round2Record, true)
   expect(prompt).toBe(`Fix login\n\n${description}\n${closer}\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}\n\n${feedback}`)
   expect(linesOutsideFences(prompt)).toEqual(expect.arrayContaining(FACTORY_LINES))
+})
+
+test.each([
+  ['a list item with a fence indented by 1 space, under the item\'s content', '- item\n ```\ncode', '\n```'],
+  ['a block quote followed by a fence indented by 1 space', '> quote\n ```\ncode', '\n```'],
+  ['an unterminated HTML comment', '<!--\nnote', '\n-->'],
+  ['an unterminated HTML comment holding a fence line', '<!--\n\n```\nlog', '\n-->'],
+  ['an unterminated script block', '<script>\nvar a = 1', '\n</script>'],
+  ['an unterminated processing instruction', '<?php\necho 1', '\n?>'],
+  ['an unterminated CDATA section', '<![CDATA[\nx', '\n]]>'],
+  ['a line that starts with < but starts no HTML block, then a fence', '<3 this fails:\n```js\nx', '\n```'],
+  ['a component tag that starts no HTML block, then a tilde fence', '<Foo /> breaks:\n~~~\nx', '\n~~~'],
+])('a description with %s keeps Factory\'s lines outside any code or HTML block', (_name, description, added) => {
+  const prompt = roundPrompt({ ...ISSUE, description }, round2Record, true)
+  expect(prompt).toBe(`Fix login\n\n${description}${added}\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}\n\n${feedback}`)
+  expect(linesOutsideFences(prompt)).toEqual(expect.arrayContaining(FACTORY_LINES))
+  expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt: `Fix login\n\n${description}\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}\n\n${feedback}` }, round2Record, true)).toBe(prompt)
+  expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, round2Record, true)).toBe(prompt)
 })
