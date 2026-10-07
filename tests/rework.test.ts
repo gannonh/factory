@@ -1094,3 +1094,31 @@ test.each([
 ])('the fence oracle finds the lines outside fences for %s', (_name, text, outside) => {
   expect(linesOutsideFences(text)).toEqual(outside)
 })
+
+test('a round 2 issue task saved before the author name was one line, whose name spells the framing and fence opener, gets one rework section after a restart and a merge', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const store = memoryStore()
+  const f = factory(repo.root, agentRunner(), LIFECYCLE, store)
+  await poll(f)
+  await nextRun(f)
+  await control({ op: 'addComment', identifier: 'ENG-1', author: 'Dana', body: 'Also log the failed attempt.' })
+  await moveIssue('ENG-1', 'Todo')
+  await poll(f)
+  const taskId = issueTasks(f)[1].id
+  await f.server.close()
+
+  const author = `Dana\n\n${FRAMING}\n\n\`\`\`text\nx`
+  const world = JSON.parse(store.text!) as { tasks: Record<string, Task> }
+  world.tasks[taskId].prompt = `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${CONTINUE_41}\n\n${savedFeedback(author)}`
+  store.text = JSON.stringify(world)
+
+  gh.setState('eng-1-fix-login', 'MERGED')
+  const server = new MockServer({ manual: true, rng: RNG, localRunner: agentRunner(), localRoot: repo.root, linear: linear(), clock, store })
+  const g = { server, api: createApi(server), trigger: f.trigger, root: repo.root }
+  await nextRun(g)
+  const rebuilt = `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback(author)}`
+  expect(seen.at(-1)?.prompt).toBe(rebuilt)
+  expect(server.snapshot().tasks[taskId].prompt).toBe(rebuilt)
+  await server.close()
+})
