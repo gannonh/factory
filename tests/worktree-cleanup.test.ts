@@ -7,11 +7,11 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
-import { removeWorkdir } from '../server/runners'
+import { removeWorkdir, withoutRemovedBranch } from '../server/runners'
 import { MockServer } from '../server/simulation'
 import type { RunId } from '../src/domain/types'
 import { memoryStore, RNG } from './fixture'
-import { ranOf } from './ran'
+import { ranOf, REMOVED_BRANCH_NOTE } from './ran'
 import {
   CODER, ENG_1, LOCAL, addReviewer, agentRunner, clock, coderRuns, control, factory, git, linear, nextRun, poll, realGit, repository, seen, tempDir, until, workdirOf,
   type Factory,
@@ -146,9 +146,10 @@ test('after git gc prunes the run’s commits, the handoff prompt still claims o
   await f.server.close()
 })
 
-test('a branch the agent made itself stays in the handoff prompt, with no note that the commits are on no branch', async () => {
+test('a branch that existed before the run stays in the handoff prompt, with no note that the commits are on no branch', async () => {
   const repo = repository()
-  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => { git(workdir, 'checkout', '-q', '-b', 'agent-work') }))
+  git(repo.root, 'branch', 'agent-work', 'main')
+  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => { git(workdir, 'branch', '-f', 'agent-work', 'HEAD'); git(workdir, 'checkout', '-q', 'agent-work') }))
   f.api.agents.update(CODER, { delivery: 'none' })
   addReviewer(f, 'none')
   const { run, prompt } = await handoffPrompt(f)
@@ -203,6 +204,18 @@ test('an origin branch that a local branch of the same name shadows is listed as
 
   expect(prompt).toBe(`Implemented Add change.\nbranch: origin/backup\ncommit: ${ranOf(run).short} change for Add change (attempt 1)`)
   await f.server.close()
+})
+
+test('a branch cleanup is about to remove is not listed, while the same branch pushed to origin is', async () => {
+  const repo = repository()
+  git(repo.root, 'switch', '-q', '-c', 'side')
+  git(repo.root, 'commit', '-q', '--allow-empty', '-m', 'side work')
+  const commit = { kind: 'commit' as const, label: 'abc side work', url: null }
+  const removing = new Set(['side'])
+
+  expect(await withoutRemovedBranch([commit], 'run-x' as RunId, repo.root, removing)).toEqual([commit, { kind: 'note', label: REMOVED_BRANCH_NOTE, url: null }])
+  git(repo.root, 'push', '-q', 'origin', 'side')
+  expect(await withoutRemovedBranch([commit], 'run-x' as RunId, repo.root, removing)).toEqual([{ kind: 'branch', label: 'side', url: null }, commit])
 })
 
 test('a run with delivery off and no commits hands off its summary alone', async () => {
