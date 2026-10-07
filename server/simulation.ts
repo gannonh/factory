@@ -54,7 +54,7 @@ import {
   type WriteStatus,
 } from '../src/domain/types'
 import type { WorldStore } from './worldFile'
-import { ClaudeRunner, SimulatedRunner, deliver, gitArtifacts, prepareWorkdir, type Delivery, type DeliveryRequest, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
+import { ClaudeRunner, SimulatedRunner, deliver, gitArtifacts, prepareWorkdir, reconcileWorkdirs, removeWorkdir, type Delivery, type DeliveryRequest, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
 import type { RunLogStore } from './runLogs'
 import { array, boolean, defaulted, id, number, object, oneOf, record } from './parse'
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
@@ -162,6 +162,8 @@ export class MockServer {
   private pendingCompletions = new Map<RunId, Promise<void>>()
   /** Local runs still reading their pull request or preparing their working directory. */
   private setups = new Map<RunId, Promise<void>>()
+  /** Worktree removals in flight (ADR 0009). */
+  private cleanups = new Set<Promise<void>>()
   private seedOptions: { localRoot?: string; localCronEnabled?: boolean }
   private linear: LinearClient
   private clock: () => number
@@ -195,6 +197,7 @@ export class MockServer {
       this.world = seedWorld(Date.now(), this.seedOptions)
       this.seq = 0
     }
+    this.reconcileRoots()
     if (!options.manual) this.start()
   }
 
@@ -246,11 +249,53 @@ export class MockServer {
     if (this.pendingCompletions.size) await Promise.all(this.pendingCompletions.values())
     if (this.polls.size || this.drains.size || this.setups.size) await this.settled()
     this.flush()
+    await Promise.all(this.cleanups)
   }
 
-  /** Resolves once no Linear poll, write-back or local run setup is in flight. */
+  /** Resolves once no Linear poll, write-back, local run setup or worktree removal is in flight. */
   async settled() {
-    while (this.polls.size > 0 || this.drains.size > 0 || this.setups.size > 0) await Promise.all([...this.polls.values(), ...this.drains.values(), ...this.setups.values()])
+    while (this.polls.size > 0 || this.drains.size > 0 || this.setups.size > 0 || this.cleanups.size > 0) {
+      await Promise.all([...this.polls.values(), ...this.drains.values(), ...this.setups.values(), ...this.cleanups])
+    }
+  }
+
+  /**
+   * Removes a local run's worktree and branch once nothing reads them (ADR 0009). The removal waits for the run's setup,
+   * which may still be creating the worktree when the run ends. A failure is logged and the next start retries it.
+   */
+  private discardWorkdir(run: Run, root: string | undefined, report = true) {
+    if (run.execution !== 'local' || !root) return
+    this.track((this.setups.get(run.id) ?? Promise.resolve()).then(() => this.dropWorkdir(run.id, root, report)))
+  }
+
+  /** `report` is off for a run that reset removed from the world, which has no log to warn in. */
+  private async dropWorkdir(runId: RunId, root: string, report = true) {
+    const run = this.world.runs[runId]
+    const where = run ? { runId, agentId: run.agentId } : {}
+    try {
+      const { left, legacy } = await removeWorkdir(root, runId, run !== undefined && run.status !== 'running')
+      if (!report) return
+      for (const item of legacy) this.log('info', `removed ${item}`, where)
+      if (left.length) this.log('warn', `left alone: ${left.join('; ')}`, where)
+      if (left.length || legacy.length) this.publish()
+    } catch (error) {
+      if (!report) return
+      this.log('warn', `worktree of run ${runId} not removed, the next start retries: ${error instanceof Error ? error.message : String(error)}`, where)
+      this.publish()
+    }
+  }
+
+  private track(cleanup: Promise<void>) {
+    this.cleanups.add(cleanup)
+    void cleanup.finally(() => this.cleanups.delete(cleanup))
+  }
+
+  /** At start, removes the worktrees of runs that ended or were killed with their server, whether or not the saved world knows them. */
+  private reconcileRoots() {
+    const roots = new Set(Object.values(this.world.sandboxes).filter((sandbox) => sandbox.kind === 'local' && isAbsolute(sandbox.host)).map((sandbox) => sandbox.host))
+    for (const root of roots) {
+      this.track(reconcileWorkdirs(root, (runId) => this.world.runs[runId]?.status === 'running', (runId) => this.dropWorkdir(runId, root)).catch(() => undefined))
+    }
   }
 
   /** Monotonic count of publishes. The initial seed is revision 1. */
@@ -693,6 +738,10 @@ export class MockServer {
     if (!sandbox) return
     if (patch.capacity !== undefined && !isCapacity(patch.capacity)) return
     if (patch.host !== undefined && (sandbox.kind !== 'local' || !isAbsolute(patch.host))) return
+    // A run's worktree is removed from, and at start looked for under, the sandbox's root as it is then (ADR 0009).
+    if (patch.host !== undefined && patch.host !== sandbox.host && sandbox.leases.length > 0) {
+      throw new Error('a run is in progress on this sandbox; change its root once it ends')
+    }
     this.patchSandbox(id, patch)
     this.publish()
   }
@@ -744,8 +793,12 @@ export class MockServer {
   reset() {
     for (const timeout of this.localTimeouts.values()) clearTimeout(timeout)
     this.localTimeouts.clear()
+    for (const run of Object.values(this.world.runs)) {
+      if (run.status !== 'running') continue
+      this.runners[run.execution ?? 'simulated'].kill(run.id)
+      this.discardWorkdir(run, this.workdirs.get(run.id)?.root ?? this.world.sandboxes[run.sandboxId]?.host, false)
+    }
     this.workdirs.clear()
-    for (const run of Object.values(this.world.runs)) if (run.status === 'running') this.runners[run.execution ?? 'simulated'].kill(run.id)
     this.store?.clear()
     this.pollStarted.clear()
     this.world = seedWorld(Date.now(), this.seedOptions)
@@ -1216,6 +1269,7 @@ export class MockServer {
     const agent = w.agents[run.agentId]
     const task = w.tasks[run.taskId]
     const output = completion.status === 'succeeded' ? completion.output ?? createRunOutput(run, completion.agent) : null
+    this.discardWorkdir(run, this.workdirs.get(run.id)?.root ?? w.sandboxes[run.sandboxId]?.host)
     this.workdirs.delete(run.id)
     this.patchRun(run.id, {
       status: completion.status,

@@ -16,6 +16,7 @@ import { MockServer } from '../server/simulation'
 import type { WorldStore } from '../server/worldFile'
 import type { AgentId, EdgeId, IntakeRecord, IssueId, LinearSettings, Run, SandboxId, Task, TriggerId } from '../src/domain/types'
 import { fakeGh } from './fake-gh'
+import { recordRan } from './ran'
 import { RNG } from './fixture'
 
 const roots: string[] = []
@@ -65,10 +66,10 @@ export function commitFile(repo: string, file: string, message: string) {
 }
 
 /** A bare `origin` whose default branch is `main`, the sandbox `root` clone, and the `seed` clone that plays GitHub's merges. */
-export function repository() {
+export function repository(objectFormat: 'sha1' | 'sha256' = 'sha1') {
   const dir = tempDir()
   const origin = join(dir, 'origin.git')
-  git(dir, 'init', '--bare', '--initial-branch=main', origin)
+  git(dir, 'init', '--bare', '--initial-branch=main', `--object-format=${objectFormat}`, origin)
   const seed = join(dir, 'seed')
   git(dir, 'clone', '--quiet', origin, seed)
   for (const repo of [seed]) { git(repo, 'config', 'user.email', 'test@example.com'); git(repo, 'config', 'user.name', 'Test') }
@@ -112,6 +113,7 @@ export function agentRunner(
       if (what === 'fail') return emit({ kind: 'complete', status: 'failed', result: null, reason: 'tests failed' })
       commitFile(workdir, file(task), `change for ${task.title} (attempt ${run.attempt})`)
       after(task, workdir, run.attempt)
+      recordRan(run.id, workdir)
       emit({ kind: 'complete', status: 'succeeded', result: `Implemented ${task.title}.` })
     },
     kill() {},

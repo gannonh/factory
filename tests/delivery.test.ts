@@ -19,6 +19,7 @@ import { createHistory } from '../src/history'
 import type { AgentId, EdgeId, IssueId, Run, RunId, SandboxId, TriggerId } from '../src/domain/types'
 import { fakeGh } from './fake-gh'
 import { makeFixture, RNG } from './fixture'
+import { ranOf, recordRan } from './ran'
 
 const roots: string[] = []
 const tempDir = (prefix = 'factory-delivery-') => {
@@ -94,7 +95,10 @@ function agentRunner(behaviour = { commits: true }): Runner {
   return {
     execution: 'local',
     start({ run, task, workdir }, emit) {
-      if (behaviour.commits) commitFile(workdir, 'change.txt', `change for ${task.title} (attempt ${run.attempt})`)
+      if (behaviour.commits) {
+        commitFile(workdir, 'change.txt', `change for ${task.title} (attempt ${run.attempt})`)
+        recordRan(run.id, workdir)
+      }
       emit({ kind: 'complete', status: 'succeeded', result: `Implemented ${task.title}.` })
     },
     kill() {},
@@ -154,7 +158,6 @@ async function takeIssue(f: Factory): Promise<Run> {
 }
 
 const workdirOf = (root: string, run: Run) => join(root, '.factory-runs', run.id)
-const short = (repo: string, ref = 'HEAD') => git(repo, 'rev-parse', '--short=7', ref)
 const linear = () => createLinearClient({ url: fake.url, apiKey: KEY })
 
 test('the delivery setting is saved through agents.update, survives a restart, and refuses unknown values', async () => {
@@ -193,12 +196,11 @@ test('with delivery off, a run branches from the local HEAD and pushes nothing',
   f.api.agents.enqueue(CODER, { title: 'Add change', prompt: 'p', priority: 'normal' })
   const run = await nextAttempt(f)
 
-  const workdir = workdirOf(repo.root, run)
   expect(run.status).toBe('succeeded')
-  expect(git(workdir, 'rev-parse', 'HEAD~1')).toBe(localHead)
+  expect(ranOf(run).parent).toBe(localHead)
   expect(run.output).toEqual({ summary: 'Implemented Add change.', artifacts: [
     { kind: 'branch', label: `factory-${run.id}`, url: null },
-    { kind: 'commit', label: `${short(workdir)} change for Add change (attempt 1)`, url: null },
+    { kind: 'commit', label: `${ranOf(run).short} change for Add change (attempt 1)`, url: null },
   ] })
   expect(remoteBranches(repo.origin)).toEqual(['main'])
   expect(gh.calls()).toEqual([])
@@ -216,11 +218,11 @@ test('a delivering manual run pushes factory-<runId>, opens one PR without an is
   const pr = { kind: 'pr', label: 'Pull request #41', url: 'https://github.com/example/factory/pull/41' }
   expect(run.output).toEqual({ summary: 'Implemented Add change.', artifacts: [
     { kind: 'branch', label: branch, url: null },
-    { kind: 'commit', label: `${short(workdir)} change for Add change (attempt 1)`, url: null },
+    { kind: 'commit', label: `${ranOf(run).short} change for Add change (attempt 1)`, url: null },
     pr,
   ] })
   expect(remoteBranches(repo.origin)).toEqual([branch, 'main'])
-  expect(git(repo.origin, 'rev-parse', branch)).toBe(git(workdir, 'rev-parse', 'HEAD'))
+  expect(git(repo.origin, 'rev-parse', branch)).toBe(ranOf(run).head)
   expect(gh.creates()).toEqual([{ cwd: workdir, argv: ['pr', 'create', '--head', branch, '--base', 'main', '--title', 'Add change', '--body', 'Implemented Add change.'] }])
 
   const handoff = Object.values(f.server.snapshot().tasks).find((t) => t.origin.kind === 'handoff' && t.origin.runId === run.id)!
@@ -243,11 +245,11 @@ test('an issue run cuts the issue branch from the fetched origin main, opens a P
 
   const workdir = workdirOf(repo.root, run)
   expect(run.status).toBe('succeeded')
-  expect(git(workdir, 'branch', '--show-current')).toBe('eng-1-fix-login')
-  expect(git(workdir, 'rev-parse', 'HEAD~1')).toBe(originMain)
-  expect([existsSync(join(workdir, 'upstream.txt')), existsSync(join(workdir, 'local.txt'))]).toEqual([true, false])
+  expect(ranOf(run).branch).toBe('eng-1-fix-login')
+  expect(ranOf(run).parent).toBe(originMain)
+  expect(ranOf(run).files).toEqual(['base.txt', 'change.txt', 'upstream.txt'])
   expect(f.server.snapshot().logs.map((l) => l.msg)).toContain(`working directory: ${workdir} on branch eng-1-fix-login from origin/main`)
-  expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login')).toBe(git(workdir, 'rev-parse', 'HEAD'))
+  expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login')).toBe(ranOf(run).head)
   expect(gh.creates().map((c) => c.argv)).toEqual([[
     'pr', 'create', '--head', 'eng-1-fix-login', '--base', 'main', '--title', 'ENG-1 Fix login', '--body', `Implemented ENG-1 Fix login.\n\n${ISSUE_URL}`,
   ]])
@@ -259,7 +261,7 @@ test('an issue run cuts the issue branch from the fetched origin main, opens a P
 **Coder** · run ${run.id}
 Implemented ENG-1 Fix login.
 - branch: eng-1-fix-login
-- commit: ${short(workdir)} change for ENG-1 Fix login (attempt 1)
+- commit: ${ranOf(run).short} change for ENG-1 Fix login (attempt 1)
 - pr: [Pull request #41](https://github.com/example/factory/pull/41)
 
 Signed by Factory. Runs: ${run.id}. Agents: Coder.`])
@@ -311,12 +313,12 @@ test('a rejected push fails the run with delivery failed, and the retry delivers
   expect(gh.calls()).toEqual([])
 
   const second = await nextAttempt(f)
-  const workdir = workdirOf(repo.root, second)
   expect(second.status).toBe('succeeded')
-  expect(git(workdir, 'branch', '--show-current')).toBe('eng-1-fix-login-2')
-  expect(remoteBranches(repo.origin)).toEqual(['eng-1-fix-login-2', 'main'])
-  expect(git(repo.root, 'rev-parse', 'refs/heads/eng-1-fix-login')).toBe(git(workdirOf(repo.root, first), 'rev-parse', 'HEAD'))
-  expect(gh.creates().map((c) => c.argv.slice(0, 4))).toEqual([['pr', 'create', '--head', 'eng-1-fix-login-2']])
+  // Nothing reached origin for the first attempt, and its local branch left with its worktree, so the name is free again.
+  expect(ranOf(second).branch).toBe('eng-1-fix-login')
+  expect(remoteBranches(repo.origin)).toEqual(['eng-1-fix-login', 'main'])
+  expect(git(repo.root, 'branch', '--list', 'eng-1-fix-login')).toBe('')
+  expect(gh.creates().map((c) => c.argv.slice(0, 4))).toEqual([['pr', 'create', '--head', 'eng-1-fix-login']])
   expect((await issue('ENG-1')).attachments.map((a) => a.url)).toEqual(['https://github.com/example/factory/pull/41'])
   await f.server.close()
 })
@@ -327,7 +329,7 @@ test('a failed PR creation fails the run, the retry leaves the pushed branch unt
   await control({ op: 'addIssue', title: 'Fix login' })
   const f = factory(repo.root, agentRunner(), { linear: linear() })
   const first = await takeIssue(f)
-  const firstHead = git(workdirOf(repo.root, first), 'rev-parse', 'HEAD')
+  const firstHead = ranOf(first).head
 
   expect(first.status).toBe('failed')
   expect(first.error).toBe('delivery failed: gh pr create: GraphQL: was submitted too quickly (createPullRequest)')
@@ -336,7 +338,7 @@ test('a failed PR creation fails the run, the retry leaves the pushed branch unt
   const second = await nextAttempt(f)
   expect(second.status).toBe('succeeded')
   expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login')).toBe(firstHead)
-  expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login-2')).toBe(git(workdirOf(repo.root, second), 'rev-parse', 'HEAD'))
+  expect(git(repo.origin, 'rev-parse', 'eng-1-fix-login-2')).toBe(ranOf(second).head)
   expect(gh.creates().map((c) => c.argv.slice(2, 4))).toEqual([['--head', 'eng-1-fix-login'], ['--head', 'eng-1-fix-login-2']])
   const after = await issue('ENG-1')
   expect(after.attachments).toEqual([{ id: 'attachment-1', url: 'https://github.com/example/factory/pull/41', title: 'Pull request #41' }])
@@ -385,9 +387,10 @@ test('commits an agent made on a branch of its own are delivered on the planned 
   const repo = repository()
   const runner: Runner = {
     execution: 'local',
-    start({ task, workdir }, emit) {
+    start({ run, task, workdir }, emit) {
       git(workdir, 'checkout', '--quiet', '-b', 'agent-side-branch')
       commitFile(workdir, 'change.txt', `change for ${task.title}`)
+      recordRan(run.id, workdir)
       emit({ kind: 'complete', status: 'succeeded', result: 'Committed on my own branch.' })
     },
     kill() {},
@@ -396,9 +399,8 @@ test('commits an agent made on a branch of its own are delivered on the planned 
   f.api.agents.enqueue(CODER, { title: 'Add change', prompt: 'p', priority: 'normal' })
   const run = await nextAttempt(f)
 
-  const workdir = workdirOf(repo.root, run)
   expect(run.status).toBe('succeeded')
-  expect(git(repo.origin, 'rev-parse', `factory-${run.id}`)).toBe(git(workdir, 'rev-parse', 'HEAD'))
+  expect(git(repo.origin, 'rev-parse', `factory-${run.id}`)).toBe(ranOf(run).head)
   expect(gh.creates().map((c) => c.argv.slice(2, 4))).toEqual([['--head', `factory-${run.id}`]])
   expect(run.output?.artifacts.filter((a) => a.kind === 'branch')).toEqual([{ kind: 'branch', label: `factory-${run.id}`, url: null }])
   await f.server.close()
