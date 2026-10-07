@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import MarkdownIt from 'markdown-it'
 import { afterAll, afterEach, beforeAll, beforeEach, expect } from 'vitest'
 import { startFakeLinear, type FakeLinear } from '../scripts/fake-linear'
 import { createApi, type InProcessApi } from '../server/api'
@@ -184,22 +185,16 @@ export async function roundTwoTaken(f: Factory) {
 }
 
 /**
- * The lines of a Markdown prompt that are not inside a code fence, with the lines that open a fence, found as a renderer or a
- * model reading CommonMark would: a run of 3 or more backticks or tildes opens a fence, after at most 3 spaces; a run of the
- * same character, at least as long and followed by nothing but spaces or tabs, closes it; only `\r\n`, `\r` and `\n` end
- * lines, so U+2028 stays inside its line; a fence still open at the end holds the rest of the text.
+ * The lines of a Markdown prompt that no CommonMark reader reads as code, with the lines that open a fence, found by
+ * markdown-it's block parser with HTML blocks on: it knows list items, block quotes and HTML blocks, which end or hide a fence. A fence or an
+ * indented code block holds every line of its token past a fence's opening line. Line breaks are `\r\n`, `\r` and `\n`, as in markdown-it.
  */
 export function linesOutsideFences(prompt: string): string[] {
-  const outside: string[] = []
-  let open: { char: string; length: number } | null = null
-  for (const line of prompt.split(/\r\n|\r|\n/)) {
-    const run = /^ {0,3}(`{3,}|~{3,})(.*)$/s.exec(line)
-    if (open) {
-      if (run && run[1][0] === open.char && run[1].length >= open.length && /^[ \t]*$/.test(run[2])) open = null
-      continue
-    }
-    outside.push(line)
-    if (run && !(run[1][0] === '`' && run[2].includes('`'))) open = { char: run[1][0], length: run[1].length }
+  const lines = prompt.split(/\r\n|\r|\n/)
+  const code = new Set<number>()
+  for (const token of new MarkdownIt({ html: true }).parse(lines.join('\n'), {})) {
+    if ((token.type !== 'fence' && token.type !== 'code_block') || !token.map) continue
+    for (let i = token.map[0] + (token.type === 'fence' ? 1 : 0); i < token.map[1]; i++) code.add(i)
   }
-  return outside
+  return lines.filter((_line, i) => !code.has(i))
 }
