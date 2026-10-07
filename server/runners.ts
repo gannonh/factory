@@ -501,14 +501,14 @@ export async function gitArtifacts(
   const boundedLabel = (value: string, limit: number) => Array.from(value).length > limit ? `${Array.from(value).slice(0, limit - 1).join('')}…` : value
   if (branch) artifacts.push({ kind: 'branch', label: boundedLabel(branch, 256), url: null })
   // Git limits both the number and width of returned subjects before Node receives them.
-  const history = await git('log', '--max-count=21', '--format=%H%x09%<(160,trunc)%s', `${initialHead}..${head}`)
+  const history = await git('log', '--max-count=21', '--format=%h%x09%<(160,trunc)%s', `${initialHead}..${head}`)
   const lines = history.split('\n').filter(Boolean)
   if (lines.length > 20) artifacts.push({ kind: 'note', label: 'Earlier commits omitted; showing 20 newest', url: null })
   for (const line of lines.slice(0, 20).reverse()) {
     const separator = line.indexOf('\t')
     if (separator < 0) continue
     const hash = line.slice(0, separator)
-    artifacts.push({ kind: 'commit', label: `${hash.slice(0, 7)} ${boundedLabel(line.slice(separator + 1).trimEnd(), 160)}`, url: null })
+    artifacts.push({ kind: 'commit', label: `${hash} ${boundedLabel(line.slice(separator + 1).trimEnd(), 160)}`, url: null })
   }
   if (lookupPr && branch && repository) {
     const pr = await execFileAsync('gh', ['pr', 'view', branch, '--repo', repository.slice('https://'.length), '--json', 'url', '--jq', '.url'], { cwd: path, timeout: 5000 }).then(({ stdout }) => stdout.trim()).catch(() => null)
@@ -517,6 +517,17 @@ export async function gitArtifacts(
     if (match && pr && pr.length <= 512) artifacts.push({ kind: 'pr', label: `Pull request #${match[1]}`, url: pr })
   }
   return artifacts
+}
+
+const REMOVED_BRANCH_NOTE = 'These commits are not on a branch Factory made for this run. If the agent merged or pushed them elsewhere, Factory does not know where; `git branch -a --contains <sha>` shows it. Read one with `git show <sha>`. If no branch holds it, git may already have pruned it, and then the summary is all there is.'
+
+/**
+ * A non-delivering run's artifacts as its output keeps them: no branch, since Factory removes the run's branch with the
+ * worktree and cannot tell from the local refs which others hold the commits (ADR 0009). Commits carry one note instead.
+ */
+export function withoutBranches(artifacts: Artifact[]): Artifact[] {
+  const kept = artifacts.filter((a) => a.kind !== 'branch')
+  return kept.some((a) => a.kind === 'commit') ? [...kept, { kind: 'note', label: REMOVED_BRANCH_NOTE, url: null }] : kept
 }
 
 type JsonRecord = Record<string, unknown>
