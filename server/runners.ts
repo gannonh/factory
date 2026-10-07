@@ -141,7 +141,9 @@ export async function prepareWorkdir(root: string, runId: RunId, delivery: Deliv
   return { root: rootPath, path: workdir, initialHead: null, delivery: null }
 }
 
-// Two runs on one repository must not pick the same free branch name or fetch at once.
+// Two runs on one repository must not pick the same free branch name or fetch at once. A fresh branch's push runs in the
+// queue with the name it claims. Every other push stays outside it, so a slow push of a pull request's branch never holds
+// up another run's start and pushes to different branches overlap.
 const deliveryQueues = new Map<string, Promise<unknown>>()
 
 function inDeliveryQueue<T>(rootPath: string, work: () => Promise<T>): Promise<T> {
@@ -174,15 +176,49 @@ async function exec(command: 'git' | 'gh', cwd: string, step: string, args: stri
   }
 }
 
-type Git = (step: string, args: string[], timeout?: number) => Promise<string>
+type Git = (step: string, args: string[], timeout?: number, input?: Buffer) => Promise<string>
 
-const gitIn = (cwd: string): Git => async (step, args, timeout) => (await exec('git', cwd, step, args, { timeout })).stdout.toString()
+const gitIn = (cwd: string): Git => async (step, args, timeout, input) => (await exec('git', cwd, step, args, { timeout, input })).stdout.toString()
 
 async function defaultBranch(git: Git): Promise<string> {
   const symref = await git('git ls-remote', ['ls-remote', '--symref', 'origin', 'HEAD'], NETWORK_TIMEOUT_MS)
   const base = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(symref)?.[1]
   if (!base) throw new Error('delivery failed: origin has no default branch')
   return base
+}
+
+// Runs whose fetch is reading its refs. Two roots that are worktrees of one repository share `refs/factory/` but not a queue.
+const fetching = new Set<string>()
+
+/**
+ * Deletes the `refs/factory/*` refs of every run that is not fetching, in one transaction: deleting refs from separate
+ * processes at once contends for `packed-refs.lock`, and a delete that loses leaves its ref behind. It may fail without
+ * harm, since the next call deletes what is left.
+ */
+async function dropPrivateRefs(git: Git): Promise<void> {
+  const names = (await git('git for-each-ref', ['for-each-ref', '--format=%(refname)', 'refs/factory/'])).split('\n')
+  const stale = names.filter((name) => name && !fetching.has(name.split('/')[2]))
+  if (stale.length > 0) await git('git update-ref', ['update-ref', '--stdin'], undefined, Buffer.from(stale.map((ref) => `delete ${ref}\n`).join('')))
+}
+
+/**
+ * The commits at the tips of origin's `branches`, fetched into refs private to run `runId`, which are deleted again once
+ * read. A fetch never writes `refs/remotes/origin/*`, the refs a sibling's push to the same branch also writes, and
+ * `--refmap=` stops git from updating them on the side. Nor does it write `FETCH_HEAD`, which the siblings share.
+ * A crashed or failed earlier call can leave refs behind. The delete when a call ends, and the one before the next fetch,
+ * remove the refs of every run that is not fetching.
+ */
+async function fetchTips(git: Git, runId: string, branches: readonly string[]): Promise<string[]> {
+  const refs = branches.map((_, i) => `refs/factory/${runId}/${i}`)
+  await dropPrivateRefs(git).catch(() => undefined)
+  fetching.add(runId)
+  try {
+    await git('git fetch', ['fetch', '--no-tags', '--no-write-fetch-head', '--refmap=', 'origin', ...branches.map((branch, i) => `+refs/heads/${branch}:${refs[i]}`)], NETWORK_TIMEOUT_MS)
+    return await Promise.all(refs.map(async (ref) => (await git('git rev-parse', ['rev-parse', '--verify', `${ref}^{commit}`])).trim()))
+  } finally {
+    fetching.delete(runId)
+    await dropPrivateRefs(git).catch(() => undefined)
+  }
 }
 
 /** The first of `requested`, `<requested>-2`, `<requested>-3`, … that is free locally and on origin and not in `taken`. */
@@ -213,15 +249,13 @@ async function prepareDeliveryNow(rootPath: string, workdir: string, runBranch: 
   if (request.kind === 'continue') {
     const { base } = request
     await git('check branch name', ['check-ref-format', '--branch', base])
-    await git('git fetch', ['fetch', '--no-tags', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`, `+refs/heads/${requested}:refs/remotes/origin/${requested}`], NETWORK_TIMEOUT_MS)
-    const initialHead = (await git('git rev-parse', ['rev-parse', '--verify', `refs/remotes/origin/${requested}^{commit}`])).trim()
+    const [, initialHead] = await fetchTips(git, basename(workdir), [base, requested])
     await claiming(rootPath, workdir, runBranch, initialHead, (add) => git('git worktree add', add))
     return { root: rootPath, path: workdir, initialHead, delivery: { kind: 'continue', branch: requested, base } }
   }
   const base = await defaultBranch(git)
-  await git('git fetch', ['fetch', '--no-tags', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`], NETWORK_TIMEOUT_MS)
+  const [initialHead] = await fetchTips(git, basename(workdir), [base])
   const branch = await freeBranch(git, requested, request.retired)
-  const initialHead = (await git('git rev-parse', ['rev-parse', '--verify', `refs/remotes/origin/${base}^{commit}`])).trim()
   await claiming(rootPath, workdir, branch, initialHead, (add) => git('git worktree add', add))
   return { root: rootPath, path: workdir, initialHead, delivery: { kind: 'new', branch, base } }
 }
@@ -294,8 +328,7 @@ function freshDelivery(prepared: PreparedWorkdir, runStart: string, head: string
     const git = gitIn(prepared.root)
     await git('check branch name', ['check-ref-format', '--branch', requested])
     const base = await defaultBranch(git)
-    await git('git fetch', ['fetch', '--no-tags', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`], NETWORK_TIMEOUT_MS)
-    const onto = (await git('git rev-parse', ['rev-parse', '--verify', `refs/remotes/origin/${base}^{commit}`])).trim()
+    const [onto] = await fetchTips(git, basename(prepared.path), [base])
     const tip = await replay(prepared.root, runStart, head, onto, base)
     if (tip === onto) return { kind: 'empty' }
     const lost: string[] = []
