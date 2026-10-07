@@ -157,6 +157,30 @@ test('a branch the agent made itself stays in the handoff prompt, with no note t
   await f.server.close()
 })
 
+test('a handoff after a delivery-off run that pushed its branch to origin lists that branch and does not say the commits are on no branch', async () => {
+  const repo = repository()
+  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => { git(workdir, 'push', '-q', 'origin', `HEAD:refs/heads/${git(workdir, 'branch', '--show-current')}`) }))
+  f.api.agents.update(CODER, { delivery: 'none' })
+  addReviewer(f, 'none')
+  const { run, prompt } = await handoffPrompt(f)
+
+  expect(originBranches(repo.origin)).toEqual([`factory-${run.id}`, 'main'])
+  expect(prompt).toBe(`Implemented Add change.\nbranch: factory-${run.id}\ncommit: ${ranOf(run).short} change for Add change (attempt 1)`)
+  expect(localBranches(repo.root)).toEqual(['main'])
+  await f.server.close()
+})
+
+test('a delivery-off run that pushed its commits to origin under another name lists that branch', async () => {
+  const repo = repository()
+  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => { git(workdir, 'push', '-q', 'origin', 'HEAD:refs/heads/agent-pushed') }))
+  f.api.agents.update(CODER, { delivery: 'none' })
+  addReviewer(f, 'none')
+  const { run, prompt } = await handoffPrompt(f)
+
+  expect(prompt).toBe(`Implemented Add change.\nbranch: agent-pushed\ncommit: ${ranOf(run).short} change for Add change (attempt 1)`)
+  await f.server.close()
+})
+
 test('a run with delivery off and no commits hands off its summary alone', async () => {
   const repo = repository()
   const base = agentRunner()

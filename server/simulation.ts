@@ -1196,7 +1196,7 @@ export class MockServer {
         return []
       }
     }
-    let artifacts: RunOutput['artifacts'] = prepared && !delivering ? withoutRemovedBranch(await listCommits(prepared), run.id) : []
+    let artifacts: RunOutput['artifacts'] = prepared && !delivering ? await withoutRemovedBranch(await listCommits(prepared), run.id, prepared.path) : []
     if (this.world.runs[run.id]?.status !== 'running') return
     if (delivering) {
       const task = this.world.tasks[run.taskId]

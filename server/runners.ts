@@ -523,14 +523,19 @@ const REMOVED_BRANCH_NOTE = 'These commits are on no branch: Factory removed the
 
 /**
  * A non-delivering run's artifacts as its output keeps them. Factory removes the run's `factory-<run id>` branch when the
- * run ends (ADR 0009), so that branch is dropped and the commits, which only a SHA reaches, say so. A pull request the
- * agent opened itself means its branch is on origin, and a branch the agent made itself is not Factory's to remove, so
- * those artifacts stay as listed.
+ * run ends (ADR 0009), so that branch is dropped. Origin's remote-tracking branches that contain the run's HEAD, which a
+ * push updates and which cost no network call, are listed in its place. With none, and no pull request, the commits only
+ * a SHA reaches carry a note saying so. A pull request the agent opened itself means its branch is on origin, and a
+ * branch the agent made itself is not Factory's to remove, so those artifacts stay as listed.
  */
-export function withoutRemovedBranch(artifacts: Artifact[], runId: RunId): Artifact[] {
+export async function withoutRemovedBranch(artifacts: Artifact[], runId: RunId, path: string): Promise<Artifact[]> {
   if (artifacts.some((a) => a.kind === 'pr')) return artifacts
   const kept = artifacts.filter((a) => a.kind !== 'branch' || a.label !== `factory-${runId}`)
-  if (kept.some((a) => a.kind === 'branch') || !kept.some((a) => a.kind === 'commit')) return kept
+  if (!kept.some((a) => a.kind === 'commit')) return kept
+  const pushed = await execFileAsync('git', ['-C', path, 'for-each-ref', '--contains', 'HEAD', '--format=%(refname:lstrip=3)', 'refs/remotes/origin'])
+    .then(({ stdout }) => stdout.split('\n').filter((name) => name && name !== 'HEAD').slice(0, 3)).catch((): string[] => [])
+  if (pushed.length > 0) return [...pushed.map((name): Artifact => ({ kind: 'branch', label: name, url: null })), ...kept.filter((a) => a.kind !== 'branch' || !pushed.includes(a.label))]
+  if (kept.some((a) => a.kind === 'branch')) return kept
   return [...kept, { kind: 'note', label: REMOVED_BRANCH_NOTE, url: null }]
 }
 
