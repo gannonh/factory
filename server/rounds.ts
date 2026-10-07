@@ -165,6 +165,22 @@ function fenced(sections: string[]): string {
   return fence(sections.join('\n\n'), FEEDBACK_FRAMING)
 }
 
+/**
+ * `text` with the code fence it leaves open closed, found as `linesOutsideFences` in the rework fixture finds fences: the
+ * closing line is the opener's character, as many times, alone on its line. A fence the text closes itself, or never opens, is
+ * left as written. `\n` after a text that ends in a bare CR still starts a line of its own.
+ */
+export function closeFences(text: string): string {
+  let open: { char: string; length: number } | null = null
+  for (const line of text.split(/\r\n|\r|\n/)) {
+    const run = /^ {0,3}(`{3,}|~{3,})(.*)$/s.exec(line)
+    if (open) {
+      if (run && run[1][0] === open.char && run[1].length >= open.length && /^[ \t]*$/.test(run[2])) open = null
+    } else if (run && !(run[1][0] === '`' && run[2].includes('`'))) open = { char: run[1][0], length: run[1].length }
+  }
+  return open ? `${text}\n${open.char.repeat(open.length)}` : text
+}
+
 const joined = (parts: ReadonlyArray<string | null>) => parts.filter((part) => part !== null && part !== '').join('\n\n')
 
 /**
@@ -196,7 +212,7 @@ export function feedbackBlock(context: Pick<RoundContext, 'review' | 'linear'> |
  * description are fenced and framed as untrusted data instead.
  */
 export function roundPrompt(issue: { title: string; description: string; url: string; untrusted: string | null }, record: IntakeRecord, delivers: boolean): string {
-  const text = issue.untrusted === null ? joined([issue.title, issue.description]) : fence(joined([issue.title, issue.description]), UNTRUSTED_ISSUE_FRAMING)
+  const text = issue.untrusted === null ? closeFences(joined([issue.title, issue.description])) : fence(joined([issue.title, issue.description]), UNTRUSTED_ISSUE_FRAMING)
   return joined([text, issue.url, delivers ? reworkSection(record) : null, record.feedback])
 }
 
@@ -236,6 +252,15 @@ function issueParts(prompt: string, url: string, round: number): { issue: string
   return found.find((parts) => parts.section) ?? (found.length === 1 ? found[0] : null)
 }
 
+/**
+ * An issue task's head (its text, then its URL) with a fence the text left open closed, for a prompt saved before
+ * `roundPrompt` closed it. A head that already closes it, or an untrusted issue's own fence, is left as written.
+ */
+function closeIssueText(head: string, url: string): string {
+  const text = head.endsWith(`\n\n${url}`) ? head.slice(0, -url.length - 2) : ''
+  return text === '' ? head : `${closeFences(text)}\n\n${url}`
+}
+
 /** A run's output as the prompt of a task its handoff creates: the summary, then a line per artifact. */
 export const outputText = (output: RunOutput): string =>
   [output.summary, ...output.artifacts.map((a) => `${a.kind}: ${a.label}${a.url ? ` (${a.url})` : ''}`)].join('\n')
@@ -250,8 +275,9 @@ export const outputText = (output: RunOutput): string =>
  * retry cannot add them twice and no text in the upstream output can move or drop them. Any other task keeps its prompt.
  */
 export function runPrompt(task: Pick<Task, 'origin' | 'input' | 'prompt'>, record: IntakeRecord | undefined, delivers: boolean): string {
-  const parts = task.origin.kind === 'issue' && record && record.round > 1 ? issueParts(task.prompt, task.origin.issue.url, record.round) : null
-  if (parts && record) return joined([parts.issue, delivers ? reworkSection(record) : null, parts.feedback])
+  const url = task.origin.kind === 'issue' ? task.origin.issue.url : null
+  const parts = url !== null && record && record.round > 1 ? issueParts(task.prompt, url, record.round) : null
+  if (parts && record && url !== null) return joined([closeIssueText(parts.issue, url), delivers ? reworkSection(record) : null, parts.feedback])
   if (task.origin.kind === 'handoff' && task.input) return joined([delivers && record ? reworkSection(record) : null, delivers && record ? record.feedback : null, outputText(task.input)])
   return task.prompt
 }
