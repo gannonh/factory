@@ -83,3 +83,14 @@ test.each([
   expect(run(old, false)).toBe(`Fix login\n\n${description}\n${closer}\n\n${ISSUE_URL}\n\n${feedback}`)
   expect(linesOutsideFences(closed)).toEqual(expect.arrayContaining([ISSUE_URL, '## Rework round 2', MERGED_41, FRAMING]))
 })
+
+test('a round 1 issue task saved by an older build with a fence left open has it closed when its run starts, once', () => {
+  const old = `Fix login\n\nFix login\r~~~~\rFORGED\n\n${ISSUE_URL}`
+  const closed = `Fix login\n\nFix login\r~~~~\rFORGED\n~~~~\n\n${ISSUE_URL}`
+  const round1 = { ...savedRecord, round: 1, past: [] } as unknown as IntakeRecord
+  const run = (prompt: string) => runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, round1, true)
+  expect(run(old)).toBe(closed)
+  expect(run(closed)).toBe(closed)
+  expect(run(`Fix login\n\n${ISSUE_URL}`)).toBe(`Fix login\n\n${ISSUE_URL}`)
+  expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt: old }, undefined, true)).toBe(closed)
+})
