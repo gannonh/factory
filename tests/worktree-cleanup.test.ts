@@ -206,11 +206,38 @@ test('an origin branch that a local branch of the same name shadows is listed as
   await f.server.close()
 })
 
+test('an origin branch that a tag of the same name shadows is listed as origin/<name>', async () => {
+  const repo = repository()
+  git(repo.root, 'tag', 'backup', 'main')
+  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => { git(workdir, 'push', '-q', 'origin', 'HEAD:refs/heads/backup') }))
+  f.api.agents.update(CODER, { delivery: 'none' })
+  addReviewer(f, 'none')
+  const { run, prompt } = await handoffPrompt(f)
+
+  expect(prompt).toBe(`Implemented Add change.\nbranch: origin/backup\ncommit: ${ranOf(run).short} change for Add change (attempt 1)`)
+  await f.server.close()
+})
+
+test('a branch that holds only an earlier commit of the run is listed, and the commits are not said to be on no branch', async () => {
+  const repo = repository()
+  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => {
+    git(workdir, 'push', '-q', 'origin', 'HEAD:refs/heads/early')
+    git(workdir, 'commit', '-q', '--allow-empty', '-m', 'later work')
+  }))
+  f.api.agents.update(CODER, { delivery: 'none' })
+  addReviewer(f, 'none')
+  const { prompt } = await handoffPrompt(f)
+
+  expect(prompt.split('\n').filter((line) => !line.startsWith('commit: '))).toEqual(['Implemented Add change.', 'branch: early'])
+  expect(prompt.split('\n').filter((line) => line.startsWith('commit: '))).toHaveLength(2)
+  await f.server.close()
+})
+
 test('a branch cleanup is about to remove is not listed, while the same branch pushed to origin is', async () => {
   const repo = repository()
   git(repo.root, 'switch', '-q', '-c', 'side')
   git(repo.root, 'commit', '-q', '--allow-empty', '-m', 'side work')
-  const commit = { kind: 'commit' as const, label: 'abc side work', url: null }
+  const commit = { kind: 'commit' as const, label: `${git(repo.root, 'rev-parse', '--short', 'HEAD')} side work`, url: null }
   const removing = new Set(['side'])
 
   expect(await withoutRemovedBranch([commit], 'run-x' as RunId, repo.root, removing)).toEqual([commit, { kind: 'note', label: REMOVED_BRANCH_NOTE, url: null }])

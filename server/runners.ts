@@ -524,7 +524,7 @@ const REMOVED_BRANCH_NOTE = 'These commits are on no branch: Factory removed the
 /**
  * A non-delivering run's artifacts as its output keeps them. Factory removes the run's `factory-<run id>` branch when the
  * run ends (ADR 0009), so that branch is dropped. Every other local branch and every origin remote-tracking branch (which a
- * push updates, at no network cost) that contains the run's HEAD is listed in its place. With none, and no pull request,
+ * push updates, at no network cost) that contains one of the run's commits is listed in its place. With none, and no pull request,
  * the commits only a SHA reaches carry a note saying so. A pull request the agent opened itself means its branch is on
  * origin, and a branch the agent made stays listed unless cleanup removes it. `removing` names the other local branches
  * cleanup is about to take, which no listing may name. Origin decides, never the local copy, so a pushed branch stays
@@ -535,15 +535,17 @@ export async function withoutRemovedBranch(artifacts: Artifact[], runId: RunId, 
   const kept = artifacts.filter((a) => a.kind !== 'branch' || a.label !== `factory-${runId}`)
   if (!kept.some((a) => a.kind === 'commit')) return kept
   const refs = (...args: string[]) => execFileAsync('git', ['-C', path, 'for-each-ref', '--format=%(refname)', ...args]).then(({ stdout }) => stdout.split('\n').filter(Boolean))
-  const pushed = await Promise.all([refs('--contains', 'HEAD', 'refs/heads/', 'refs/remotes/origin/'), refs('refs/heads/')]).then(([holding, heads]) => {
+  // A ref that holds any listed commit still reaches that commit, so the check covers each one, not only HEAD.
+  const listed = kept.flatMap((a) => a.kind === 'commit' ? ['--contains', a.label.split(' ')[0]] : [])
+  const pushed = await Promise.all([refs(...listed, 'refs/heads/', 'refs/remotes/origin/'), refs('refs/heads/', 'refs/tags/')]).then(([holding, heads]) => {
     const gone = new Set([`refs/heads/factory-${runId}`, ...[...removing].map((name) => `refs/heads/${name}`)])
     const local = new Set(heads.filter((ref) => !gone.has(ref)))
-    // A local branch of the same name wins git's name lookup, so an origin branch it shadows keeps its `origin/`.
+    // A local branch or tag of the same name wins git's name lookup, so an origin branch it shadows keeps its `origin/`.
     const names = holding.flatMap((ref) => {
       if (gone.has(ref) || ref === 'refs/remotes/origin/HEAD') return []
       if (ref.startsWith('refs/heads/')) return [ref.slice('refs/heads/'.length)]
       const name = ref.slice('refs/remotes/origin/'.length)
-      return [local.has(`refs/heads/${name}`) ? `origin/${name}` : name]
+      return [local.has(`refs/heads/${name}`) || local.has(`refs/tags/${name}`) ? `origin/${name}` : name]
     })
     return [...new Set(names)].slice(0, 3)
   }).catch((): string[] => [])
