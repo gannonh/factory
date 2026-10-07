@@ -204,13 +204,13 @@ export function roundPrompt(issue: { title: string; description: string; url: st
  * An issue task's prompt as `roundPrompt` wrote it, split where its `Rework round N` section goes: the issue up to its URL,
  * and the fenced feedback after the section. The split reads the prompt from its end, never from its start, since the
  * issue's description is free text that can quote anything: the feedback block is the trailing fence, found by its closing
- * line, which no backtick run inside it can match. A name quoted in feedback an older build saved can spell the opener, and
- * can spell the URL before it, so every opener is tried. One that follows the section's line after the heading is the real
- * one, and the nearest to the end wins. A task queued for an agent that did not deliver has no section, so its head ends
- * with the URL's own paragraph and the section belongs right after it. Feedback comes after the real URL, so with no
- * section the earliest such opener wins. A prompt that ends in a fence carries feedback, so one with no attributable
- * opener is left whole. Only the section's line can follow the heading, since `reworkSection` checks that it holds no
- * blank line, and the URL itself never is that line.
+ * line, which no backtick run inside it can match. Text before the real opener (the description) and text after it (a name
+ * an older build saved) can each spell a URL, the framing and a fence opener, so every opener is tried. One that follows
+ * the section's line after the heading is the real one, and the nearest to the end wins. A task queued for an agent that
+ * did not deliver has no section, so its head ends with the URL's own paragraph and the section belongs right after it.
+ * Nothing tells two such openers apart, so then the prompt is left whole. A prompt that ends in a fence carries feedback, so
+ * one with no attributable opener is left whole too. Only the section's line can follow the heading, since `reworkSection`
+ * checks that it holds no blank line, and the URL itself never is that line.
  */
 function issueParts(prompt: string, url: string, round: number): { issue: string; feedback: string } | null {
   const bar = /\n(`{3,})$/.exec(prompt)?.[1]
@@ -233,7 +233,7 @@ function issueParts(prompt: string, url: string, round: number): { issue: string
   }
   const whole = bar === undefined ? split(-1) : null
   if (whole) found.push(whole)
-  return found.find((parts) => parts.section) ?? found.at(-1) ?? null
+  return found.find((parts) => parts.section) ?? (found.length === 1 ? found[0] : null)
 }
 
 /** A run's output as the prompt of a task its handoff creates: the summary, then a line per artifact. */

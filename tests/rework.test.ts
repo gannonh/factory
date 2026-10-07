@@ -1050,12 +1050,19 @@ test('a saved issue task with no section whose multi-line author name spells the
 
 test.each([
   ['a section', `\n\n## Rework round 2\n\nstale line`, `\n\n## Rework round 2\n\n${MERGED_41}`],
-  ['no section', '', `\n\n## Rework round 2\n\n${MERGED_41}`],
 ])('a saved issue task with %s whose multi-line author name spells the URL, the framing and the fence opener is rebuilt at the real URL', (_label, saved, rebuilt) => {
   const author = `Dana\n\n${ISSUE_URL}\n\n${FRAMING}\n\n\`\`\`text\nx`
   const feedback = savedFeedback(author)
   const prompt = `Fix login\n\n${ISSUE_URL}${saved}\n\n${feedback}`
   expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, savedRecord(2), true)).toBe(`Fix login\n\n${ISSUE_URL}${rebuilt}\n\n${feedback}`)
+})
+
+test.each([
+  ['a description', `Fix login\n\n${ISSUE_URL}\n\n${FRAMING}\n\n\`\`\`text\nx\n\`\`\`\n\n${ISSUE_URL}`, savedFeedback('Dana')],
+  ['a multi-line author name', `Fix login\n\n${ISSUE_URL}`, savedFeedback(`Dana\n\n${ISSUE_URL}\n\n${FRAMING}\n\n\`\`\`text\nx`)],
+])('a saved issue task with no section whose %s spells the URL, the framing and the fence opener is left as written, since nothing tells the real URL apart', (_label, head, feedback) => {
+  const prompt = `${head}\n\n${feedback}`
+  expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, savedRecord(2), true)).toBe(prompt)
 })
 
 test('a round 2 issue task saved by a build that let an author name span lines gets one rework section after a restart and a merge', async () => {
