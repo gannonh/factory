@@ -144,13 +144,25 @@ export async function prepareWorkdir(root: string, runId: RunId, delivery: Deliv
 // Two runs on one repository must not pick the same free branch name or fetch at once. A fresh branch's push runs in the
 // queue with the name it claims. Every other push stays outside it, so a slow push of a pull request's branch never holds
 // up another run's start and pushes to different branches overlap.
+// The queue is the repository's shared Git directory, not the sandbox root: a clone and its linked worktrees share refs
+// and branch names. A root that is not a repository queues by its own path.
 const deliveryQueues = new Map<string, Promise<unknown>>()
 
-function inDeliveryQueue<T>(rootPath: string, work: () => Promise<T>): Promise<T> {
-  const turn = (deliveryQueues.get(rootPath) ?? Promise.resolve()).then(work)
+async function queueKey(rootPath: string): Promise<string> {
+  try {
+    const common = (await execFileAsync('git', ['-C', rootPath, 'rev-parse', '--git-common-dir'], { timeout: LOCAL_TIMEOUT_MS })).stdout.trim()
+    return await realpath(resolve(rootPath, common))
+  } catch {
+    return rootPath
+  }
+}
+
+async function inDeliveryQueue<T>(rootPath: string, work: () => Promise<T>): Promise<T> {
+  const key = await queueKey(rootPath)
+  const turn = (deliveryQueues.get(key) ?? Promise.resolve()).then(work)
   const queued = turn.catch(() => undefined)
-  deliveryQueues.set(rootPath, queued)
-  void queued.then(() => { if (deliveryQueues.get(rootPath) === queued) deliveryQueues.delete(rootPath) })
+  deliveryQueues.set(key, queued)
+  void queued.then(() => { if (deliveryQueues.get(key) === queued) deliveryQueues.delete(key) })
   return turn
 }
 

@@ -488,6 +488,47 @@ test('a continuing run pushes to the branch its pre-push read names, not the one
   expect(gh.creates()).toEqual([])
 })
 
+/** The repository's sandbox `root` and a linked worktree of it, which share one `.git`, so their runs share refs and branch names. */
+function linkedRoot(repo: { root: string }) {
+  const linked = join(tempDir(), 'linked')
+  git(repo.root, 'worktree', 'add', '--quiet', '--detach', linked)
+  return linked
+}
+
+test('two new-branch preparations in a clone and its linked worktree get distinct names', async () => {
+  const repo = repository()
+  const linked = linkedRoot(repo)
+  const [a, b] = await Promise.all([
+    prepareWorkdir(repo.root, 'run-a' as RunId, { kind: 'new', branch: 'eng-1-fix-login', retired: [] }),
+    prepareWorkdir(linked, 'run-b' as RunId, { kind: 'new', branch: 'eng-1-fix-login', retired: [] }),
+  ])
+  expect([a.delivery?.branch, b.delivery?.branch].sort()).toEqual(['eng-1-fix-login', 'eng-1-fix-login-2'])
+})
+
+// 60 runs: 30 Coders take turns pushing the branch from the clone (a push must fast-forward) while 30 Reviewers start
+// on it from the linked worktree, two at a time so the roots keep overlapping. The timeout leaves headroom for a full
+// parallel `npm test`.
+test('Coders and Reviewers continuing one branch from a clone and its linked worktree never fail on a ref lock', async () => {
+  const repo = repository()
+  const linked = linkedRoot(repo)
+  git(repo.seed, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature')
+  git(repo.root, 'pack-refs', '--all')
+  const coders = (async () => {
+    for (let i = 0; i < 30; i++) {
+      const prepared = await resume(repo.root, `coder-${i}`, 'feature')
+      commitFile(prepared.path, `coder-${i}.txt`, `change ${i}`)
+      await deliver(prepared, { title: 'T', body: 'B' }, continuing('feature'))
+    }
+  })()
+  const reviewers = (async () => {
+    for (let i = 0; i < 15; i++) await Promise.all([0, 1].map((n) => resume(linked, `reviewer-${i}-${n}`, 'feature')))
+  })()
+  const failures = (await Promise.allSettled([coders, reviewers]))
+    .flatMap((outcome) => outcome.status === 'rejected' ? [String(outcome.reason)] : [])
+  expect(failures).toEqual([])
+  expect(git(repo.origin, 'rev-list', '--count', 'refs/heads/feature')).toBe('31')
+}, 120_000)
+
 test('two runs preparing the same branch at once get distinct names', async () => {
   const repo = repository()
   const [a, b] = await Promise.all([
