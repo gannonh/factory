@@ -501,14 +501,14 @@ export async function gitArtifacts(
   const boundedLabel = (value: string, limit: number) => Array.from(value).length > limit ? `${Array.from(value).slice(0, limit - 1).join('')}…` : value
   if (branch) artifacts.push({ kind: 'branch', label: boundedLabel(branch, 256), url: null })
   // Git limits both the number and width of returned subjects before Node receives them.
-  const history = await git('log', '--max-count=21', '--format=%H%x09%<(160,trunc)%s', `${initialHead}..${head}`)
+  const history = await git('log', '--max-count=21', '--format=%h%x09%<(160,trunc)%s', `${initialHead}..${head}`)
   const lines = history.split('\n').filter(Boolean)
   if (lines.length > 20) artifacts.push({ kind: 'note', label: 'Earlier commits omitted; showing 20 newest', url: null })
   for (const line of lines.slice(0, 20).reverse()) {
     const separator = line.indexOf('\t')
     if (separator < 0) continue
     const hash = line.slice(0, separator)
-    artifacts.push({ kind: 'commit', label: `${hash.slice(0, 7)} ${boundedLabel(line.slice(separator + 1).trimEnd(), 160)}`, url: null })
+    artifacts.push({ kind: 'commit', label: `${hash} ${boundedLabel(line.slice(separator + 1).trimEnd(), 160)}`, url: null })
   }
   if (lookupPr && branch && repository) {
     const pr = await execFileAsync('gh', ['pr', 'view', branch, '--repo', repository.slice('https://'.length), '--json', 'url', '--jq', '.url'], { cwd: path, timeout: 5000 }).then(({ stdout }) => stdout.trim()).catch(() => null)
@@ -523,13 +523,14 @@ const REMOVED_BRANCH_NOTE = 'These commits are on no branch: Factory removed the
 
 /**
  * A non-delivering run's artifacts as its output keeps them. Factory removes the run's `factory-<run id>` branch when the
- * run ends (ADR 0009), so the branch is dropped and the commits, which only a SHA reaches, say so. A pull request the
- * agent opened itself means its branch is on origin, so those artifacts stay as listed.
+ * run ends (ADR 0009), so that branch is dropped and the commits, which only a SHA reaches, say so. A pull request the
+ * agent opened itself means its branch is on origin, and a branch the agent made itself is not Factory's to remove, so
+ * those artifacts stay as listed.
  */
-export function withoutRemovedBranch(artifacts: Artifact[]): Artifact[] {
+export function withoutRemovedBranch(artifacts: Artifact[], runId: RunId): Artifact[] {
   if (artifacts.some((a) => a.kind === 'pr')) return artifacts
-  const kept = artifacts.filter((a) => a.kind !== 'branch')
-  if (!kept.some((a) => a.kind === 'commit')) return kept
+  const kept = artifacts.filter((a) => a.kind !== 'branch' || a.label !== `factory-${runId}`)
+  if (kept.some((a) => a.kind === 'branch') || !kept.some((a) => a.kind === 'commit')) return kept
   return [...kept, { kind: 'note', label: REMOVED_BRANCH_NOTE, url: null }]
 }
 

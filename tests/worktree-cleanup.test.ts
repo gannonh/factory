@@ -146,6 +146,17 @@ test('after git gc prunes the run’s commits, the handoff prompt still claims o
   await f.server.close()
 })
 
+test('a branch the agent made itself stays in the handoff prompt, with no note that the commits are on no branch', async () => {
+  const repo = repository()
+  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => { git(workdir, 'checkout', '-q', '-b', 'agent-work') }))
+  f.api.agents.update(CODER, { delivery: 'none' })
+  addReviewer(f, 'none')
+  const { run, prompt } = await handoffPrompt(f)
+
+  expect(prompt).toBe(`Implemented Add change.\nbranch: agent-work\ncommit: ${ranOf(run).short} change for Add change (attempt 1)`)
+  await f.server.close()
+})
+
 test('a run with delivery off and no commits hands off its summary alone', async () => {
   const repo = repository()
   const base = agentRunner()
