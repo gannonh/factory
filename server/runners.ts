@@ -199,36 +199,43 @@ async function defaultBranch(git: Git): Promise<string> {
   return base
 }
 
-// Runs whose fetch is reading its refs. Two roots that are worktrees of one repository share `refs/factory/` but not a queue.
-const fetching = new Set<string>()
-
 /**
- * Deletes the `refs/factory/*` refs of every run that is not fetching, in one transaction: deleting refs from separate
- * processes at once contends for `packed-refs.lock`, and a delete that loses leaves its ref behind. It may fail without
- * harm, since the next call deletes what is left.
+ * Deletes the `refs/factory/*` refs, each with its own `update-ref -d`, so a ref another git holds a lock on, or a stale
+ * `.lock` left by a killed git, keeps only that ref and not the rest. It may leave refs behind without harm, since the
+ * next call deletes what is left. A ref goes whether or not another server's fetch just wrote it: that fetch took its
+ * tips from its own output, and each run's refs are private to it.
  */
 async function dropPrivateRefs(git: Git): Promise<void> {
-  const names = (await git('git for-each-ref', ['for-each-ref', '--format=%(refname)', 'refs/factory/'])).split('\n')
-  const stale = names.filter((name) => name && !fetching.has(name.split('/')[2]))
-  if (stale.length > 0) await git('git update-ref', ['update-ref', '--stdin'], undefined, Buffer.from(stale.map((ref) => `delete ${ref}\n`).join('')))
+  const names = (await git('git for-each-ref', ['for-each-ref', '--format=%(refname)', 'refs/factory/'])).split('\n').filter(Boolean)
+  for (const name of names) await git('git update-ref', ['update-ref', '-d', name]).catch(() => undefined)
 }
 
 /**
- * The commits at the tips of origin's `branches`, fetched into refs private to run `runId`, which are deleted again once
- * read. A fetch never writes `refs/remotes/origin/*`, the refs a sibling's push to the same branch also writes, and
+ * The commits at the tips of origin's `branches`, fetched into refs private to run `runId`, which are deleted again when
+ * the fetch ends. A fetch never writes `refs/remotes/origin/*`, the refs a sibling's push to the same branch also writes, and
  * `--refmap=` stops git from updating them on the side. Nor does it write `FETCH_HEAD`, which the siblings share.
- * A crashed or failed earlier call can leave refs behind. The delete when a call ends, and the one before the next fetch,
- * remove the refs of every run that is not fetching.
+ * The tips come from the fetch's own `--porcelain --verbose` output (git 2.41 or later; without `--verbose` a ref that is
+ * already up to date has no row) and not from reading the refs back, so
+ * another server deleting them cannot fail the run. A crashed or failed earlier call can leave refs behind. The delete
+ * when a call ends, and the one before the next fetch, remove every `refs/factory/*` ref they can.
  */
 async function fetchTips(git: Git, runId: string, branches: readonly string[]): Promise<string[]> {
   const refs = branches.map((_, i) => `refs/factory/${runId}/${i}`)
   await dropPrivateRefs(git).catch(() => undefined)
-  fetching.add(runId)
   try {
-    await git('git fetch', ['fetch', '--no-tags', '--no-write-fetch-head', '--refmap=', 'origin', ...branches.map((branch, i) => `+refs/heads/${branch}:${refs[i]}`)], NETWORK_TIMEOUT_MS)
-    return await Promise.all(refs.map(async (ref) => (await git('git rev-parse', ['rev-parse', '--verify', `${ref}^{commit}`])).trim()))
+    const porcelain = await git('git fetch', ['fetch', '--porcelain', '--verbose', '--no-tags', '--no-write-fetch-head', '--refmap=', 'origin', ...branches.map((branch, i) => `+refs/heads/${branch}:${refs[i]}`)], NETWORK_TIMEOUT_MS)
+      .catch(async (error: unknown) => { throw await needsGit(git, error, 'reading fetched commits', 2, 41) })
+    const tips = new Map<string, string>()
+    for (const line of porcelain.split('\n')) {
+      const [flag, , tip, ref] = line.split(' ')
+      if (flag !== '!' && tip && ref) tips.set(ref, tip)
+    }
+    return refs.map((ref) => {
+      const tip = tips.get(ref)
+      if (!tip) throw new Error(`delivery failed: git fetch: no commit reported for ${ref}`)
+      return tip
+    })
   } finally {
-    fetching.delete(runId)
     await dropPrivateRefs(git).catch(() => undefined)
   }
 }
@@ -276,14 +283,14 @@ async function prepareDeliveryNow(rootPath: string, workdir: string, runBranch: 
 type Target = { branch: string; base: string; initialHead: string; head: string }
 
 /** Why a git step failed, naming the git `major.minor` floor that `what` needs only when this git is older. */
-async function needsGit(root: string, error: unknown, what: string, major: number, minor: number): Promise<Error> {
+async function needsGit(git: Git, error: unknown, what: string, major: number, minor: number): Promise<Error> {
   const reason = error instanceof Error ? error.message : String(error)
-  const version = /(\d+)\.(\d+)[\w.]*/.exec(await gitIn(root)('git version', ['version']).catch(() => ''))
+  const version = /(\d+)\.(\d+)[\w.]*/.exec(await git('git version', ['version']).catch(() => ''))
   const old = version !== null && (Number(version[1]) < major || (Number(version[1]) === major && Number(version[2]) < minor))
   return new Error(old ? `${reason} (${what} needs git ${major}.${minor} or later; this is git ${version[0]})` : reason)
 }
 
-const mergeTreeFailure = (root: string, error: unknown) => needsGit(root, error, 'replaying commits', 2, 40)
+const mergeTreeFailure = (root: string, error: unknown) => needsGit(gitIn(root), error, 'replaying commits', 2, 40)
 
 /**
  * The commit object `raw` with tree `tree` and parent `parent`. Its author, committer and `encoding` lines and its message
@@ -549,7 +556,7 @@ async function claiming(rootPath: string, workdir: string, branch: string, initi
   await rename(`${ownerFile(workdir)}.tmp`, ownerFile(workdir))
   // The branch's reflog is what later proves the branch is this run's, so it is kept even where the repository turns reflogs off.
   await add(['-c', 'core.logAllRefUpdates=true', 'worktree', 'add', '--lock', '--reason', token, '--no-track', '-b', branch, workdir, initialHead])
-    .catch(async (error: unknown) => { throw await needsGit(rootPath, error, 'locking the worktree', 2, 36) })
+    .catch(async (error: unknown) => { throw await needsGit(gitIn(rootPath), error, 'locking the worktree', 2, 36) })
 }
 
 async function readOwner(workdir: string): Promise<Owner | null> {
