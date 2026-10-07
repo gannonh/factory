@@ -790,3 +790,53 @@ test('a pass that fails after the worktree is gone still takes and logs the agen
   expect(localBranches(repo.root)).toEqual(['main'])
   await f.server.close()
 })
+
+test('an agent branch named like a tag is removed with its push config', async () => {
+  const repo = repository()
+  git(repo.root, 'tag', 'release', 'main')
+  const { f, run, workdir } = await killedRun(repo)
+  pause()
+  git(workdir, 'switch', '--quiet', '-c', 'release')
+  git(workdir, 'config', 'branch.release.remote', 'origin')
+
+  const result = await removeWorkdir(repo.root, run.id, true, Date.now())
+  expect(result.left).toEqual([])
+  expect(result.removed).toHaveLength(1)
+  expect(localBranches(repo.root)).toEqual(['main'])
+  expect(sideBranchConfigOf(repo.root, 'release')).toBe('')
+  await f.server.close()
+})
+
+const sideBranchConfigOf = (root: string, name: string) => { try { return git(root, 'config', '--get-regexp', `^branch\\.${name}\\.`) } catch { return '' } }
+
+test('a branch the agent used and the operator deleted and recreated stays, though the agent’s earlier switch to that name is in the HEAD reflog', async () => {
+  const repo = repository()
+  const { f, run, workdir, branch } = await killedRun(repo)
+  pause()
+  git(workdir, 'switch', '--quiet', '-c', SIDE)
+  git(workdir, 'switch', '--quiet', branch)
+  pause()
+  git(repo.root, 'branch', '-D', SIDE)
+  git(repo.root, 'branch', SIDE, 'main')
+
+  expect(await removeWorkdir(repo.root, run.id, true, Date.now())).toEqual({ left: [`branch ${SIDE} (it existed when the run switched to it)`], removed: [] })
+  expect(localBranches(repo.root)).toEqual([SIDE, 'main'])
+  await f.server.close()
+})
+
+test('the output of a run whose branch has a name longer than a label does not name it once it is removed', async () => {
+  const repo = repository()
+  const long = `${'a'.repeat(120)}/${'b'.repeat(120)}/${'c'.repeat(60)}`
+  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => {
+    pause()
+    git(workdir, 'switch', '--quiet', '-c', long)
+  }))
+  f.api.agents.update(CODER, { delivery: 'none' })
+  enqueue(f)
+  const run = await nextRun(f)
+
+  expect(run.status).toBe('succeeded')
+  expect(localBranches(repo.root)).toEqual(['main'])
+  expect(run.output?.artifacts.filter((a) => a.kind === 'branch')).toEqual([])
+  await f.server.close()
+})

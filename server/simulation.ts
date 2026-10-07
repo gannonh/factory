@@ -54,7 +54,7 @@ import {
   type WriteStatus,
 } from '../src/domain/types'
 import type { WorldStore } from './worldFile'
-import { ClaudeRunner, SimulatedRunner, agentBranchesToRemove, deliver, gitArtifacts, prepareWorkdir, reconcileWorkdirs, removeWorkdir, type Delivery, type DeliveryRequest, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
+import { ClaudeRunner, SimulatedRunner, agentBranchesToRemove, branchLabel, deliver, gitArtifacts, prepareWorkdir, reconcileWorkdirs, removeWorkdir, type Delivery, type DeliveryRequest, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
 import type { RunLogStore } from './runLogs'
 import { array, boolean, defaulted, id, number, object, oneOf, record } from './parse'
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
@@ -1201,7 +1201,7 @@ export class MockServer {
       }
     }
     // The output is read by later agents, so it names no branch that removal is about to take.
-    const taken = prepared && !delivering ? new Set(await agentBranchesToRemove(prepared.root, run.id, prepared.path)) : new Set<string>()
+    const taken = prepared && !delivering ? new Set((await agentBranchesToRemove(prepared.root, run.id, prepared.path)).map(branchLabel)) : new Set<string>()
     let artifacts: RunOutput['artifacts'] = prepared && !delivering ? (await listCommits(prepared)).filter((a) => a.kind !== 'branch' || !taken.has(a.label)) : []
     if (this.world.runs[run.id]?.status !== 'running') return
     if (delivering) {

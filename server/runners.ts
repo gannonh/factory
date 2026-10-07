@@ -489,17 +489,20 @@ function githubUrl(remote: string): string | null {
  * `initialHead..head`, where `head` is a replayed delivery's tip or HEAD. `lookupPr` finds a PR the agent opened itself;
  * a delivering run skips it, since Factory opens that run's PR.
  */
+const boundedLabel = (value: string, limit: number) => Array.from(value).length > limit ? `${Array.from(value).slice(0, limit - 1).join('')}…` : value
+/** How an artifact names a branch, which is bounded, so a caller matching a branch to its artifact compares through this. */
+export const branchLabel = (branch: string) => boundedLabel(branch, 256)
+
 export async function gitArtifacts(
   { path, initialHead, head = 'HEAD' }: Pick<PreparedWorkdir, 'path' | 'initialHead'> & { head?: string }, { lookupPr = true } = {},
 ): Promise<Artifact[]> {
   if (!initialHead) return []
   const git = async (...args: string[]) => (await execFileAsync('git', ['-C', path, ...args])).stdout.trim()
-  const branch = await git('symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => null)
+  const branch = (await git('symbolic-ref', '--quiet', 'HEAD').catch(() => '')).replace(/^refs\/heads\//, '') || null
   const remote = await git('remote', 'get-url', 'origin').catch(() => null)
   const repository = remote ? githubUrl(remote) : null
   const artifacts: Artifact[] = []
-  const boundedLabel = (value: string, limit: number) => Array.from(value).length > limit ? `${Array.from(value).slice(0, limit - 1).join('')}…` : value
-  if (branch) artifacts.push({ kind: 'branch', label: boundedLabel(branch, 256), url: null })
+  if (branch) artifacts.push({ kind: 'branch', label: branchLabel(branch), url: null })
   // Git limits both the number and width of returned subjects before Node receives them.
   const history = await git('log', '--max-count=21', '--format=%H%x09%<(160,trunc)%s', `${initialHead}..${head}`)
   const lines = history.split('\n').filter(Boolean)
@@ -558,7 +561,7 @@ const serverProcess = () => (thisServer ??= processStart(process.pid).then((star
  */
 async function claiming(rootPath: string, workdir: string, branch: string, initialHead: string, add: (args: string[]) => Promise<unknown>) {
   const token = `factory ${basename(workdir)} ${randomBytes(8).toString('hex')}`
-  const before = (await execFileAsync('git', ['-C', rootPath, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/'], { timeout: LOCAL_TIMEOUT_MS })).stdout.split('\n').filter(Boolean)
+  const before = (await execFileAsync('git', ['-C', rootPath, 'for-each-ref', '--format=%(refname:lstrip=2)', 'refs/heads/'], { timeout: LOCAL_TIMEOUT_MS })).stdout.split('\n').filter(Boolean)
   const owner: Owner = { branch, initialHead, token, server: await serverProcess(), startedAt: Math.floor(Date.now() / 1000), before }
   await writeOwner(workdir, owner)
   // The branch's reflog is what later proves the branch is this run's, so it is kept even where the repository turns reflogs off.
@@ -759,7 +762,7 @@ async function judgeBranches(rootPath: string, id: string, owner: Owner, endedAt
   const end = endedAt === null ? null : Math.floor(endedAt / 1000)
   const taken: Taken[] = []
   const left: string[] = []
-  for (const branch of (await git('for-each-ref', '--format=%(refname:short)', 'refs/heads/')).split('\n').filter(Boolean)) {
+  for (const branch of (await git('for-each-ref', '--format=%(refname:lstrip=2)', 'refs/heads/')).split('\n').filter(Boolean)) {
     if (branch === owner.branch) continue
     // Oldest entry last. `%gd` with a unix date reads `<ref>@{<seconds>}`, the time the entry was written.
     const entries = (await git('reflog', 'show', '--date=unix', '--format=%gd%x09%H%x09%gs', `refs/heads/${branch}`, '--').catch(() => '')).trimEnd().split('\n').filter(Boolean)
