@@ -757,13 +757,16 @@ async function judgeBranches(rootPath: string, id: string, owner: Owner, endedAt
   if (started === null) return { taken: [], left: [] }
   const log = await readHeadLog(rootPath, id)
   const logged = new Set(log?.map((entry) => entry.commit))
-  const checkedOut = new Set([...await registeredWorktrees(rootPath)].filter(([path]) => path !== workdir).map(([, found]) => found.branch))
+  const others = [...await registeredWorktrees(rootPath)].filter(([path]) => path !== workdir)
+  const checkedOut = new Set(others.map(([, found]) => found.branch))
+  // A sibling run's live branch is not this run's to judge, so it is skipped without a warning.
+  const siblingRuns = new Set(others.filter(([path]) => dirname(path) === dirname(workdir)).map(([, found]) => found.branch))
   const before = new Set(owner.before)
   const end = endedAt === null ? null : Math.floor(endedAt / 1000)
   const taken: Taken[] = []
   const left: string[] = []
   for (const branch of (await git('for-each-ref', '--format=%(refname:lstrip=2)', 'refs/heads/')).split('\n').filter(Boolean)) {
-    if (branch === owner.branch) continue
+    if (branch === owner.branch || siblingRuns.has(branch)) continue
     // Oldest entry last. `%gd` with a unix date reads `<ref>@{<seconds>}`, the time the entry was written.
     const entries = (await git('reflog', 'show', '--date=unix', '--format=%gd%x09%H%x09%gs', `refs/heads/${branch}`, '--').catch(() => '')).trimEnd().split('\n').filter(Boolean)
       .map((line) => { const [when = '', commit = '', message = ''] = line.split('\t'); return { at: Number(/@\{(\d+)\}$/.exec(when)?.[1]), commit, message } })
@@ -772,6 +775,7 @@ async function judgeBranches(rootPath: string, id: string, owner: Owner, endedAt
     if (!first || !last || !entries.some((entry) => entry.at > started)) continue
     const why = async (): Promise<string | null> => {
       // Reflog times are whole seconds, so a branch made in the owner file's own second cannot be told from one that was already there.
+      if (owner.startedAt === undefined || owner.before === undefined) return 'its owner file is from an older build, which cannot tell it from a branch that was there before the run'
       if (before.has(branch) || !(first.at > started)) return 'it existed before the run'
       if (!first.message.startsWith('branch: Created from ')) return 'its reflog does not begin with its creation'
       if (end === null || first.at > end) return 'its creation is not shown to be inside the run'

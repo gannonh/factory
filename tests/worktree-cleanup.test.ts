@@ -4,7 +4,7 @@
  * takes what it can prove Factory made: the worktree's lock reason and the branch's reflog must match the owner file.
  */
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
 import { removeWorkdir } from '../server/runners'
@@ -838,5 +838,36 @@ test('the output of a run whose branch has a name longer than a label does not n
   expect(run.status).toBe('succeeded')
   expect(localBranches(repo.root)).toEqual(['main'])
   expect(run.output?.artifacts.filter((a) => a.kind === 'branch')).toEqual([])
+  await f.server.close()
+})
+
+test('an owner file from an older build, with no startedAt or before, takes no branch and names each one it kept', async () => {
+  const repo = repository()
+  git(repo.root, 'branch', 'opbranch', 'main')
+  const { f, run, workdir } = await killedRun(repo)
+  pause()
+  git(workdir, 'branch', '-D', 'opbranch')
+  git(workdir, 'switch', '--quiet', '-c', 'opbranch')
+  git(workdir, 'switch', '--quiet', '-c', SIDE)
+  const { startedAt, before: _before, ...older } = readOwner(f, run.id)
+  writeFileSync(ownerFile(f, run.id), JSON.stringify(older))
+  utimesSync(ownerFile(f, run.id), startedAt, startedAt)
+
+  const reason = 'its owner file is from an older build, which cannot tell it from a branch that was there before the run'
+  expect(await removeWorkdir(repo.root, run.id, true, Date.now())).toEqual({ left: [`branch ${SIDE} (${reason})`, `branch opbranch (${reason})`], removed: [] })
+  expect(localBranches(repo.root)).toEqual([SIDE, 'main', 'opbranch'])
+  await f.server.close()
+})
+
+test('a branch checked out in another run worktree is skipped without a warning', async () => {
+  const repo = repository()
+  const { f, run, workdir, branch } = await killedRun(repo)
+  pause()
+  git(workdir, 'switch', '--quiet', '-c', SIDE)
+  git(workdir, 'switch', '--quiet', branch)
+  git(repo.root, 'worktree', 'add', '--quiet', join(repo.root, '.factory-runs', 'sibling'), SIDE)
+
+  expect(await removeWorkdir(repo.root, run.id, true, Date.now())).toEqual({ left: [], removed: [] })
+  expect(localBranches(repo.root)).toContain(SIDE)
   await f.server.close()
 })
