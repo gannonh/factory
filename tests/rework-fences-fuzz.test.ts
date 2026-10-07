@@ -26,7 +26,7 @@ const lines: Array<() => string> = [
   () => pick(indents) + run() + pick(['', ' ', '\t', 'x']),
   () => pick(['', '', '  ', 'text', 'code', '# h', '    code', 'a *b* c']),
   () => pick(['- item', '* item', '+ item', '1. item', '2) item', '  - nested', '> quote', '>> deep', '> ```', '- ```', '1. ~~~', '-']),
-  () => pick(['<div>', '</div>', '<p>x</p>', '<!--', '<!-- x -->', '-->', '<script>', '</script>', '<?php', '?>', '<![CDATA[', '<!DOCTYPE html>', '<span>', '<a href=x>']),
+  () => pick(['<div>', '</div>', '<p>x</p>', '<!--', '<!-- x -->', '-->', '<script>', '</script>', '<?php', '?>', '<![CDATA[', '<!DOCTYPE html>', '<span>', '<a href=x>', '<3 no', '<Foo />']),
 ]
 function description(): string {
   let text = ''
@@ -54,7 +54,7 @@ test('a closing line is added only where Factory\'s lines would be inside a code
     expect(built.startsWith(`Fix login\n\n${d}\n`), context).toBe(true)
   }
   expect(fixed).toBeGreaterThan(20)
-  expect(unfixable).toBeLessThan(fixed)
+  expect(unfixable).toBe(0)
 }, 60_000)
 
 test('a saved issue task gets the same prompt as a built one, and a run leaves a prompt that is built alone', () => {
