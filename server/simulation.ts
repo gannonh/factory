@@ -277,11 +277,11 @@ export class MockServer {
     const run = this.world.runs[runId]
     const where = run ? { runId, agentId: run.agentId } : {}
     try {
-      const { left, legacy } = await removeWorkdir(root, runId, run !== undefined && run.status !== 'running', endedAt ?? (run && run.status !== 'running' ? run.endedAt : null))
+      const { left, removed } = await removeWorkdir(root, runId, run !== undefined && run.status !== 'running', endedAt ?? (run && run.status !== 'running' ? run.endedAt : null))
       if (!report) return
-      for (const item of legacy) this.log('info', `removed ${item}`, where)
+      for (const item of removed) this.log('info', `removed ${item}`, where)
       if (left.length) this.log('warn', `left alone: ${left.join('; ')}`, where)
-      if (left.length || legacy.length) this.publish()
+      if (left.length || removed.length) this.publish()
     } catch (error) {
       if (!report) return
       this.log('warn', `worktree of run ${runId} not removed, the next start retries: ${error instanceof Error ? error.message : String(error)}`, where)

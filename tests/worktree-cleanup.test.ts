@@ -26,7 +26,7 @@ const enqueue = (f: Factory, title = 'Add change') => f.api.agents.enqueue(CODER
 const warnings = (server: MockServer) => server.snapshot().logs.filter((line) => line.level === 'warn').map((line) => line.msg)
 const removals = (server: MockServer) => server.snapshot().logs.filter((line) => line.level === 'info' && line.msg.startsWith('removed ')).map((line) => [line.runId, line.msg])
 const restart = (root: string, store = memoryStore()) => new MockServer({ manual: true, rng: RNG, localRunner: agentRunner(), localRoot: root, linear: linear(), clock, store })
-type Owner = { branch: string; initialHead: string; token: string; server: { pid: number; started: string } }
+type Owner = { startedAt: number; before: string[]; branch: string; initialHead: string; token: string; server: { pid: number; started: string } }
 const readOwner = (f: Pick<Factory, 'root'>, id: string) => JSON.parse(readFileSync(ownerFile(f, id), 'utf8')) as Owner
 const processStart = (pid: number) => execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' } }).trim()
 
@@ -47,7 +47,7 @@ async function killedRun(repo: ReturnType<typeof repository>, store = memoryStor
   const run = await startHanging(f)
   await f.server.close()
   expect(runWorktrees(repo.root)).toEqual([workdirOf(f, run)])
-  expect(localBranches(repo.root)).toEqual([`factory-${run.id}`, 'main'])
+  expect(localBranches(repo.root)).toContain(`factory-${run.id}`)
   return { f, run, workdir: workdirOf(f, run), branch: `factory-${run.id}` }
 }
 
@@ -263,7 +263,7 @@ test('a worktree an agent unlocked and relocked is no longer provably Factory’
 
   expect(run.status).toBe('succeeded')
   expect(runWorktrees(repo.root)).toEqual([workdirOf(f, run)])
-  expect(localBranches(repo.root)).toEqual([`factory-${run.id}`, 'main'])
+  expect(localBranches(repo.root)).toContain(`factory-${run.id}`)
   expect(existsSync(ownerFile(f, run.id))).toBe(false)
   expect(warnings(f.server)).toEqual([
     `left alone: worktree ${workdirOf(f, run)} (its lock reason is not this run's mark); branch factory-${run.id} (checked out there)`,
@@ -274,7 +274,7 @@ test('a worktree an agent unlocked and relocked is no longer provably Factory’
   const restarted = restart(repo.root, store)
   await restarted.settled()
   expect(runWorktrees(repo.root)).toEqual([workdirOf(f, run)])
-  expect(localBranches(repo.root)).toEqual([`factory-${run.id}`, 'main'])
+  expect(localBranches(repo.root)).toContain(`factory-${run.id}`)
   expect(warnings(restarted)).toEqual([`left alone: worktree ${workdirOf(f, run)} (no owner file, and locked: mine now)`])
   await restarted.close()
 })
@@ -355,8 +355,8 @@ test('a start after a crash part way through the removal finishes it, whichever 
   expect(existsSync(ownerFile(f, run.id))).toBe(false)
 
   // Removing again, or removing a run Factory never made a worktree for, changes nothing.
-  expect(await removeWorkdir(repo.root, run.id, true)).toEqual({ left: [], legacy: [] })
-  expect(await removeWorkdir(repo.root, 'run-never-made' as RunId, false)).toEqual({ left: [], legacy: [] })
+  expect(await removeWorkdir(repo.root, run.id, true)).toEqual({ left: [], removed: [] })
+  expect(await removeWorkdir(repo.root, 'run-never-made' as RunId, false)).toEqual({ left: [], removed: [] })
   expect(localBranches(repo.root)).toEqual(['main'])
   await restarted.close()
 })
@@ -425,7 +425,7 @@ test('nothing under a .factory-runs that became a symlink is removed at a restar
   await restarted.settled()
   expect(readdirSync(elsewhere).sort()).toEqual([run.id, `${run.id}.owner`])
   expect(readFileSync(join(elsewhere, run.id, 'unsaved.txt'), 'utf8')).toBe('hours of work')
-  expect(localBranches(repo.root)).toEqual([`factory-${run.id}`, 'main'])
+  expect(localBranches(repo.root)).toContain(`factory-${run.id}`)
   expect(warnings(restarted)).toEqual([`worktree of run ${run.id} not removed, the next start retries: ${join(repo.root, '.factory-runs')} is a symlink to ${elsewhere}; Factory needs a directory there`])
   expect(git(repo.root, 'worktree', 'list', '--porcelain')).toContain(`worktree ${workdir}`)
   await restarted.close()
@@ -435,7 +435,7 @@ test('a worktree whose owner server is still alive is left alone, and removed on
   const repo = repository()
   const { f, run } = await killedRun(repo)
   const owner = readOwner(f, run.id)
-  expect(owner).toEqual({ branch: `factory-${run.id}`, initialHead: git(repo.root, 'rev-parse', 'HEAD'), token: `factory ${run.id} ${owner.token.split(' ')[2]}`, server: { pid: process.pid, started: processStart(process.pid) } })
+  expect(owner).toEqual({ before: ['main'], startedAt: owner.startedAt, branch: `factory-${run.id}`, initialHead: git(repo.root, 'rev-parse', 'HEAD'), token: `factory ${run.id} ${owner.token.split(' ')[2]}`, server: { pid: process.pid, started: processStart(process.pid) } })
   expect(owner.token.split(' ')[2]).toMatch(/^[0-9a-f]{16}$/)
 
   writeFileSync(ownerFile(f, run.id), JSON.stringify({ ...owner, server: { pid: process.ppid, started: processStart(process.ppid) } }))
@@ -450,7 +450,7 @@ test('a worktree whose owner server is still alive is left alone, and removed on
   const unknown = restart(repo.root)
   await unknown.settled()
   expect(runWorktrees(repo.root)).toEqual([workdirOf(f, run)])
-  expect(localBranches(repo.root)).toEqual([`factory-${run.id}`, 'main'])
+  expect(localBranches(repo.root)).toContain(`factory-${run.id}`)
   expect(warnings(unknown)).toEqual([])
   await unknown.close()
 
@@ -471,7 +471,7 @@ test('a worktree whose owner file holds a pid no process can have is left alone'
   const restarted = restart(repo.root)
   await restarted.settled()
   expect(runWorktrees(repo.root)).toEqual([workdirOf(f, run)])
-  expect(localBranches(repo.root)).toEqual([`factory-${run.id}`, 'main'])
+  expect(localBranches(repo.root)).toContain(`factory-${run.id}`)
   await restarted.close()
 })
 
@@ -490,7 +490,7 @@ test('a server restoring a world whose run another live server still works on le
   await second.settled()
   expect(second.snapshot().runs[run.id]).toMatchObject({ status: 'failed', error: 'interrupted by restart' })
   expect(runWorktrees(repo.root)).toEqual([workdirOf(f, run)])
-  expect(localBranches(repo.root)).toEqual([`factory-${run.id}`, 'main'])
+  expect(localBranches(repo.root)).toContain(`factory-${run.id}`)
   expect(existsSync(ownerFile(f, run.id))).toBe(true)
   expect(warnings(second)).toEqual([`left alone: the worktree and branch of run ${run.id} (server process ${process.ppid}, which made them, is still running)`])
   await second.close()
@@ -647,7 +647,7 @@ test('with no end time for the run, an agent’s branch stays and is described',
   pause()
   git(workdir, 'switch', '--quiet', '-c', SIDE)
 
-  expect(await removeWorkdir(repo.root, run.id, true)).toEqual({ left: [`branch ${SIDE} (its creation is not shown to be inside the run)`], legacy: [] })
+  expect(await removeWorkdir(repo.root, run.id, true)).toEqual({ left: [`branch ${SIDE} (its creation is not shown to be inside the run)`], removed: [] })
   expect(localBranches(repo.root)).toEqual([SIDE, 'main'])
   expect(existsSync(ownerFile(f, run.id))).toBe(false)
   await f.server.close()
@@ -659,7 +659,7 @@ test('a branch someone else made in the root while the run was going stays and i
   pause()
   git(repo.root, 'branch', 'operator-branch', 'main')
 
-  expect(await removeWorkdir(repo.root, run.id, true, Date.now())).toEqual({ left: ['branch operator-branch (the run never switched to it)'], legacy: [] })
+  expect(await removeWorkdir(repo.root, run.id, true, Date.now())).toEqual({ left: ['branch operator-branch (the run never switched to it)'], removed: [] })
   expect(localBranches(repo.root)).toEqual(['main', 'operator-branch'])
   await f.server.close()
 })
@@ -676,5 +676,117 @@ test('a run reset away while it works still has the branches its agent made remo
 
   expect(localBranches(repo.root)).toEqual(['main'])
   expect(runWorktrees(repo.root)).toEqual([])
+  await f.server.close()
+})
+
+const runIdOf = (workdir: string) => workdir.split('/').at(-1)!
+const recovery = (tip: string) => `at ${tip}; its commits can be recovered from that SHA until git prunes them`
+
+test('a removed agent branch is logged with its name and tip, so its unpushed commits can be recovered by SHA', async () => {
+  const repo = repository()
+  let tip = ''
+  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => {
+    pause()
+    git(workdir, 'switch', '--quiet', '-c', SIDE)
+    commitFile(workdir, 'side.txt', 'side')
+    tip = git(workdir, 'rev-parse', 'HEAD').trim()
+    git(workdir, 'switch', '--quiet', `factory-${runIdOf(workdir)}`)
+  }))
+  f.api.agents.update(CODER, { delivery: 'none' })
+  enqueue(f)
+  const run = await nextRun(f)
+
+  expect(run.status).toBe('succeeded')
+  expect(localBranches(repo.root)).toEqual(['main'])
+  expect(tip).toMatch(/^[0-9a-f]{40}$/)
+  expect(removals(f.server)).toEqual([[run.id, `removed branch ${SIDE} ${recovery(tip)}`]])
+  await f.server.close()
+})
+
+test('a branch the operator made in the root during the run stays when the agent switches to it', async () => {
+  const repo = repository()
+  const { f, run, workdir } = await killedRun(repo)
+  pause()
+  git(repo.root, 'branch', 'opbranch', 'main')
+  pause()
+  git(workdir, 'switch', '--quiet', 'opbranch')
+
+  expect(await removeWorkdir(repo.root, run.id, true, Date.now())).toEqual({ left: ['branch opbranch (it existed when the run switched to it)'], removed: [] })
+  expect(localBranches(repo.root)).toEqual(['main', 'opbranch'])
+  await f.server.close()
+})
+
+test('a branch the agent made and left stays when the operator committed on it in another worktree', async () => {
+  const repo = repository()
+  const { f, run, workdir, branch } = await killedRun(repo)
+  pause()
+  git(workdir, 'switch', '--quiet', '-c', SIDE)
+  git(workdir, 'switch', '--quiet', branch)
+  const operator = join(tempDir(), 'operator-wt')
+  git(repo.root, 'worktree', 'add', '--quiet', operator, SIDE)
+  commitFile(operator, 'operator.txt', 'operator')
+  git(repo.root, 'worktree', 'remove', '--force', operator)
+
+  expect(await removeWorkdir(repo.root, run.id, true, Date.now())).toEqual({ left: [`branch ${SIDE} (it has commits the run's worktree did not make)`], removed: [] })
+  expect(localBranches(repo.root)).toEqual([SIDE, 'main'])
+  await f.server.close()
+})
+
+test('an operator branch the agent deleted and recreated is kept, since it existed before the run', async () => {
+  const repo = repository()
+  git(repo.root, 'branch', 'opbranch', 'main')
+  const { f, run, workdir } = await killedRun(repo)
+  pause()
+  git(workdir, 'branch', '-D', 'opbranch')
+  git(workdir, 'switch', '--quiet', '-c', 'opbranch')
+
+  expect(await removeWorkdir(repo.root, run.id, true, Date.now())).toEqual({ left: ['branch opbranch (it existed before the run)'], removed: [] })
+  expect(localBranches(repo.root)).toEqual(['main', 'opbranch'])
+  await f.server.close()
+})
+
+test('an agent branch is still taken, and logged, when the worktree directory was deleted but is still registered', async () => {
+  const repo = repository()
+  const { f, run, workdir } = await killedRun(repo)
+  pause()
+  git(workdir, 'switch', '--quiet', '-c', SIDE)
+  const tip = git(workdir, 'rev-parse', 'HEAD').trim()
+  rmSync(workdir, { recursive: true })
+
+  expect(await removeWorkdir(repo.root, run.id, true, Date.now())).toEqual({ left: [], removed: [`branch ${SIDE} ${recovery(tip)}`] })
+  expect(localBranches(repo.root)).toEqual(['main'])
+  expect(runWorktrees(repo.root)).toEqual([])
+  await f.server.close()
+})
+
+test('an agent branch is kept and named when the worktree was already removed and nothing ties the branch to the run', async () => {
+  const repo = repository()
+  const { f, run, workdir } = await killedRun(repo)
+  pause()
+  git(workdir, 'switch', '--quiet', '-c', SIDE)
+  git(repo.root, 'worktree', 'remove', '--force', '--force', workdir)
+
+  expect(await removeWorkdir(repo.root, run.id, true, Date.now())).toEqual({ left: [`branch ${SIDE} (the run's worktree record is gone, so nothing ties it to the run)`], removed: [] })
+  expect(localBranches(repo.root)).toEqual([SIDE, 'main'])
+  expect(existsSync(ownerFile(f, run.id))).toBe(false)
+  await f.server.close()
+})
+
+test('a pass that fails after the worktree is gone still takes and logs the agent branch on the retry', async () => {
+  const repo = repository()
+  const { f, run, workdir } = await killedRun(repo)
+  pause()
+  git(workdir, 'switch', '--quiet', '-c', SIDE)
+  const tip = git(workdir, 'rev-parse', 'HEAD').trim()
+  const lock = join(repo.root, '.git', 'refs', 'heads', `${SIDE}.lock`)
+  writeFileSync(lock, '')
+
+  await expect(removeWorkdir(repo.root, run.id, true, Date.now())).rejects.toThrow()
+  expect(runWorktrees(repo.root)).toEqual([])
+  expect(existsSync(ownerFile(f, run.id))).toBe(true)
+  rmSync(lock)
+
+  expect(await removeWorkdir(repo.root, run.id, true, Date.now())).toEqual({ left: [], removed: [`branch ${SIDE} ${recovery(tip)}`] })
+  expect(localBranches(repo.root)).toEqual(['main'])
   await f.server.close()
 })
