@@ -202,14 +202,15 @@ export function roundPrompt(issue: { title: string; description: string; url: st
 
 /**
  * An issue task's prompt as `roundPrompt` wrote it, split where its `Rework round N` section goes: the issue up to its URL,
- * and the fenced feedback after the section. A task queued for an agent that did not deliver has no section, so its head
- * ends with the URL's own paragraph and the section belongs right after it. The split reads the prompt from its end, never
- * from its start, since the issue's description is free text that can quote anything: the feedback block is the trailing
- * fence, found by its closing line, which no backtick run inside it can match. A name quoted in feedback an older build
- * saved can spell the opener, so openers are tried from the end until what precedes one ends with the URL's paragraph, or
- * with the section's line after a blank line. A prompt that ends in a fence carries feedback, so one with no attributable opener is left whole, and
- * only a prompt with no trailing fence is split without feedback. Only the section's line can follow the heading, since `reworkSection` checks that it
- * holds no blank line, and the URL itself never is that line.
+ * and the fenced feedback after the section. The split reads the prompt from its end, never from its start, since the
+ * issue's description is free text that can quote anything: the feedback block is the trailing fence, found by its closing
+ * line, which no backtick run inside it can match. A name quoted in feedback an older build saved can spell the opener, and
+ * can spell the URL before it, so every opener is tried. One that follows the section's line after the heading is the real
+ * one, and the nearest to the end wins. A task queued for an agent that did not deliver has no section, so its head ends
+ * with the URL's own paragraph and the section belongs right after it. Feedback comes after the real URL, so with no
+ * section the earliest such opener wins. A prompt that ends in a fence carries feedback, so one with no attributable
+ * opener is left whole. Only the section's line can follow the heading, since `reworkSection` checks that it holds no
+ * blank line, and the URL itself never is that line.
  */
 function issueParts(prompt: string, url: string, round: number): { issue: string; feedback: string } | null {
   const bar = /\n(`{3,})$/.exec(prompt)?.[1]
@@ -219,16 +220,20 @@ function issueParts(prompt: string, url: string, round: number): { issue: string
     const line = head.lastIndexOf('\n\n')
     if (line < 0) return null
     const feedback = start < 0 ? '' : prompt.slice(start + 2)
-    if (head.slice(line + 2) === url) return { issue: head, feedback }
-    return head.slice(0, line).endsWith(heading) ? { issue: head.slice(0, line - heading.length + url.length), feedback } : null
+    if (head.slice(line + 2) === url) return { issue: head, feedback, section: false }
+    return head.slice(0, line).endsWith(heading) ? { issue: head.slice(0, line - heading.length + url.length), feedback, section: true } : null
   }
-  if (bar === undefined) return split(-1)
-  const opener = `\n\n${FEEDBACK_FRAMING}\n\n${bar}text\n`
-  for (let start = prompt.lastIndexOf(opener); start >= 0; start = start === 0 ? -1 : prompt.lastIndexOf(opener, start - 1)) {
-    const parts = split(start)
-    if (parts) return parts
+  const found: NonNullable<ReturnType<typeof split>>[] = []
+  if (bar !== undefined) {
+    const opener = `\n\n${FEEDBACK_FRAMING}\n\n${bar}text\n`
+    for (let start = prompt.lastIndexOf(opener); start >= 0; start = start === 0 ? -1 : prompt.lastIndexOf(opener, start - 1)) {
+      const parts = split(start)
+      if (parts) found.push(parts)
+    }
   }
-  return null
+  const whole = bar === undefined ? split(-1) : null
+  if (whole) found.push(whole)
+  return found.find((parts) => parts.section) ?? found.at(-1) ?? null
 }
 
 /** A run's output as the prompt of a task its handoff creates: the summary, then a line per artifact. */

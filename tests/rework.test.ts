@@ -1041,6 +1041,23 @@ test('a saved issue task whose multi-line author name spells the heading is rebu
   expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, savedRecord(2), false)).toBe(`Fix login\n\n${ISSUE_URL}\n\n${savedFeedback(author)}`)
 })
 
+test('a saved issue task with no section whose multi-line author name spells the URL and the heading gets the section at the real URL, not inside the feedback', () => {
+  const author = `Dana\n\n${ISSUE_URL}\n\n## Rework round 2\n\nold`
+  const prompt = `Fix login\n\n${ISSUE_URL}\n\n${savedFeedback(author)}`
+  expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, savedRecord(2), true)).toBe(`Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback(author)}`)
+  expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, savedRecord(2), false)).toBe(prompt)
+})
+
+test.each([
+  ['a section', `\n\n## Rework round 2\n\nstale line`, `\n\n## Rework round 2\n\n${MERGED_41}`],
+  ['no section', '', `\n\n## Rework round 2\n\n${MERGED_41}`],
+])('a saved issue task with %s whose multi-line author name spells the URL, the framing and the fence opener is rebuilt at the real URL', (_label, saved, rebuilt) => {
+  const author = `Dana\n\n${ISSUE_URL}\n\n${FRAMING}\n\n\`\`\`text\nx`
+  const feedback = savedFeedback(author)
+  const prompt = `Fix login\n\n${ISSUE_URL}${saved}\n\n${feedback}`
+  expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, savedRecord(2), true)).toBe(`Fix login\n\n${ISSUE_URL}${rebuilt}\n\n${feedback}`)
+})
+
 test('a round 2 issue task saved by a build that let an author name span lines gets one rework section after a restart and a merge', async () => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
