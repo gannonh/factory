@@ -670,7 +670,12 @@ async function createdFrom(git: (...args: string[]) => Promise<string>, branch: 
  */
 async function heldByAnotherServer({ pid, started }: ServerProcess): Promise<boolean> {
   if (pid === process.pid) return false
-  try { process.kill(pid, 0) } catch (error) { if ((error as { code?: string }).code !== 'EPERM') return false }
+  try { process.kill(pid, 0) } catch (error) {
+    // Only ESRCH proves the server is gone. A pid the file should never hold, such as a fractional one, is not proof.
+    const code = (error as { code?: string }).code
+    if (code === 'ESRCH') return false
+    if (code !== 'EPERM') return true
+  }
   if (started === '') return true
   const now = await processStart(pid)
   return now === null || now === started

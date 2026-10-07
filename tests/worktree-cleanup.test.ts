@@ -463,6 +463,18 @@ test('a worktree whose owner server is still alive is left alone, and removed on
   await reused.close()
 })
 
+test('a worktree whose owner file holds a pid no process can have is left alone', async () => {
+  const repo = repository()
+  const { f, run } = await killedRun(repo)
+  const owner = readOwner(f, run.id)
+  writeFileSync(ownerFile(f, run.id), JSON.stringify({ ...owner, server: { pid: 1.5, started: 'Mon Jan  1 00:00:00 2001' } }))
+  const restarted = restart(repo.root)
+  await restarted.settled()
+  expect(runWorktrees(repo.root)).toEqual([workdirOf(f, run)])
+  expect(localBranches(repo.root)).toEqual([`factory-${run.id}`, 'main'])
+  await restarted.close()
+})
+
 test('a server restoring a world whose run another live server still works on leaves that run’s worktree and branch alone', async () => {
   const repo = repository()
   const store = memoryStore()
