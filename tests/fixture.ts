@@ -19,9 +19,10 @@ export const RNG = () => 0.5
 
 /**
  * Gives every test in the calling file 30 s instead of vitest's 5 s. A test that delivers over real git spawns about 170
- * `git` processes (measured on `a delivering handoff retry after its pull request merged`, 780 ms alone). A full parallel
- * run with 32 busy loops on 16 cores made the same tests take 3.6 to 4.9 s, so 5 s left no margin. 30 s is six times the
- * slowest measured time under that load. KAT-3702.
+ * `git` processes (measured on `a delivering handoff retry after its pull request merged`, 780 ms alone). The work is
+ * spawn-bound, so it stretches with CPU contention: a full parallel run beside 32 busy loops on 16 cores took these tests
+ * 3.6 to 4.9 s, and beside 64 busy loops (load average 70) up to 7.9 s. 5 s left no margin and 30 s keeps about 4x over
+ * the worst measured case. KAT-3702.
  */
 export const allowRealGitTime = () => vi.setConfig({ testTimeout: 30_000 })
 export const sb = (id: string) => id as SandboxId
