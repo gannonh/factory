@@ -54,7 +54,7 @@ import {
   type WriteStatus,
 } from '../src/domain/types'
 import type { WorldStore } from './worldFile'
-import { ClaudeRunner, SimulatedRunner, deliver, gitArtifacts, prepareWorkdir, reconcileWorkdirs, removeWorkdir, runBranchToRemove, withoutRemovedBranch, type Delivery, type DeliveryRequest, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
+import { ClaudeRunner, SimulatedRunner, deliver, gitArtifacts, prepareWorkdir, reconcileWorkdirs, removeWorkdir, withoutBranches, type Delivery, type DeliveryRequest, type PreparedWorkdir, type Runner, type RunnerEvent } from './runners'
 import type { RunLogStore } from './runLogs'
 import { array, boolean, defaulted, id, number, object, oneOf, record } from './parse'
 import { agent, edge, event, group, intakeRecord, run, sandbox, task, trigger } from './records'
@@ -1196,7 +1196,7 @@ export class MockServer {
         return []
       }
     }
-    let artifacts: RunOutput['artifacts'] = prepared && !delivering ? await withoutRemovedBranch(await listCommits(prepared), new Set(await runBranchToRemove(prepared.root, prepared.path)), prepared.path, prepared.initialHead) : []
+    let artifacts: RunOutput['artifacts'] = prepared && !delivering ? withoutBranches(await listCommits(prepared)) : []
     if (this.world.runs[run.id]?.status !== 'running') return
     if (delivering) {
       const task = this.world.tasks[run.taskId]

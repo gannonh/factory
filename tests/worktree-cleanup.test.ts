@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test } from 'vitest'
-import { removeWorkdir, withoutRemovedBranch } from '../server/runners'
+import { removeWorkdir } from '../server/runners'
 import { MockServer } from '../server/simulation'
 import type { RunId } from '../src/domain/types'
 import { memoryStore, RNG } from './fixture'
@@ -126,7 +126,7 @@ test('a handoff after a run with delivery off names no branch and says its commi
   addReviewer(f, 'none')
   const { run, prompt } = await handoffPrompt(f)
 
-  expect(prompt).toBe(`Implemented Add change.\ncommit: ${ranOf(run).short} change for Add change (attempt 1)\nnote: These commits are on no branch: Factory removed the run's branch when it ended. Read one by its SHA with \`git show <sha>\`; git may already have pruned it, and then the summary is all there is.`)
+  expect(prompt).toBe(`Implemented Add change.\ncommit: ${ranOf(run).short} change for Add change (attempt 1)\nnote: ${REMOVED_BRANCH_NOTE}`)
   expect(namedRefs(repo.root, prompt)).toEqual({ branches: [], commits: [[ranOf(run).short, true]] })
   expect(localBranches(repo.root)).toEqual(['main'])
   await f.server.close()
@@ -146,132 +146,22 @@ test('after git gc prunes the run’s commits, the handoff prompt still claims o
   await f.server.close()
 })
 
-test('a branch that existed before the run stays in the handoff prompt, with no note that the commits are on no branch', async () => {
+test('a delivery-off run that made a branch and pushed to origin, to another remote and by URL still lists its commits and no branch', async () => {
   const repo = repository()
-  git(repo.root, 'branch', 'agent-work', 'main')
-  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => { git(workdir, 'branch', '-f', 'agent-work', 'HEAD'); git(workdir, 'checkout', '-q', 'agent-work') }))
-  f.api.agents.update(CODER, { delivery: 'none' })
-  addReviewer(f, 'none')
-  const { run, prompt } = await handoffPrompt(f)
-
-  expect(prompt).toBe(`Implemented Add change.\nbranch: agent-work\ncommit: ${ranOf(run).short} change for Add change (attempt 1)`)
-  await f.server.close()
-})
-
-test('a handoff after a delivery-off run that pushed its branch to origin lists that branch and does not say the commits are on no branch', async () => {
-  const repo = repository()
-  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => { git(workdir, 'push', '-q', 'origin', `HEAD:refs/heads/${git(workdir, 'branch', '--show-current')}`) }))
-  f.api.agents.update(CODER, { delivery: 'none' })
-  addReviewer(f, 'none')
-  const { run, prompt } = await handoffPrompt(f)
-
-  expect(originBranches(repo.origin)).toEqual([`factory-${run.id}`, 'main'])
-  expect(prompt).toBe(`Implemented Add change.\nbranch: factory-${run.id}\ncommit: ${ranOf(run).short} change for Add change (attempt 1)`)
-  expect(localBranches(repo.root)).toEqual(['main'])
-  await f.server.close()
-})
-
-test('a delivery-off run that pushed its commits to origin under another name lists that branch', async () => {
-  const repo = repository()
-  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => { git(workdir, 'push', '-q', 'origin', 'HEAD:refs/heads/agent-pushed') }))
-  f.api.agents.update(CODER, { delivery: 'none' })
-  addReviewer(f, 'none')
-  const { run, prompt } = await handoffPrompt(f)
-
-  expect(prompt).toBe(`Implemented Add change.\nbranch: agent-pushed\ncommit: ${ranOf(run).short} change for Add change (attempt 1)`)
-  await f.server.close()
-})
-
-test('a delivery-off run that left a second local branch at its HEAD while checked out on the factory branch lists that branch', async () => {
-  const repo = repository()
-  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => { git(workdir, 'branch', 'backup') }))
-  f.api.agents.update(CODER, { delivery: 'none' })
-  addReviewer(f, 'none')
-  const { run, prompt } = await handoffPrompt(f)
-
-  expect(prompt).toBe(`Implemented Add change.\nbranch: backup\ncommit: ${ranOf(run).short} change for Add change (attempt 1)`)
-  expect(localBranches(repo.root)).toEqual(['backup', 'main'])
-  await f.server.close()
-})
-
-test('an origin branch that a local branch of the same name shadows is listed as origin/<name>', async () => {
-  const repo = repository()
-  git(repo.root, 'branch', 'backup', 'main')
-  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => { git(workdir, 'push', '-q', 'origin', 'HEAD:refs/heads/backup') }))
-  f.api.agents.update(CODER, { delivery: 'none' })
-  addReviewer(f, 'none')
-  const { run, prompt } = await handoffPrompt(f)
-
-  expect(prompt).toBe(`Implemented Add change.\nbranch: origin/backup\ncommit: ${ranOf(run).short} change for Add change (attempt 1)`)
-  await f.server.close()
-})
-
-test('an origin branch that a tag of the same name shadows is listed as origin/<name>', async () => {
-  const repo = repository()
-  git(repo.root, 'tag', 'backup', 'main')
-  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => { git(workdir, 'push', '-q', 'origin', 'HEAD:refs/heads/backup') }))
-  f.api.agents.update(CODER, { delivery: 'none' })
-  addReviewer(f, 'none')
-  const { run, prompt } = await handoffPrompt(f)
-
-  expect(prompt).toBe(`Implemented Add change.\nbranch: origin/backup\ncommit: ${ranOf(run).short} change for Add change (attempt 1)`)
-  await f.server.close()
-})
-
-test('a branch that holds only an earlier commit of the run is listed, and the commits are not said to be on no branch', async () => {
-  const repo = repository()
+  const other = tempDir()
+  git(other, 'init', '-q', '--bare')
   const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => {
-    git(workdir, 'push', '-q', 'origin', 'HEAD:refs/heads/early')
-    git(workdir, 'commit', '-q', '--allow-empty', '-m', 'later work')
-  }))
-  f.api.agents.update(CODER, { delivery: 'none' })
-  addReviewer(f, 'none')
-  const { prompt } = await handoffPrompt(f)
-
-  expect(prompt.split('\n').filter((line) => !line.startsWith('commit: '))).toEqual(['Implemented Add change.', 'branch: early'])
-  expect(prompt.split('\n').filter((line) => line.startsWith('commit: '))).toHaveLength(2)
-  await f.server.close()
-})
-
-test('a run branch that cleanup leaves behind because the agent relocked the worktree stays in the handoff prompt', async () => {
-  const repo = repository()
-  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => {
-    git(workdir, 'worktree', 'unlock', '.')
-    git(workdir, 'worktree', 'lock', '--reason', 'mine now', '.')
+    git(workdir, 'branch', 'backup')
+    git(workdir, 'push', '-q', 'origin', 'HEAD:refs/heads/agent-pushed')
+    git(workdir, 'push', '-q', other, 'HEAD:refs/heads/by-url')
   }))
   f.api.agents.update(CODER, { delivery: 'none' })
   addReviewer(f, 'none')
   const { run, prompt } = await handoffPrompt(f)
 
-  expect(prompt).toBe(`Implemented Add change.\nbranch: factory-${run.id}\ncommit: ${ranOf(run).short} change for Add change (attempt 1)`)
-  expect(localBranches(repo.root)).toEqual([`factory-${run.id}`, 'main'])
+  expect(prompt).toBe(`Implemented Add change.\ncommit: ${ranOf(run).short} change for Add change (attempt 1)\nnote: ${REMOVED_BRANCH_NOTE}`)
+  expect(namedRefs(repo.root, prompt)).toEqual({ branches: [], commits: [[ranOf(run).short, true]] })
   await f.server.close()
-})
-
-test('a branch that holds only an oldest commit the output omits past its cap is still listed', async () => {
-  const repo = repository()
-  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => {
-    git(workdir, 'push', '-q', 'origin', 'HEAD:refs/heads/early')
-    for (let n = 0; n < 21; n++) git(workdir, 'commit', '-q', '--allow-empty', '-m', `later ${n}`)
-  }))
-  f.api.agents.update(CODER, { delivery: 'none' })
-  addReviewer(f, 'none')
-  const { prompt } = await handoffPrompt(f)
-
-  expect(prompt.split('\n').filter((line) => !line.startsWith('commit: '))).toEqual(['Implemented Add change.', 'branch: early', 'note: Earlier commits omitted; showing 20 newest'])
-  await f.server.close()
-})
-
-test('a branch cleanup is about to remove is not listed, while the same branch pushed to origin is', async () => {
-  const repo = repository()
-  git(repo.root, 'switch', '-q', '-c', 'side')
-  git(repo.root, 'commit', '-q', '--allow-empty', '-m', 'side work')
-  const commit = { kind: 'commit' as const, label: `${git(repo.root, 'rev-parse', '--short', 'HEAD')} side work`, url: null }
-  const removing = new Set(['side'])
-
-  expect(await withoutRemovedBranch([commit], removing, repo.root, null)).toEqual([commit, { kind: 'note', label: REMOVED_BRANCH_NOTE, url: null }])
-  git(repo.root, 'push', '-q', 'origin', 'side')
-  expect(await withoutRemovedBranch([commit], removing, repo.root, null)).toEqual([{ kind: 'branch', label: 'side', url: null }, commit])
 })
 
 test('a run with delivery off and no commits hands off its summary alone', async () => {

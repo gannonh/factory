@@ -519,51 +519,19 @@ export async function gitArtifacts(
   return artifacts
 }
 
-const REMOVED_BRANCH_NOTE = 'These commits are on no branch: Factory removed the run\'s branch when it ended. Read one by its SHA with `git show <sha>`; git may already have pruned it, and then the summary is all there is.'
+const REMOVED_BRANCH_NOTE = 'These commits are not on a branch Factory keeps. If the agent pushed them, Factory does not know where. Read one by its SHA with `git show <sha>`; git may already have pruned it, and then the summary is all there is.'
 
 /**
- * A non-delivering run's artifacts as its output keeps them. `removing` names the local branches cleanup is about to take
- * (ADR 0009), and no listing may name them. Every other local branch and every origin remote-tracking branch (which a
- * push updates, at no network cost) that contains one of the run's commits is listed instead, so a pushed branch stays
- * listed after its local copy goes. With none, and no pull request, the commits only a SHA reaches carry a note saying
- * so. A pull request the agent opened itself means its branch is on origin.
+ * A non-delivering run's artifacts as its output keeps them: no branch, since Factory removes the run's branch with the
+ * worktree and cannot tell from the local refs which others hold the commits (ADR 0009). Commits carry one note instead.
  */
-export async function withoutRemovedBranch(artifacts: Artifact[], removing: ReadonlySet<string>, path: string, initialHead: string | null): Promise<Artifact[]> {
-  if (artifacts.some((a) => a.kind === 'pr')) return artifacts
-  const kept = artifacts.filter((a) => a.kind !== 'branch' || !removing.has(a.label))
-  if (!kept.some((a) => a.kind === 'commit')) return kept
-  const refs = (...args: string[]) => execFileAsync('git', ['-C', path, 'for-each-ref', '--format=%(refname)', ...args]).then(({ stdout }) => stdout.split('\n').filter(Boolean))
-  // A ref that holds any commit of the run reaches it, including the oldest ones the output omits past its cap.
-  const range = initialHead ? await execFileAsync('git', ['-C', path, 'rev-list', '--reverse', '--max-count=100000', `${initialHead}..HEAD`]).then(({ stdout }) => stdout.split('\n').filter(Boolean).slice(0, 500)).catch((): string[] => []) : []
-  const listed = [...new Set([...range, ...kept.flatMap((a) => a.kind === 'commit' ? [a.label.split(' ')[0]] : [])])].flatMap((sha) => ['--contains', sha])
-  const pushed = await Promise.all([refs(...listed, 'refs/heads/', 'refs/remotes/origin/'), refs('refs/heads/', 'refs/tags/')]).then(([holding, heads]) => {
-    const gone = new Set([...removing].map((name) => `refs/heads/${name}`))
-    const local = new Set(heads.filter((ref) => !gone.has(ref)))
-    // A local branch or tag of the same name wins git's name lookup, so an origin branch it shadows keeps its `origin/`.
-    const names = holding.flatMap((ref) => {
-      if (gone.has(ref) || ref === 'refs/remotes/origin/HEAD') return []
-      if (ref.startsWith('refs/heads/')) return [ref.slice('refs/heads/'.length)]
-      const name = ref.slice('refs/remotes/origin/'.length)
-      return [local.has(`refs/heads/${name}`) || local.has(`refs/tags/${name}`) ? `origin/${name}` : name]
-    })
-    return [...new Set(names)].slice(0, 3)
-  }).catch((): string[] => [])
-  if (pushed.length > 0) return [...pushed.map((name): Artifact => ({ kind: 'branch', label: name, url: null })), ...kept.filter((a) => a.kind !== 'branch' || !pushed.includes(a.label))]
-  if (kept.some((a) => a.kind === 'branch')) return kept
-  return [...kept, { kind: 'note', label: REMOVED_BRANCH_NOTE, url: null }]
+export function withoutBranches(artifacts: Artifact[]): Artifact[] {
+  const kept = artifacts.filter((a) => a.kind !== 'branch')
+  return kept.some((a) => a.kind === 'commit') ? [...kept, { kind: 'note', label: REMOVED_BRANCH_NOTE, url: null }] : kept
 }
 
 type JsonRecord = Record<string, unknown>
 const record = (value: unknown): value is JsonRecord => typeof value === 'object' && value !== null && !Array.isArray(value)
-
-/** The run's `factory-<run id>` branch when `removeWorkdir` will take it, which it does not once the agent relocked the worktree. */
-export async function runBranchToRemove(root: string, workdir: string): Promise<string[]> {
-  const owner = await readOwner(workdir)
-  if (!owner) return []
-  const rootPath = await realpath(root).catch(() => null)
-  const found = rootPath ? await registeredWorktrees(rootPath).then((listed) => listed.get(workdir), () => undefined) : undefined
-  return found && found.lock !== owner.token ? [] : [owner.branch]
-}
 
 /**
  * What `<workdir>.owner` records: the local branch Factory created with the worktree, the commit it was cut from, the

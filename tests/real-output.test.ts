@@ -328,7 +328,6 @@ test('shutdown waits for a successful result and its pending PR lookup', async (
     })).rejects.toThrow()
     await first.close()
     expect(first.snapshot().runs[run.id].output).toEqual({ summary: 'finished before shutdown', artifacts: [
-      { kind: 'branch', label: `factory-${run.id}`, url: null },
       { kind: 'pr', label: 'Pull request #42', url: 'https://github.com/example/factory/pull/42' },
     ] })
     const second = new MockServer(options)
@@ -371,7 +370,6 @@ test('operator actions cannot replace a successful result while PR lookup finish
     expect(() => server.deleteNodes([local])).toThrow('run is finishing')
     await until(() => server.snapshot().runs[run.id].status === 'succeeded')
     expect(server.snapshot().runs[run.id].output).toEqual({ summary: 'completed before operator action', artifacts: [
-      { kind: 'branch', label: `factory-${run.id}`, url: null },
       { kind: 'pr', label: 'Pull request #42', url: 'https://github.com/example/factory/pull/42' },
     ] })
     expect(Object.values(server.snapshot().tasks).some((task) => task.origin.kind === 'handoff' && task.input?.summary === 'completed before operator action')).toBe(true)
