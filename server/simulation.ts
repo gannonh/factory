@@ -265,15 +265,19 @@ export class MockServer {
    */
   private discardWorkdir(run: Run, root: string | undefined, report = true) {
     if (run.execution !== 'local' || !root) return
-    this.track((this.setups.get(run.id) ?? Promise.resolve()).then(() => this.dropWorkdir(run.id, root, report)))
+    const endedAt = Date.now()
+    this.track((this.setups.get(run.id) ?? Promise.resolve()).then(() => this.dropWorkdir(run.id, root, report, endedAt)))
   }
 
-  /** `report` is off for a run that reset removed from the world, which has no log to warn in. */
-  private async dropWorkdir(runId: RunId, root: string, report = true) {
+  /**
+   * `report` is off for a run that reset removed from the world, which has no log to warn in. `endedAt` is when the run
+   * ended, if the caller saw it end; otherwise the world's record of it, which a start-up sweep may not have.
+   */
+  private async dropWorkdir(runId: RunId, root: string, report = true, endedAt?: number) {
     const run = this.world.runs[runId]
     const where = run ? { runId, agentId: run.agentId } : {}
     try {
-      const { left, legacy } = await removeWorkdir(root, runId, run !== undefined && run.status !== 'running', run && run.status !== 'running' ? run.endedAt : null)
+      const { left, legacy } = await removeWorkdir(root, runId, run !== undefined && run.status !== 'running', endedAt ?? (run && run.status !== 'running' ? run.endedAt : null))
       if (!report) return
       for (const item of legacy) this.log('info', `removed ${item}`, where)
       if (left.length) this.log('warn', `left alone: ${left.join('; ')}`, where)

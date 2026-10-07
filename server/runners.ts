@@ -612,7 +612,7 @@ const NOTHING: Removal = { left: [], legacy: [] }
  * it is not locked, since Factory never locked those; its removal is returned, described with the branch's commit. A
  * run with no worktree, such as one in a plain directory, is left alone.
  *
- * Branches the agent made in the worktree go by the proof `judgeBranches` describes, judged once the worktree is gone,
+ * Branches the agent made in the worktree go by the proof `judgeBranches` describes, judged before the worktree goes,
  * with `endedAt` as the end of the run's window; without it nothing the agent made is taken. A branch the agent touched
  * and Factory could not prove its own is returned in `left`. `git branch -D` takes the branch's `branch.<name>.*` config
  * with it, which is what `git push -u` wrote.
@@ -652,11 +652,12 @@ export async function removeWorkdir(root: string, runId: RunId, ended: boolean, 
     const branchExists = (branch: string) => git('show-ref', '--verify', '--quiet', `refs/heads/${branch}`).then(() => true, () => false)
     if (owner) {
       let kept: Registered | null = null
+      // Judged while the worktree still has the HEAD reflog that shows which branches the agent switched to.
+      const agentMade = found?.lock === owner.token ? await judgeBranches(rootPath, id, owner, endedAt, workdir) : { owned: [], left: [] }
       if (found) {
         if (found.lock === owner.token) await removeWorktree()
         else { kept = found; left.push(`worktree ${workdir} (its lock reason is not this run's mark)`) }
       }
-      const agentMade = await judgeBranches(rootPath, id, owner, endedAt)
       if (await branchExists(owner.branch)) {
         if (kept?.branch === owner.branch) left.push(`branch ${owner.branch} (checked out there)`)
         else if (await createdFrom(git, owner.branch) === owner.initialHead) await git('branch', '-D', owner.branch)
@@ -685,29 +686,27 @@ export async function removeWorkdir(root: string, runId: RunId, ended: boolean, 
 /**
  * The branches other than the run's own that the agent made in its worktree, judged against the proof ADR 0009 sets out.
  * A branch is `owned` when the first entry of its reflog says `branch: Created from <commit>`, was written after the
- * owner file was created and no later than `endedAt`, names a commit reachable from the run's branch, and no worktree other than the
- * run's has the branch checked out. A branch with any reflog entry written in that window that fails the proof is `left`,
- * described: it may have existed before the run, or belong to another run. Branches the run never touched are not
- * listed, and neither is a branch with no reflog, which cannot be tied to any run. With no `endedAt`, or while another
- * run's owner file is in the root, no branch is owned, since a branch made in the same window could be that run's.
- * `ownWorktree` is the run's worktree while it is still registered, which does not count as another checkout.
+ * owner file was created and no later than `endedAt`, names a commit reachable from the run's branch, the HEAD reflog
+ * of `ownWorktree` records a switch to it, and no other worktree has it checked out. A branch with a reflog entry
+ * written after the owner file that fails the proof is `left`, described: it may have existed before the run, or been
+ * made by someone else in the root. A branch the run never touched is not listed, and neither is a branch with no
+ * reflog, which cannot be tied to any run. With no `endedAt` no branch is owned.
+ * `ownWorktree` is the run's worktree, still registered, which does not count as another checkout.
  */
-async function judgeBranches(rootPath: string, id: string, owner: Owner, endedAt: number | null, ownWorktree: string | null = null): Promise<{ owned: string[]; left: string[] }> {
+async function judgeBranches(rootPath: string, id: string, owner: Owner, endedAt: number | null, ownWorktree: string): Promise<{ owned: string[]; left: string[] }> {
   const git = async (...args: string[]) => (await execFileAsync('git', ['-C', rootPath, ...args], { timeout: LOCAL_TIMEOUT_MS })).stdout
   const runs = join(rootPath, '.factory-runs')
   const started = await stat(ownerFile(join(runs, id))).then((info) => Math.floor(info.mtimeMs / 1000), () => null)
   if (started === null) return { owned: [], left: [] }
-  const others = new Set<string>()
-  for (const name of await readdir(runs).catch(() => [])) {
-    const other = name.endsWith('.owner') && name !== `${id}.owner` ? await readOwner(join(runs, name.slice(0, -'.owner'.length))) : null
-    if (other) others.add(other.branch)
-  }
+  // Only the run's own worktree has this HEAD reflog, so a branch made by anyone else in the root is never in it.
+  const entered = new Set((await execFileAsync('git', ['-C', ownWorktree, 'reflog', 'show', 'HEAD', '--format=%gs'], { timeout: LOCAL_TIMEOUT_MS }).then(({ stdout }) => stdout, () => '')).split('\n')
+    .map((message) => /^checkout: moving from \S+ to (\S+)$/.exec(message)?.[1]).filter((name) => name !== undefined))
   const checkedOut = new Set([...await registeredWorktrees(rootPath)].filter(([path]) => path !== ownWorktree).map(([, found]) => found.branch))
   const end = endedAt === null ? null : Math.floor(endedAt / 1000)
   const owned: string[] = []
   const left: string[] = []
   for (const branch of (await git('for-each-ref', '--format=%(refname:short)', 'refs/heads/')).split('\n').filter(Boolean)) {
-    if (branch === owner.branch || others.has(branch)) continue
+    if (branch === owner.branch) continue
     // Oldest entry last. `%gd` with a unix date reads `<ref>@{<seconds>}`, the time the entry was written.
     const entries = (await git('reflog', 'show', '--date=unix', '--format=%gd%x09%H%x09%gs', `refs/heads/${branch}`, '--').catch(() => '')).trimEnd().split('\n').filter(Boolean)
       .map((line) => { const [when = '', commit = '', message = ''] = line.split('\t'); return { at: Number(/@\{(\d+)\}$/.exec(when)?.[1]), commit, message } })
@@ -718,7 +717,7 @@ async function judgeBranches(rootPath: string, id: string, owner: Owner, endedAt
       if (!(first.at > started)) return 'it existed before the run'
       if (!first.message.startsWith('branch: Created from ')) return 'its reflog does not begin with its creation'
       if (end === null || first.at > end) return 'its creation is not shown to be inside the run'
-      if (others.size > 0) return 'another run was working in this root'
+      if (!entered.has(branch)) return 'the run never switched to it'
       if (checkedOut.has(branch)) return 'checked out in another worktree'
       const reachable = await git('merge-base', '--is-ancestor', first.commit, `refs/heads/${owner.branch}`).then(() => true, () => false)
       return reachable ? null : `it was not made from the run's branch ${owner.branch}`

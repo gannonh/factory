@@ -653,15 +653,28 @@ test('with no end time for the run, an agent’s branch stays and is described',
   await f.server.close()
 })
 
-test('a branch made while another run’s owner file is in the root stays, and the other run’s own branch is not mentioned', async () => {
+test('a branch someone else made in the root while the run was going stays and is described, though it starts at a commit of the run’s branch', async () => {
   const repo = repository()
-  const { f, run, workdir } = await killedRun(repo)
-  writeFileSync(`${join(repo.root, '.factory-runs', 'other-run')}.owner`, JSON.stringify({ ...readOwner(f, run.id), branch: 'factory-other-run' }))
+  const { f, run } = await killedRun(repo)
   pause()
-  git(workdir, 'switch', '--quiet', '-c', SIDE)
-  git(repo.root, 'branch', 'factory-other-run')
+  git(repo.root, 'branch', 'operator-branch', 'main')
 
-  expect(await removeWorkdir(repo.root, run.id, true, Date.now())).toEqual({ left: [`branch ${SIDE} (another run was working in this root)`], legacy: [] })
-  expect(localBranches(repo.root)).toEqual([SIDE, 'factory-other-run', 'main'])
+  expect(await removeWorkdir(repo.root, run.id, true, Date.now())).toEqual({ left: ['branch operator-branch (the run never switched to it)'], legacy: [] })
+  expect(localBranches(repo.root)).toEqual(['main', 'operator-branch'])
+  await f.server.close()
+})
+
+test('a run reset away while it works still has the branches its agent made removed', async () => {
+  const repo = repository()
+  const runner = { ...agentRunner(), start({ workdir }: { workdir: string }) { pause(); git(workdir, 'switch', '--quiet', '-c', SIDE) } }
+  const f = factory(repo.root, runner)
+  enqueue(f)
+  f.api.sim.advance(1)
+  await until(() => runWorktrees(repo.root).length === 1 && localBranches(repo.root).includes(SIDE))
+  f.api.sim.reset()
+  await f.api.sim.settled()
+
+  expect(localBranches(repo.root)).toEqual(['main'])
+  expect(runWorktrees(repo.root)).toEqual([])
   await f.server.close()
 })
