@@ -519,7 +519,7 @@ export async function gitArtifacts(
   return artifacts
 }
 
-const REMOVED_BRANCH_NOTE = 'These commits are not on a branch Factory keeps. If the agent pushed them, Factory does not know where. Read one by its SHA with `git show <sha>`; git may already have pruned it, and then the summary is all there is.'
+const REMOVED_BRANCH_NOTE = 'These commits are not on a branch Factory made for this run. If the agent merged or pushed them elsewhere, Factory does not know where; `git branch -a --contains <sha>` shows it. Read one with `git show <sha>`. If no branch holds it, git may already have pruned it, and then the summary is all there is.'
 
 /**
  * A non-delivering run's artifacts as its output keeps them: no branch, since Factory removes the run's branch with the

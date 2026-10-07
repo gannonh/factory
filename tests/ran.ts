@@ -23,4 +23,4 @@ export function ranOf(run: { id: string }): Ran {
 }
 
 /** The note a non-delivering run's output carries for its commits, which Factory keeps on no branch (ADR 0009). */
-export const REMOVED_BRANCH_NOTE = 'These commits are not on a branch Factory keeps. If the agent pushed them, Factory does not know where. Read one by its SHA with `git show <sha>`; git may already have pruned it, and then the summary is all there is.'
+export const REMOVED_BRANCH_NOTE = 'These commits are not on a branch Factory made for this run. If the agent merged or pushed them elsewhere, Factory does not know where; `git branch -a --contains <sha>` shows it. Read one with `git show <sha>`. If no branch holds it, git may already have pruned it, and then the summary is all there is.'
