@@ -770,6 +770,7 @@ test.each([
   ['a Hangul filler', 'eng-1-fix-login\u3164', 'eng-1-fix-login\\u{3164}'],
   ['a combining grapheme joiner', 'eng-1-fix-login\u034F', 'eng-1-fix-login\\u{34f}'],
   ['a text-style variation selector', 'eng-1-fix-\u2764\uFE0E-login', 'eng-1-fix-\u2764\\u{fe0e}-login'],
+  ['a Braille blank', 'eng-1-fix-login\u2800', 'eng-1-fix-login\\u{2800}'],
 ])('a poll waits for the next poll while the open pull request\u2019s head branch has %s', async (_name, head, escaped) => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
@@ -867,8 +868,10 @@ test.each([
   ['head', 'a Hangul choseong filler', 'eng-1-fix-login\u115F', 'main', 'eng-1-fix-login\\u{115f}'],
   ['head', 'a Hangul jungseong filler', 'eng-1-fix-login\u1160', 'main', 'eng-1-fix-login\\u{1160}'],
   ['head', 'a combining grapheme joiner', 'eng-1-fix-login\u034F', 'main', 'eng-1-fix-login\\u{34f}'],
+  ['head', 'a Braille blank', 'eng-1-fix-login\u2800', 'main', 'eng-1-fix-login\\u{2800}'],
   ['base', 'a zero-width space', 'eng-1-fix-login', 'main\u200B', 'main\\u{200b}'],
   ['base', 'a variation selector', 'eng-1-fix-login', 'main\u{E0100}', 'main\\u{e0100}'],
+  ['base', 'a Braille blank', 'eng-1-fix-login', 'main\u2800', 'main\\u{2800}'],
 ] as const)('an open pull request whose %s branch has %s fails the run, and no log shows the raw name', async (which, _label, head, base, escaped) => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
@@ -880,7 +883,7 @@ test.each([
   expect(failed).toMatchObject({ status: 'failed', attempt: 1, error: reason })
   const logs = f.server.snapshot().logs.map((l) => l.msg)
   expect(logs).toContain(`run failed (${reason}); retrying attempt 2/2 in 0s`)
-  expect(logs.filter((m) => /[\u202E\u2028\u200B\u{E0049}\uFE00\uFE0E\u{E0100}\u{E01EF}\u3164\uFFA0\u115F\u1160\u034F]/u.test(m))).toEqual([])
+  expect(logs.filter((m) => /[\u202E\u2028\u200B\u{E0049}\uFE00\uFE0E\u{E0100}\u{E01EF}\u3164\uFFA0\u115F\u1160\u034F\u2800]/u.test(m))).toEqual([])
   expect(record(f).rework).toMatchObject({ kind: 'continue', branch: 'eng-1-fix-login', base: 'main' })
   await f.server.close()
 })
@@ -888,7 +891,8 @@ test.each([
 test.each([
   ['a zero-width joiner', 'eng-1-\u{1F468}\u200D\u{1F4BB}-login'],
   ['a variation selector 16', 'eng-1-\u2764\uFE0F-login'],
-])('an open pull request on an emoji branch with %s continues on it', async (_label, emoji) => {
+  ['a Braille pattern', 'eng-1-\u2803-login'],
+])('an open pull request on a branch with %s continues on it', async (_label, emoji) => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login' })
   const f = factory(repo.root, agentRunner())
