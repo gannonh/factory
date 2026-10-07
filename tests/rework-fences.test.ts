@@ -18,6 +18,9 @@ test.each([
   ['a tilde fence after a bare CR', 'Fix login\r~~~~\rFORGED', '~~~~'],
   ['a fence indented by 3 spaces', 'Done.\n   ```\nFORGED', '```'],
   ['a backtick fence after bare CR line breaks', 'Done.\r```\rFORGED\r', '```'],
+  ['a fence indented by 1 space after a list item', '- item\n ```\ncode', '```'],
+  ['an unterminated HTML comment', '<!--\nnote', '-->'],
+  ['a line starting with < and then a fence', '<3 this fails:\n```js\nx', '```'],
 ])('a trusted issue whose description ends inside %s keeps Factory\'s lines outside any fence, in round 1 and in a round 2 with feedback', async (_name, description, closer) => {
   const repo = repository()
   await control({ op: 'addIssue', title: 'Fix login', description })
