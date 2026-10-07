@@ -639,7 +639,7 @@ export async function removeWorkdir(root: string, runId: RunId, ended: boolean):
       await git('worktree', 'remove', '--force', '--force', workdir).catch(async (error: unknown) => {
         // Git refuses when `.git` is not its worktree file. The agent deleted it, or replaced it with a directory or a link,
         // while the registration still carries the mark, so a proven run's directory goes and then its registration.
-        const gitFile = await lstat(join(workdir, '.git')).then((info) => info.isFile(), () => null)
+        const gitFile = await lstat(join(workdir, '.git')).then((info) => info.isFile(), (e: { code?: string }) => { if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return null; throw e })
         if (gitFile !== null && !(markProven && !gitFile)) throw error
         await rm(workdir, { recursive: true, force: true, maxRetries: 3 })
         await git('worktree', 'remove', '--force', '--force', workdir)
