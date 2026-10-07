@@ -171,7 +171,7 @@ test('a real result and git artifacts reach handoff; real logs survive restart',
   const upstream = Object.values(first.snapshot().runs).find((run) => run.taskId === taskId)!
   const inputTask = Object.values(first.snapshot().tasks).find((task) => task.origin.kind === 'handoff')!
   expect(upstream.output?.summary).toBe('agent final result\nsecond line')
-  expect(upstream.output?.artifacts.map((artifact) => artifact.kind)).toEqual(['branch', 'commit'])
+  expect(upstream.output?.artifacts.map((artifact) => artifact.kind)).toEqual(['commit', 'note'])
   expect(inputTask.input).toEqual({ ...upstream.output, runId: upstream.id })
   first.advance(1)
   await until(() => Object.values(first.snapshot().runs).some((run) => run.taskId === inputTask.id && run.status === 'succeeded'))

@@ -519,6 +519,20 @@ export async function gitArtifacts(
   return artifacts
 }
 
+const REMOVED_BRANCH_NOTE = 'These commits are on no branch: Factory removed the run\'s branch when it ended. Read one by its SHA with `git show <sha>`; git may already have pruned it, and then the summary is all there is.'
+
+/**
+ * A non-delivering run's artifacts as its output keeps them. Factory removes the run's `factory-<run id>` branch when the
+ * run ends (ADR 0009), so the branch is dropped and the commits, which only a SHA reaches, say so. A pull request the
+ * agent opened itself means its branch is on origin, so those artifacts stay as listed.
+ */
+export function withoutRemovedBranch(artifacts: Artifact[]): Artifact[] {
+  if (artifacts.some((a) => a.kind === 'pr')) return artifacts
+  const kept = artifacts.filter((a) => a.kind !== 'branch')
+  if (!kept.some((a) => a.kind === 'commit')) return kept
+  return [...kept, { kind: 'note', label: REMOVED_BRANCH_NOTE, url: null }]
+}
+
 type JsonRecord = Record<string, unknown>
 const record = (value: unknown): value is JsonRecord => typeof value === 'object' && value !== null && !Array.isArray(value)
 

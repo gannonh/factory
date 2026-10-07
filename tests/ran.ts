@@ -21,3 +21,6 @@ export function ranOf(run: { id: string }): Ran {
   if (!ran) throw new Error(`no agent finished in run ${run.id}`)
   return ran
 }
+
+/** The note a non-delivering run's output carries for its commits, which sit on no branch once Factory removes the run's (ADR 0009). */
+export const REMOVED_BRANCH_NOTE = 'These commits are on no branch: Factory removed the run\'s branch when it ended. Read one by its SHA with `git show <sha>`; git may already have pruned it, and then the summary is all there is.'

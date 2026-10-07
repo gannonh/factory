@@ -19,7 +19,7 @@ import { createHistory } from '../src/history'
 import type { AgentId, EdgeId, IssueId, Run, RunId, SandboxId, TriggerId } from '../src/domain/types'
 import { fakeGh } from './fake-gh'
 import { allowRealGitTime, makeFixture, RNG } from './fixture'
-import { ranOf, recordRan } from './ran'
+import { REMOVED_BRANCH_NOTE, ranOf, recordRan } from './ran'
 
 allowRealGitTime()
 
@@ -201,8 +201,8 @@ test('with delivery off, a run branches from the local HEAD and pushes nothing',
   expect(run.status).toBe('succeeded')
   expect(ranOf(run).parent).toBe(localHead)
   expect(run.output).toEqual({ summary: 'Implemented Add change.', artifacts: [
-    { kind: 'branch', label: `factory-${run.id}`, url: null },
     { kind: 'commit', label: `${ranOf(run).short} change for Add change (attempt 1)`, url: null },
+    { kind: 'note', label: REMOVED_BRANCH_NOTE, url: null },
   ] })
   expect(remoteBranches(repo.origin)).toEqual(['main'])
   expect(gh.calls()).toEqual([])
