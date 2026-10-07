@@ -233,6 +233,35 @@ test('a branch that holds only an earlier commit of the run is listed, and the c
   await f.server.close()
 })
 
+test('a run branch that cleanup leaves behind because the agent relocked the worktree stays in the handoff prompt', async () => {
+  const repo = repository()
+  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => {
+    git(workdir, 'worktree', 'unlock', '.')
+    git(workdir, 'worktree', 'lock', '--reason', 'mine now', '.')
+  }))
+  f.api.agents.update(CODER, { delivery: 'none' })
+  addReviewer(f, 'none')
+  const { run, prompt } = await handoffPrompt(f)
+
+  expect(prompt).toBe(`Implemented Add change.\nbranch: factory-${run.id}\ncommit: ${ranOf(run).short} change for Add change (attempt 1)`)
+  expect(localBranches(repo.root)).toEqual([`factory-${run.id}`, 'main'])
+  await f.server.close()
+})
+
+test('a branch that holds only an oldest commit the output omits past its cap is still listed', async () => {
+  const repo = repository()
+  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => {
+    git(workdir, 'push', '-q', 'origin', 'HEAD:refs/heads/early')
+    for (let n = 0; n < 21; n++) git(workdir, 'commit', '-q', '--allow-empty', '-m', `later ${n}`)
+  }))
+  f.api.agents.update(CODER, { delivery: 'none' })
+  addReviewer(f, 'none')
+  const { prompt } = await handoffPrompt(f)
+
+  expect(prompt.split('\n').filter((line) => !line.startsWith('commit: '))).toEqual(['Implemented Add change.', 'branch: early', 'note: Earlier commits omitted; showing 20 newest'])
+  await f.server.close()
+})
+
 test('a branch cleanup is about to remove is not listed, while the same branch pushed to origin is', async () => {
   const repo = repository()
   git(repo.root, 'switch', '-q', '-c', 'side')
@@ -240,9 +269,9 @@ test('a branch cleanup is about to remove is not listed, while the same branch p
   const commit = { kind: 'commit' as const, label: `${git(repo.root, 'rev-parse', '--short', 'HEAD')} side work`, url: null }
   const removing = new Set(['side'])
 
-  expect(await withoutRemovedBranch([commit], 'run-x' as RunId, repo.root, removing)).toEqual([commit, { kind: 'note', label: REMOVED_BRANCH_NOTE, url: null }])
+  expect(await withoutRemovedBranch([commit], removing, repo.root, null)).toEqual([commit, { kind: 'note', label: REMOVED_BRANCH_NOTE, url: null }])
   git(repo.root, 'push', '-q', 'origin', 'side')
-  expect(await withoutRemovedBranch([commit], 'run-x' as RunId, repo.root, removing)).toEqual([{ kind: 'branch', label: 'side', url: null }, commit])
+  expect(await withoutRemovedBranch([commit], removing, repo.root, null)).toEqual([{ kind: 'branch', label: 'side', url: null }, commit])
 })
 
 test('a run with delivery off and no commits hands off its summary alone', async () => {
