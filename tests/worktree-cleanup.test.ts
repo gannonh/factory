@@ -193,6 +193,18 @@ test('a delivery-off run that left a second local branch at its HEAD while check
   await f.server.close()
 })
 
+test('an origin branch that a local branch of the same name shadows is listed as origin/<name>', async () => {
+  const repo = repository()
+  git(repo.root, 'branch', 'backup', 'main')
+  const f = factory(repo.root, agentRunner(undefined, undefined, (_task, workdir) => { git(workdir, 'push', '-q', 'origin', 'HEAD:refs/heads/backup') }))
+  f.api.agents.update(CODER, { delivery: 'none' })
+  addReviewer(f, 'none')
+  const { run, prompt } = await handoffPrompt(f)
+
+  expect(prompt).toBe(`Implemented Add change.\nbranch: origin/backup\ncommit: ${ranOf(run).short} change for Add change (attempt 1)`)
+  await f.server.close()
+})
+
 test('a run with delivery off and no commits hands off its summary alone', async () => {
   const repo = repository()
   const base = agentRunner()

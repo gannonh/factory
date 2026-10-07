@@ -532,11 +532,18 @@ export async function withoutRemovedBranch(artifacts: Artifact[], runId: RunId, 
   if (artifacts.some((a) => a.kind === 'pr')) return artifacts
   const kept = artifacts.filter((a) => a.kind !== 'branch' || a.label !== `factory-${runId}`)
   if (!kept.some((a) => a.kind === 'commit')) return kept
-  const pushed = await execFileAsync('git', ['-C', path, 'for-each-ref', '--contains', 'HEAD', '--format=%(refname)', 'refs/heads/', 'refs/remotes/origin/'])
-    .then(({ stdout }) => [...new Set(stdout.split('\n').flatMap((ref) => {
-      const name = ref.replace(/^refs\/(?:heads|remotes\/origin)\//, '')
-      return !name || name === 'HEAD' || ref === `refs/heads/factory-${runId}` ? [] : [name]
-    }))].slice(0, 3)).catch((): string[] => [])
+  const refs = (...args: string[]) => execFileAsync('git', ['-C', path, 'for-each-ref', '--format=%(refname)', ...args]).then(({ stdout }) => stdout.split('\n').filter(Boolean))
+  const pushed = await Promise.all([refs('--contains', 'HEAD', 'refs/heads/', 'refs/remotes/origin/'), refs('refs/heads/')]).then(([holding, heads]) => {
+    const local = new Set(heads.filter((ref) => ref !== `refs/heads/factory-${runId}`))
+    // A local branch of the same name wins git's name lookup, so an origin branch it shadows keeps its `origin/`.
+    const names = holding.flatMap((ref) => {
+      if (ref === `refs/heads/factory-${runId}` || ref === 'refs/remotes/origin/HEAD') return []
+      if (ref.startsWith('refs/heads/')) return [ref.slice('refs/heads/'.length)]
+      const name = ref.slice('refs/remotes/origin/'.length)
+      return [local.has(`refs/heads/${name}`) ? `origin/${name}` : name]
+    })
+    return [...new Set(names)].slice(0, 3)
+  }).catch((): string[] => [])
   if (pushed.length > 0) return [...pushed.map((name): Artifact => ({ kind: 'branch', label: name, url: null })), ...kept.filter((a) => a.kind !== 'branch' || !pushed.includes(a.label))]
   if (kept.some((a) => a.kind === 'branch')) return kept
   return [...kept, { kind: 'note', label: REMOVED_BRANCH_NOTE, url: null }]
