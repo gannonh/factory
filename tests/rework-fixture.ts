@@ -17,7 +17,9 @@ import type { WorldStore } from '../server/worldFile'
 import type { AgentId, EdgeId, IntakeRecord, IssueId, LinearSettings, Run, SandboxId, Task, TriggerId } from '../src/domain/types'
 import { fakeGh } from './fake-gh'
 import { recordRan } from './ran'
-import { RNG } from './fixture'
+import { allowRealGitTime, RNG } from './fixture'
+
+allowRealGitTime()
 
 const roots: string[] = []
 export const tempDir = () => {

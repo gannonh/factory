@@ -7,6 +7,7 @@
  * time and succeed. `sim.advance` is the in-process clock and is not a network
  * command.
  */
+import { vi } from 'vitest'
 import { createApi, type InProcessApi } from '../server/api'
 import { MockServer } from '../server/simulation'
 import { SimulatedRunner } from '../server/runners'
@@ -15,6 +16,15 @@ import type { LinearClient } from '../server/linear'
 import type { AgentId, FactoryEvent, SandboxId, Task, TaskId, World } from '../src/domain/types'
 
 export const RNG = () => 0.5
+
+/**
+ * Gives every test in the calling file 30 s instead of vitest's 5 s. A test that delivers over real git spawns about 170
+ * `git` processes (measured on `a delivering handoff retry after its pull request merged`, 780 ms alone). The work is
+ * spawn-bound, so it stretches with CPU contention: a full parallel run beside 32 busy loops on 16 cores took these tests
+ * 3.6 to 4.9 s, and beside 64 busy loops (load average 70) up to 7.9 s. 5 s left no margin and 30 s keeps about 4x over
+ * the worst measured case. KAT-3702.
+ */
+export const allowRealGitTime = () => vi.setConfig({ testTimeout: 30_000 })
 export const sb = (id: string) => id as SandboxId
 
 export type MemoryStore = WorldStore & { text: string | null }
