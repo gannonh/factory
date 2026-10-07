@@ -207,14 +207,15 @@ async function defaultBranch(git: Git): Promise<string> {
  */
 async function dropPrivateRefs(git: Git): Promise<void> {
   const names = (await git('git for-each-ref', ['for-each-ref', '--format=%(refname)', 'refs/factory/'])).split('\n').filter(Boolean)
-  await Promise.all(names.map((name) => git('git update-ref', ['update-ref', '-d', name]).catch(() => undefined)))
+  for (const name of names) await git('git update-ref', ['update-ref', '-d', name]).catch(() => undefined)
 }
 
 /**
  * The commits at the tips of origin's `branches`, fetched into refs private to run `runId`, which are deleted again when
  * the fetch ends. A fetch never writes `refs/remotes/origin/*`, the refs a sibling's push to the same branch also writes, and
  * `--refmap=` stops git from updating them on the side. Nor does it write `FETCH_HEAD`, which the siblings share.
- * The tips come from the fetch's own `--porcelain` output (git 2.41 or later) and not from reading the refs back, so
+ * The tips come from the fetch's own `--porcelain --verbose` output (git 2.41 or later; without `--verbose` a ref that is
+ * already up to date has no row) and not from reading the refs back, so
  * another server deleting them cannot fail the run. A crashed or failed earlier call can leave refs behind. The delete
  * when a call ends, and the one before the next fetch, remove every `refs/factory/*` ref they can.
  */
@@ -222,7 +223,7 @@ async function fetchTips(git: Git, runId: string, branches: readonly string[]): 
   const refs = branches.map((_, i) => `refs/factory/${runId}/${i}`)
   await dropPrivateRefs(git).catch(() => undefined)
   try {
-    const porcelain = await git('git fetch', ['fetch', '--porcelain', '--no-tags', '--no-write-fetch-head', '--refmap=', 'origin', ...branches.map((branch, i) => `+refs/heads/${branch}:${refs[i]}`)], NETWORK_TIMEOUT_MS)
+    const porcelain = await git('git fetch', ['fetch', '--porcelain', '--verbose', '--no-tags', '--no-write-fetch-head', '--refmap=', 'origin', ...branches.map((branch, i) => `+refs/heads/${branch}:${refs[i]}`)], NETWORK_TIMEOUT_MS)
       .catch(async (error: unknown) => { throw await needsGit(git, error, 'reading fetched commits', 2, 41) })
     const tips = new Map<string, string>()
     for (const line of porcelain.split('\n')) {

@@ -86,3 +86,23 @@ test('a second server\'s cleanup between the first one\'s fetch and its read doe
   expect(await slow).toBe('prepared')
   expect(privateRefs(root)).toEqual([])
 })
+
+test('packed stale refs are all deleted', async () => {
+  const s = await server()
+  const { root } = repository()
+  const tip = git(root, 'rev-parse', 'HEAD')
+  for (let n = 0; n < 12; n++) git(root, 'update-ref', `refs/factory/crashed/${n}`, tip)
+  git(root, 'pack-refs', '--all')
+  await s.prepareWorkdir(root, 'fresh' as RunId, { kind: 'continue', pr, branch: 'feature-0', base: 'main' })
+  expect(privateRefs(root)).toEqual([])
+})
+
+test('a run whose private ref already holds origin\'s tip and could not be deleted still gets its tip', async () => {
+  const s = await server()
+  const { root } = repository()
+  const tip = git(root, 'rev-parse', 'HEAD')
+  git(root, 'update-ref', 'refs/factory/fresh/0', tip)
+  writeFileSync(join(root, '.git', 'refs', 'factory', 'fresh', '0.lock'), '')
+  const prepared = await s.prepareWorkdir(root, 'fresh' as RunId, { kind: 'continue', pr, branch: 'feature-0', base: 'main' })
+  expect(prepared.initialHead).toBe(tip)
+})
