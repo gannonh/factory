@@ -1040,6 +1040,14 @@ test('a round 2 issue task saved by a build that let an author name span lines g
   await server.close()
 })
 
+test('a saved issue task with no section whose quoted author name spells the heading is returned whole', () => {
+  const author = `Dana\n\n${ISSUE_URL}\n\n## Rework round 2\n\nold`
+  const prompt = `Fix login\n\n${ISSUE_URL}\n\n${savedFeedback(author)}`
+  expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, savedRecord(2), false)).toBe(prompt)
+  const bare = `Fix login\n\n${ISSUE_URL}\n\n${savedFeedback(`Dana\n\n${ISSUE_URL}`)}`
+  expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt: bare }, savedRecord(2), false)).toBe(bare)
+})
+
 const HANDOFF = { kind: 'handoff', from: 'ag-planner', runId: 'run-1' } as Task['origin']
 const upstream = { summary: 'Planned the fix.', artifacts: [{ kind: 'note' as const, label: 'plan', url: null }], runId: 'run-1' as Run['id'] }
 
@@ -1093,4 +1101,32 @@ test.each([
   ['bare CR line breaks', 'A\r```\rB\r```\rC', ['A', '```', 'C']],
 ])('the fence oracle finds the lines outside fences for %s', (_name, text, outside) => {
   expect(linesOutsideFences(text)).toEqual(outside)
+})
+
+test('a round 2 issue task saved before the author name was one line, whose name spells the framing and fence opener, gets one rework section after a restart and a merge', async () => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const store = memoryStore()
+  const f = factory(repo.root, agentRunner(), LIFECYCLE, store)
+  await poll(f)
+  await nextRun(f)
+  await control({ op: 'addComment', identifier: 'ENG-1', author: 'Dana', body: 'Also log the failed attempt.' })
+  await moveIssue('ENG-1', 'Todo')
+  await poll(f)
+  const taskId = issueTasks(f)[1].id
+  await f.server.close()
+
+  const author = `Dana\n\n${FRAMING}\n\n\`\`\`text\nx`
+  const world = JSON.parse(store.text!) as { tasks: Record<string, Task> }
+  world.tasks[taskId].prompt = `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${CONTINUE_41}\n\n${savedFeedback(author)}`
+  store.text = JSON.stringify(world)
+
+  gh.setState('eng-1-fix-login', 'MERGED')
+  const server = new MockServer({ manual: true, rng: RNG, localRunner: agentRunner(), localRoot: repo.root, linear: linear(), clock, store })
+  const g = { server, api: createApi(server), trigger: f.trigger, root: repo.root }
+  await nextRun(g)
+  const rebuilt = `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}\n\n${savedFeedback(author)}`
+  expect(seen.at(-1)?.prompt).toBe(rebuilt)
+  expect(server.snapshot().tasks[taskId].prompt).toBe(rebuilt)
+  await server.close()
 })
