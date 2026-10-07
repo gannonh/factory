@@ -1040,6 +1040,14 @@ test('a round 2 issue task saved by a build that let an author name span lines g
   await server.close()
 })
 
+test('a saved issue task with no section whose quoted author name spells the heading is returned whole', () => {
+  const author = `Dana\n\n${ISSUE_URL}\n\n## Rework round 2\n\nold`
+  const prompt = `Fix login\n\n${ISSUE_URL}\n\n${savedFeedback(author)}`
+  expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, savedRecord(2), false)).toBe(prompt)
+  const bare = `Fix login\n\n${ISSUE_URL}\n\n${savedFeedback(`Dana\n\n${ISSUE_URL}`)}`
+  expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt: bare }, savedRecord(2), false)).toBe(bare)
+})
+
 const HANDOFF = { kind: 'handoff', from: 'ag-planner', runId: 'run-1' } as Task['origin']
 const upstream = { summary: 'Planned the fix.', artifacts: [{ kind: 'note' as const, label: 'plan', url: null }], runId: 'run-1' as Run['id'] }
 
