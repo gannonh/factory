@@ -268,19 +268,19 @@ export function roundPrompt(issue: { title: string; description: string; url: st
 
 /**
  * An issue task's prompt as `roundPrompt` wrote it, split where its `Rework round N` section goes: the issue up to its URL,
- * and the fenced feedback after the section. The split reads the prompt from its end, never from its start, since the
- * issue's description is free text that can quote anything: the feedback block is the trailing fence, found by its closing
- * line, which no backtick run inside it can match. Text before the real opener (the description) and text after it (a name
- * an older build saved) can each spell a URL, the framing and a fence opener, so every opener is tried. One that follows
- * the section's line after the heading is the real one, and the nearest to the end wins. A task queued for an agent that
- * did not deliver has no section, so its head ends with the URL's own paragraph and the section belongs right after it.
- * Nothing tells two such openers apart, so then the prompt is left whole. A prompt that ends in a fence carries feedback, so
- * one with no attributable opener is left whole too. Only the section's line can follow the heading, since `reworkSection`
- * checks that it holds no blank line, and the URL itself never is that line.
+ * and the fenced feedback after the section. The issue's description is free text that can quote anything, so the split
+ * never reads the prompt from its start. The round's record keeps the feedback block that `roundPrompt` put last, so the
+ * block's start is known exactly, and what precedes it ends in the URL, or in the URL, the heading and the section's line,
+ * which `reworkSection` checks holds no blank line. Nothing a description or an author name spells can move that boundary.
+ * A prompt whose feedback the record does not hold is read from its end instead. It was saved before the record kept its
+ * feedback, or has none. One with no trailing fence has no feedback and splits the same way. One that ends in a fence carries
+ * feedback of unknown extent, so every opener is tried: text before the real opener (the description) and text after it (a
+ * name an older build saved) can each spell a URL, the framing and a fence opener. One that follows the section's line after
+ * the heading is the real one, and the nearest to the end wins. A task with no section there has only the URL's own paragraph
+ * before its feedback, and nothing tells two such openers apart, so then the prompt is left whole.
  */
-function issueParts(prompt: string, url: string, round: number): { issue: string; feedback: string } | null {
-  const bar = /\n(`{3,})$/.exec(prompt)?.[1]
-  const heading = `${url}\n\n## Rework round ${round}`
+function issueParts(prompt: string, url: string, record: IntakeRecord): { issue: string; feedback: string } | null {
+  const heading = `${url}\n\n## Rework round ${record.round}`
   const split = (start: number) => {
     const head = start < 0 ? prompt : prompt.slice(0, start)
     const line = head.lastIndexOf('\n\n')
@@ -289,6 +289,8 @@ function issueParts(prompt: string, url: string, round: number): { issue: string
     if (head.slice(line + 2) === url) return { issue: head, feedback, section: false }
     return head.slice(0, line).endsWith(heading) ? { issue: head.slice(0, line - heading.length + url.length), feedback, section: true } : null
   }
+  if (record.feedback !== '' && prompt.endsWith(`\n\n${record.feedback}`)) return split(prompt.length - record.feedback.length - 2)
+  const bar = /\n(`{3,})$/.exec(prompt)?.[1]
   const found: NonNullable<ReturnType<typeof split>>[] = []
   if (bar !== undefined) {
     const opener = `\n\n${FEEDBACK_FRAMING}\n\n${bar}text\n`
@@ -328,7 +330,7 @@ export const outputText = (output: RunOutput): string =>
  */
 export function runPrompt(task: Pick<Task, 'origin' | 'input' | 'prompt'>, record: IntakeRecord | undefined, delivers: boolean): string {
   const url = task.origin.kind === 'issue' ? task.origin.issue.url : null
-  const parts = url !== null && record && record.round > 1 ? issueParts(task.prompt, url, record.round) : null
+  const parts = url !== null && record && record.round > 1 ? issueParts(task.prompt, url, record) : null
   if (parts && record && url !== null) return joined([closeIssueText(parts.issue, url), delivers ? reworkSection(record) : null, parts.feedback])
   if (task.origin.kind === 'handoff' && task.input) {
     const section = delivers && record ? reworkSection(record) : null
