@@ -180,18 +180,24 @@ const HTML_BLOCK_ENDING_ON_A_MARKER: ReadonlyArray<[RegExp, RegExp]> = [
  * container does, and the text is followed by a blank line and an unindented line. So a fence counts only when no list item,
  * block quote or HTML block can hold it, and a text where that is unclear is left as written, as it was before a closing line
  * existed: a closing line there could open a fence of its own. A container is over after a blank line and an unindented line
- * that starts none; an unindented fence line ends it at once. An HTML block is over at a blank line, or at its end marker.
+ * that starts none; an unindented fence line ends it at once. An HTML block is over at a blank line, or at its end marker, which
+ * may be many lines on.
  * `\n` after a text that ends in a bare CR still starts a line of its own.
  */
 export function closeFences(text: string): string {
   let open: { char: string; length: number } | null = null
   let container = false
   let html = false
+  let rawEnd: RegExp | null = null
   let afterBlank = true
   for (const line of text.split(/\r\n|\r|\n/)) {
     const run = /^ {0,3}(`{3,}|~{3,})(.*)$/s.exec(line)
     if (open) {
       if (run && run[1][0] === open.char && run[1].length >= open.length && /^[ \t]*$/.test(run[2])) open = null
+      continue
+    }
+    if (rawEnd) {
+      if (rawEnd.test(line)) rawEnd = null
       continue
     }
     if (/^[ \t]*$/.test(line)) {
@@ -211,7 +217,10 @@ export function closeFences(text: string): string {
     } else if (/^>|^(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/.test(rest)) container = true
     else if (rest.startsWith('<')) {
       const marker = HTML_BLOCK_ENDING_ON_A_MARKER.find(([start]) => start.test(rest))
-      if (marker && !marker[1].test(rest)) return text
+      if (marker && !marker[1].test(rest)) {
+        if (html || container) return text
+        rawEnd = marker[1]
+      }
       html ||= !marker
     } else if (indent === 0 && blankBefore) container = false
   }

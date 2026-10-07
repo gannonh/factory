@@ -106,6 +106,8 @@ test.each([
   ['an HTML block holding fence-looking lines', '<div>\n  ~~~~~x\n<div>\n'],
   ['an HTML block holding a backtick line', '<div>\n```\n</div>'],
   ['an HTML comment left open before a fence', '<!--\n\n```\nlog'],
+  ['a script block holding a fence line', '<script>\n```\nx\n</script>'],
+  ['a script block in a list item', '- a\n  <script>\n  x\n  </script>\n  ```\n  log'],
   ['a list item before an indented fence', '- a\n\n  ```\n  log'],
 ])('a description with %s keeps Factory\'s lines outside any code block and is read as written', (_name, description) => {
   const prompt = roundPrompt({ ...ISSUE, description }, round2Record, true)
@@ -117,6 +119,8 @@ test.each([
   ['a list that ended', '- a\n- b\n\n```\nlog', '```'],
   ['a block quote that ended', '> quote\n\n~~~\nlog', '~~~'],
   ['an HTML block that ended', '<div>x</div>\n\n````\nlog', '````'],
+  ['a script block that ended', '<script>\nx\n\ny\n</script>\n```\nlog', '```'],
+  ['a comment that ended', '<!--\nnote\n-->\n~~~\nlog', '~~~'],
   ['a one-line HTML comment', '<!-- note -->\n\n```\nlog', '```'],
   ['a block quote line, the fence unindented after it', '> note\n```\ncode', '```'],
   ['a fence opened right after a list line', '1. a\n```\nlog', '```'],
