@@ -989,6 +989,35 @@ test('an issue task whose agent does not deliver keeps a description that quotes
   await f.server.close()
 })
 
+test.each([
+  ['continue line', false, false, CONTINUE_41],
+  ['continue line, then the feedback', false, true, CONTINUE_41],
+  ['fresh line, when the pull request merged while the task waited', true, false, MERGED_41],
+] as const)('an issue task queued while its agent had no delivery gets the %s once delivery is switched on before it runs', async (_label, merged, withFeedback, line) => {
+  const repo = repository()
+  await control({ op: 'addIssue', title: 'Fix login' })
+  const f = factory(repo.root, agentRunner())
+  await poll(f)
+  await nextRun(f)
+  f.api.agents.update(CODER, { delivery: 'none' })
+  if (withFeedback) gh.review(41, 'alice', 'Handle the empty password.', new Date(WALL + 1000).toISOString())
+  await moveIssue('ENG-1', 'Todo')
+  await poll(f)
+  const feedback = `${FRAMING}\n\n\`\`\`text\n### Review comments on the pull request\n- **alice** (review): Handle the empty password.\n\`\`\``
+  const queued = `Fix login\n\n${ISSUE_URL}${withFeedback ? `\n\n${feedback}` : ''}`
+  expect(issueTasks(f)[1].prompt).toBe(queued)
+
+  f.api.agents.update(CODER, { delivery: 'pull-request' })
+  if (merged) gh.setState('eng-1-fix-login', 'MERGED')
+  const run = await nextRun(f)
+  expect(run.status).toBe('succeeded')
+  const prompt = `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${line}${withFeedback ? `\n\n${feedback}` : ''}`
+  expect(seen.at(-1)?.prompt).toBe(prompt)
+  expect(issueTasks(f)[1].prompt).toBe(prompt)
+  expect(ranOf(run).branch).toBe(merged ? 'eng-1-fix-login-2' : `factory-${run.id}`)
+  await f.server.close()
+})
+
 const SAVED_ISSUE = { kind: 'issue', trigger: 'trg-1' as TriggerId, issue: { identifier: 'ENG-1', url: ISSUE_URL } } as Task['origin']
 const savedRecord = (round: number) => ({ round, rework: { kind: 'fresh', pr: { kind: 'pr', label: 'Pull request #41', url: PR_41 }, state: 'merged' }, past: [{ round: 1, result: { outcome: 'finished' } }] }) as unknown as IntakeRecord
 const savedFeedback = (author: string) => `${FRAMING}\n\n\`\`\`text\n### Linear comments since the last round\n- **${author}**: Also log it.\n\`\`\``
@@ -996,7 +1025,8 @@ const savedFeedback = (author: string) => `${FRAMING}\n\n\`\`\`text\n### Linear 
 test.each([
   ['a section and a description that spells the heading', `Fix login\n\nSee ${ISSUE_URL}\n\n## Rework round 2\n\nKEEP\n\n${ISSUE_URL}\n\n## Rework round 2\n\nstale line`, true,
     `Fix login\n\nSee ${ISSUE_URL}\n\n## Rework round 2\n\nKEEP\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}`],
-  ['no section and a description that ends with the heading', `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${ISSUE_URL}`, true, `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${ISSUE_URL}`],
+  ['no section and a description that ends with the heading', `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${ISSUE_URL}`, true,
+    `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${ISSUE_URL}\n\n## Rework round 2\n\n${MERGED_41}`],
   ['no section and a description that spells the heading', `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\nKEEP\n\n${ISSUE_URL}`, false, `Fix login\n\n${ISSUE_URL}\n\n## Rework round 2\n\nKEEP\n\n${ISSUE_URL}`],
 ])('a saved issue task with %s is rebuilt only at its own section', (_label, prompt, delivers, expected) => {
   expect(runPrompt({ origin: SAVED_ISSUE, input: null, prompt }, savedRecord(2), delivers)).toBe(expected)
