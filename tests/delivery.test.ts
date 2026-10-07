@@ -18,8 +18,10 @@ import { fileStore } from '../server/worldFile'
 import { createHistory } from '../src/history'
 import type { AgentId, EdgeId, IssueId, Run, RunId, SandboxId, TriggerId } from '../src/domain/types'
 import { fakeGh } from './fake-gh'
-import { makeFixture, RNG } from './fixture'
+import { allowRealGitTime, makeFixture, RNG } from './fixture'
 import { ranOf, recordRan } from './ran'
+
+allowRealGitTime()
 
 const roots: string[] = []
 const tempDir = (prefix = 'factory-delivery-') => {
