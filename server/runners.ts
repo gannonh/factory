@@ -494,6 +494,11 @@ export async function gitArtifacts(
 ): Promise<Artifact[]> {
   if (!initialHead) return []
   const git = async (...args: string[]) => (await execFileAsync('git', ['-C', path, ...args])).stdout.trim()
+  // An agent that replaced the worktree's `.git` made a repository that does not hold the commit the run started from.
+  await git('rev-parse', '--git-dir')
+  if (!await git('cat-file', '-e', `${initialHead}^{commit}`).then(() => true, () => false)) {
+    return [{ kind: 'note', label: 'The agent replaced the worktree’s repository, so its commits cannot be listed', url: null }]
+  }
   const branch = await git('symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => null)
   const remote = await git('remote', 'get-url', 'origin').catch(() => null)
   const repository = remote ? githubUrl(remote) : null
@@ -637,10 +642,10 @@ export async function removeWorkdir(root: string, runId: RunId, ended: boolean):
     const removeWorktree = async (markProven: boolean) => {
       // Two forces: the worktree is locked with Factory's mark, and may be dirty. Git validates the path before deleting.
       await git('worktree', 'remove', '--force', '--force', workdir).catch(async (error: unknown) => {
-        // Git refuses when `.git` is not its worktree file. The agent deleted it, or replaced it with a directory or a link,
+        // Git refuses when `.git` is not its worktree file. The agent deleted it, or replaced it with a directory, a link or a file pointing elsewhere,
         // while the registration still carries the mark, so a proven run's directory goes and then its registration.
         const gitFile = await lstat(join(workdir, '.git')).then((info) => info.isFile(), (e: { code?: string }) => { if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return null; throw e })
-        if (gitFile !== null && !(markProven && !gitFile)) throw error
+        if (gitFile !== null && !markProven) throw error
         await rm(workdir, { recursive: true, force: true, maxRetries: 3 })
         await git('worktree', 'remove', '--force', '--force', workdir)
       })

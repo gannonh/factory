@@ -243,6 +243,22 @@ test('a post-checkout hook that fails after git made the worktree and branch fai
   await f.server.close()
 })
 
+test('a worktree whose .git file the agent pointed at a repository that is not there is removed too, since its registration carries Factory’s mark', async () => {
+  const repo = repository()
+  const { f, run, workdir } = await killedRun(repo)
+  writeFileSync(join(workdir, '.git'), 'gitdir: /nonexistent\n')
+
+  const restarted = restart(repo.root)
+  await restarted.settled()
+  expect(existsSync(workdir)).toBe(false)
+  expect(runWorktrees(repo.root)).toEqual([])
+  expect(registrations(repo.root)).toEqual([])
+  expect(localBranches(repo.root)).toEqual(['main'])
+  expect(existsSync(ownerFile(f, run.id))).toBe(false)
+  expect(warnings(restarted)).toEqual([])
+  await restarted.close()
+})
+
 test('an agent cannot lock its worktree, since Factory holds the lock as its mark, and the run still cleans up', async () => {
   const repo = repository()
   const refusals: string[] = []
@@ -400,7 +416,8 @@ test('a run whose agent replaced .git with a directory ends with no worktree, re
   expect(registrations(repo.root)).toEqual([])
   expect(localBranches(repo.root)).toEqual(['main'])
   expect(existsSync(ownerFile(f, run.id))).toBe(false)
-  expect(warnings(f.server).filter((msg) => msg.includes('worktree'))).toEqual([])
+  expect(warnings(f.server)).toEqual([])
+  expect(run.output?.artifacts).toEqual([{ kind: 'note', label: 'The agent replaced the worktree’s repository, so its commits cannot be listed', url: null }])
   await f.server.close()
 })
 
