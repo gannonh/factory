@@ -494,6 +494,11 @@ export async function gitArtifacts(
 ): Promise<Artifact[]> {
   if (!initialHead) return []
   const git = async (...args: string[]) => (await execFileAsync('git', ['-C', path, ...args])).stdout.trim()
+  // An agent that replaced the worktree's `.git` made a repository that does not hold the commit the run started from.
+  await git('rev-parse', '--git-dir')
+  if (!await git('cat-file', '-e', `${initialHead}^{commit}`).then(() => true, () => false)) {
+    return [{ kind: 'note', label: 'The agent replaced the worktree’s repository, so its commits cannot be listed', url: null }]
+  }
   const branch = await git('symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => null)
   const remote = await git('remote', 'get-url', 'origin').catch(() => null)
   const repository = remote ? githubUrl(remote) : null
@@ -634,12 +639,13 @@ export async function removeWorkdir(root: string, runId: RunId, ended: boolean):
     if (await lstat(workdir).then((info) => info.isSymbolicLink(), () => false)) throw new Error(`${workdir} is a symlink`)
     const left: string[] = []
     const legacy: string[] = []
-    const removeWorktree = async () => {
+    const removeWorktree = async (markProven: boolean) => {
       // Two forces: the worktree is locked with Factory's mark, and may be dirty. Git validates the path before deleting.
       await git('worktree', 'remove', '--force', '--force', workdir).catch(async (error: unknown) => {
-        // A worktree whose `.git` file is gone fails git's validation, while its registration still carries the mark.
-        const gitFileGone = await stat(join(workdir, '.git')).then(() => false, () => true)
-        if (!gitFileGone) throw error
+        // Git refuses when `.git` is not its worktree file. The agent deleted it, or replaced it with a directory, a link or a file pointing elsewhere,
+        // while the registration still carries the mark, so a proven run's directory goes and then its registration.
+        const gitFile = await lstat(join(workdir, '.git')).then((info) => info.isFile(), (e: { code?: string }) => { if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return null; throw e })
+        if (gitFile !== null && !markProven) throw error
         await rm(workdir, { recursive: true, force: true, maxRetries: 3 })
         await git('worktree', 'remove', '--force', '--force', workdir)
       })
@@ -648,7 +654,7 @@ export async function removeWorkdir(root: string, runId: RunId, ended: boolean):
     if (owner) {
       let kept: Registered | null = null
       if (found) {
-        if (found.lock === owner.token) await removeWorktree()
+        if (found.lock === owner.token) await removeWorktree(true)
         else { kept = found; left.push(`worktree ${workdir} (its lock reason is not this run's mark)`) }
       }
       if (await branchExists(owner.branch)) {
@@ -665,7 +671,7 @@ export async function removeWorkdir(root: string, runId: RunId, ended: boolean):
       else {
         // The branch may hold commits nothing pushed; its tip is reported so an operator can still reach them by SHA.
         const head = (await git('rev-parse', '--verify', '--quiet', `refs/heads/${found.branch}`).catch(() => '')).trim()
-        await removeWorktree()
+        await removeWorktree(false)
         if (head) await git('branch', '-D', found.branch)
         legacy.push(`worktree ${workdir}${head ? ` and branch ${found.branch}` : ''}, made before owner files${head ? `; its commits can be recovered from ${head} until git prunes them` : ''}`)
       }
